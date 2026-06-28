@@ -2,16 +2,15 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
+
 	"toonflow/adapter"
+	"toonflow/api"
 	"toonflow/engine"
 	"toonflow/skill"
 	"toonflow/storage"
@@ -20,11 +19,11 @@ import (
 )
 
 func main() {
-	cfg := Load()
-
 	// Initialize logger
-	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Lshortfile)
-	log.Printf("ToonFlow starting on port %d", cfg.Port)
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	log.Println("ToonFlow starting...")
+
+	cfg := Load()
 
 	// Initialize database
 	db, err := storage.Init(cfg.DBPath)
@@ -57,75 +56,39 @@ func main() {
 		OutputDir:   cfg.OutputDir,
 		TaskTimeout: cfg.TaskTimeout,
 	}
-	pipeline := engine.New(v, skillMgr, pipelineCfg, broadcaster)
-	_ = pipeline // used when task queue submits work
+	_ = engine.New(v, skillMgr, pipelineCfg, broadcaster)
 
 	// Initialize task queue
 	queue := task.NewQueue(cfg.MaxConcurrentTasks)
 
-	// Create output directory
+	// Create directories
 	os.MkdirAll(cfg.OutputDir, 0755)
 
-	// --- HTTP Routes ---
-
-	// Serve frontend
-	staticDir := filepath.Join(".", "static")
-	if _, err := os.Stat(staticDir); err == nil {
-		http.Handle("/static/", http.StripPrefix("/static/",
-			http.FileServer(http.Dir(staticDir))))
+	// Determine static directory
+	staticDir := "static"
+	if _, err := os.Stat(staticDir); err != nil {
+		staticDir = "."
 	}
 
-	// Serve output files
-	http.HandleFunc("/output/", func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path[len("/output/"):]
-		fullPath := filepath.Join(cfg.OutputDir, path)
-		if _, err := os.Stat(fullPath); err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		http.ServeFile(w, r, fullPath)
-	})
+	// Setup Gin router
+	router := api.SetupRouter(
+		db,
+		queue,
+		pipelineCfg,
+		skillMgr,
+		v,
+		broadcaster,
+		cfg.OutputDir,
+		staticDir,
+		cfg.Port,
+	)
 
-	// Download endpoint
-	http.HandleFunc("/download/", func(w http.ResponseWriter, r *http.Request) {
-		filename := r.URL.Path[len("/download/"):]
-		fullPath := filepath.Join(cfg.OutputDir, filename)
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
-		http.ServeFile(w, r, fullPath)
-	})
-
-	// REST API: list vendors
-	http.HandleFunc("/api/vendors", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(adapter.List())
-	})
-
-	// REST API: list tasks
-	http.HandleFunc("/api/tasks", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(queue.AllTasks())
-	})
-
-	// REST API: health check
-	http.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":         "ok",
-			"active_tasks":   queue.ActiveCount(),
-			"max_concurrent": cfg.MaxConcurrentTasks,
-		})
-	})
-
-	// WebSocket endpoint
-	http.Handle("/ws", broadcaster)
-
-	// Start server
-	addr := fmt.Sprintf(":%d", cfg.Port)
-	log.Printf("Server listening on http://localhost%s", addr)
-	log.Printf("Open http://localhost%s in your browser", addr)
+	addr := ":" + itoa(cfg.Port)
+	log.Printf("Listening on http://localhost%s", addr)
 
 	server := &http.Server{
 		Addr:         addr,
+		Handler:      router,
 		ReadTimeout:  60 * time.Second,
 		WriteTimeout: 60 * time.Second,
 	}
@@ -145,4 +108,18 @@ func main() {
 		log.Fatalf("Server failed: %v", err)
 	}
 	log.Println("Server stopped")
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var buf [10]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(buf[i:])
 }
