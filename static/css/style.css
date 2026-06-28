@@ -1,0 +1,189 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #0d1117;
+  color: #c9d1d9;
+  min-height: 100vh;
+}
+
+header {
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+  padding: 12px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+header h1 {
+  font-size: 1.3rem;
+  color: #58a6ff;
+}
+
+.status-connected { color: #3fb950; }
+.status-disconnected { color: #f85149; }
+.status-connecting { color: #d29922; }
+
+.container {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto auto;
+  gap: 16px;
+  padding: 16px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.zone {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.zone h2 {
+  font-size: 1rem;
+  margin-bottom: 12px;
+  color: #8b949e;
+}
+
+/* Zone 1: Script */
+.zone-script { grid-column: 1 / -1; }
+.zone-script textarea {
+  width: 100%;
+  height: 200px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #c9d1d9;
+  padding: 12px;
+  font-size: 14px;
+  font-family: 'Courier New', monospace;
+  resize: vertical;
+}
+.zone-script textarea:focus {
+  outline: none;
+  border-color: #58a6ff;
+}
+
+/* Zone 2: Params */
+.zone-params { grid-column: 1 / -1; }
+.params-grid {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.param-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.param-group label {
+  font-size: 0.8rem;
+  color: #8b949e;
+}
+.param-group select {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  color: #c9d1d9;
+  padding: 6px 10px;
+  font-size: 14px;
+}
+.btn-row { display: flex; gap: 8px; }
+
+.btn {
+  padding: 8px 20px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  transition: opacity 0.2s;
+}
+.btn:hover { opacity: 0.85; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-primary { background: #238636; color: #fff; }
+.btn-danger { background: #da3633; color: #fff; }
+.btn-secondary { background: #30363d; color: #c9d1d9; }
+
+/* Zone 3: Progress */
+.zone-progress { grid-column: 1 / -1; }
+.progress-bar-container {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.progress-bar {
+  flex: 1;
+  height: 20px;
+  background: #0d1117;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid #30363d;
+}
+.progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #238636, #3fb950);
+  transition: width 0.3s ease;
+}
+#progress-text { font-size: 0.9rem; min-width: 40px; }
+.current-step {
+  font-size: 0.9rem;
+  color: #58a6ff;
+  margin-bottom: 8px;
+}
+.log-area {
+  height: 200px;
+  overflow-y: auto;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 8px;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.log-entry { color: #8b949e; }
+.log-entry.info { color: #58a6ff; }
+.log-entry.success { color: #3fb950; }
+.log-entry.error { color: #f85149; }
+
+/* Zone 4: Results */
+.zone-results { grid-column: 1 / -1; }
+.storyboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.storyboard-grid img {
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid #30363d;
+  cursor: zoom-in;
+  transition: transform 0.2s;
+}
+.storyboard-grid img:hover { transform: scale(1.05); }
+.video-preview { text-align: center; }
+.video-preview video {
+  max-width: 100%;
+  max-height: 400px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+.empty-result {
+  text-align: center;
+  color: #484f58;
+  padding: 40px;
+  font-size: 0.9rem;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #0d1117; }
+::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }

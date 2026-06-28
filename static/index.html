@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ToonFlow - 短剧 AI 生成工具</title>
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<div id="app">
+  <!-- Header -->
+  <header>
+    <h1>🎬 ToonFlow — 短剧 AI 生成工具</h1>
+    <span id="ws-status" class="status-disconnected">⚪ 未连接</span>
+  </header>
+
+  <div class="container">
+    <!-- Zone 1: Script Input -->
+    <section class="zone zone-script">
+      <h2>📝 剧本输入</h2>
+      <textarea id="script-input" placeholder="请输入您的剧本文本...&#10;&#10;示例：&#10;镜头1：清晨的阳光透过窗帘洒进房间，小明揉着眼睛醒来。&#10;镜头2：他走到窗前，看到外面下着大雨。"></textarea>
+    </section>
+
+    <!-- Zone 2: Parameters -->
+    <section class="zone zone-params">
+      <h2>⚙️ 参数配置</h2>
+      <div class="params-grid">
+        <div class="param-group">
+          <label>画风</label>
+          <select id="style-select">
+            <option value="">默认</option>
+            <option value="anime">二次元</option>
+            <option value="realistic">写实</option>
+            <option value="cartoon">卡通</option>
+            <option value="guofeng">国风</option>
+            <option value="drama">短剧真人风</option>
+          </select>
+        </div>
+        <div class="param-group">
+          <label>单镜头时长 (秒)</label>
+          <select id="duration-select">
+            <option value="1">1秒</option>
+            <option value="2" selected>2秒</option>
+            <option value="3">3秒</option>
+          </select>
+        </div>
+        <div class="param-group">
+          <label>分辨率</label>
+          <select id="resolution-select">
+            <option value="1280x720">720P</option>
+            <option value="1920x1080" selected>1080P</option>
+          </select>
+        </div>
+        <div class="param-group">
+          <label>帧率 (FPS)</label>
+          <select id="fps-select">
+            <option value="24" selected>24</option>
+            <option value="30">30</option>
+          </select>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button id="btn-start" class="btn btn-primary">🚀 开始生成</button>
+        <button id="btn-cancel" class="btn btn-danger" disabled>⏹ 取消</button>
+        <button id="btn-reset" class="btn btn-secondary">🔄 重置</button>
+      </div>
+    </section>
+
+    <!-- Zone 3: Progress -->
+    <section class="zone zone-progress">
+      <h2>📊 实时进度</h2>
+      <div class="progress-bar-container">
+        <div id="progress-bar" class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+        <span id="progress-text">0%</span>
+      </div>
+      <div id="current-step" class="current-step">等待开始...</div>
+      <div id="log-area" class="log-area"></div>
+    </section>
+
+    <!-- Zone 4: Results -->
+    <section class="zone zone-results">
+      <h2>🎞️ 结果预览</h2>
+      <div id="storyboard-preview" class="storyboard-grid"></div>
+      <div id="video-preview" class="video-preview" style="display:none;">
+        <video id="output-video" controls></video>
+        <a id="download-link" class="btn btn-primary" download>⬇️ 下载成片</a>
+      </div>
+      <div id="empty-result" class="empty-result">生成完成后将在此处预览</div>
+    </section>
+  </div>
+</div>
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>
