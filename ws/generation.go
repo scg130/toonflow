@@ -65,9 +65,11 @@ func (gs *GenerationService) handleStartGenerate(cm *ConnManager, req *WSRequest
 	id := fmt.Sprintf("task_%d", time.Now().UnixNano())
 	t := task.NewTask(id, req.ProjectID, req.Script, req.Style, frameDuration, resolution, fps, gs.Timeout)
 	t.Mode = mode
+	t.EpisodeID = req.EpisodeID
+	t.GenerateShots = req.ShotNumbers
 
 	if mode == "images" || mode == "video" {
-		if err := gs.loadStoryboardFromDB(t, req.ProjectID); err != nil {
+		if err := gs.loadStoryboardFromDB(t); err != nil {
 			cm.Broadcast(WSResponse{Code: 1, Msg: err.Error(), Step: "error"})
 			return
 		}
@@ -94,15 +96,21 @@ func (gs *GenerationService) handleStartGenerate(cm *ConnManager, req *WSRequest
 	})
 }
 
-func (gs *GenerationService) loadStoryboardFromDB(t *task.Task, projectID string) error {
-	if projectID == "" {
+func (gs *GenerationService) loadStoryboardFromDB(t *task.Task) error {
+	if t.ProjectID == "" {
 		return fmt.Errorf("project_id is required for this mode")
 	}
 	var shotsJSON string
-	err := gs.DB.QueryRow(
-		"SELECT shots FROM o_storyboard WHERE project_id = ? ORDER BY updated_at DESC LIMIT 1",
-		projectID,
-	).Scan(&shotsJSON)
+	var err error
+	if t.EpisodeID != "" {
+		sbID := fmt.Sprintf("sb_%s_%s", t.ProjectID, t.EpisodeID)
+		err = gs.DB.QueryRow("SELECT shots FROM o_storyboard WHERE id = ?", sbID).Scan(&shotsJSON)
+	} else {
+		err = gs.DB.QueryRow(
+			"SELECT shots FROM o_storyboard WHERE project_id = ? ORDER BY updated_at DESC LIMIT 1",
+			t.ProjectID,
+		).Scan(&shotsJSON)
+	}
 	if err == sql.ErrNoRows {
 		return fmt.Errorf("no storyboard found for project")
 	}
@@ -126,9 +134,12 @@ func (gs *GenerationService) saveStoryboardToDB(t *task.Task) {
 		return
 	}
 	sbID := fmt.Sprintf("sb_%s", t.ProjectID)
+	if t.EpisodeID != "" {
+		sbID = fmt.Sprintf("sb_%s_%s", t.ProjectID, t.EpisodeID)
+	}
 	_, _ = gs.DB.Exec(`
 		INSERT INTO o_storyboard (id, project_id, scene_name, shots, updated_at)
 		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(id) DO UPDATE SET shots = excluded.shots, updated_at = CURRENT_TIMESTAMP
-	`, sbID, t.ProjectID, "default", string(shotsJSON))
+	`, sbID, t.ProjectID, "episode", string(shotsJSON))
 }

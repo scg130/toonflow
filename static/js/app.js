@@ -36,6 +36,8 @@
     storyboardList: document.getElementById('storyboard-list'),
     storyboardEmpty: document.getElementById('storyboard-empty'),
     storyboardCount: document.getElementById('storyboard-count'),
+    storyboardSelectedCount: document.getElementById('storyboard-selected-count'),
+    btnSelectAllShots: document.getElementById('btn-select-all-shots'),
     // 视频
     videoTracks: document.getElementById('video-tracks'),
     videoPreview: document.getElementById('video-preview-area'),
@@ -285,8 +287,13 @@
         if (msg.data && msg.data.shot) {
           const shot = normalizeStoryboards([msg.data.shot])[0];
           const idx = storyboards.findIndex(s => s.shot_number === shot.shot_number);
-          if (idx >= 0) storyboards[idx] = Object.assign({}, storyboards[idx], shot);
-          else storyboards.push(shot);
+          if (idx >= 0) {
+            const wasSelected = storyboards[idx].selected;
+            storyboards[idx] = Object.assign({}, storyboards[idx], shot);
+            storyboards[idx].selected = wasSelected;
+          } else {
+            storyboards.push(shot);
+          }
           renderStoryboards();
           updateVideoTracksFromStoryboards();
         }
@@ -588,6 +595,12 @@
       }
       if (res.action && res.action.type) {
         handleChatAction(res);
+      } else if (res.work && Array.isArray(res.work) && res.work.length > 0) {
+        switchWorkbenchPanel('storyboard');
+        storyboards = normalizeStoryboards(res.work);
+        renderStoryboards();
+        updateVideoTracksFromStoryboards();
+        toast('已解析 ' + storyboards.length + ' 个分镜', 'success');
       }
       return res;
     }).catch(err => {
@@ -641,7 +654,32 @@
       duration: sb.duration ?? sb.Duration ?? 3,
       prompt: sb.prompt ?? sb.Prompt ?? sb.description ?? sb.Description ?? '',
       image_url: sb.image_url ?? sb.ImageURL ?? '',
+      selected: sb.selected !== false,
     }));
+  }
+
+  function getSelectedShotNumbers() {
+    return storyboards.filter(sb => sb.selected !== false).map(sb => sb.shot_number);
+  }
+
+  function countSelectedStoryboards() {
+    return storyboards.filter(sb => sb.selected !== false).length;
+  }
+
+  function updateStoryboardSelectionUI() {
+    const selected = countSelectedStoryboards();
+    const total = storyboards.length;
+    if (els.storyboardSelectedCount) {
+      els.storyboardSelectedCount.textContent = total > 0 ? `已选 ${selected}/${total}` : '已选 0/0';
+    }
+    if (els.btnSelectAllShots) {
+      els.btnSelectAllShots.textContent = total > 0 && selected === total ? '取消全选' : '全选';
+    }
+  }
+
+  function setAllStoryboardsSelected(selected) {
+    storyboards.forEach(sb => { sb.selected = selected; });
+    renderStoryboards();
   }
 
   function loadProjectStoryboards(projectId, episodeId) {
@@ -684,6 +722,11 @@
       toast('请先生成分镜', 'warning');
       return;
     }
+    const selectedShots = getSelectedShotNumbers();
+    if (mode === 'images' && selectedShots.length === 0) {
+      toast('请至少勾选一个分镜', 'warning');
+      return;
+    }
     if (mode === 'video' && !storyboards.some(sb => sb.image_url)) {
       toast('请先生成图片', 'warning');
       return;
@@ -693,6 +736,8 @@
       action: 'start_generate',
       mode: mode,
       project_id: currentProject.id,
+      episode_id: currentEpisode ? currentEpisode.id : '',
+      shot_numbers: mode === 'images' ? selectedShots : [],
       script: script,
       style: currentProject.art_style || '',
       frame_duration: 3,
@@ -702,6 +747,9 @@
       fps: parseInt(getGeneralSetting('default_fps', '24'), 10) || 24,
     });
     isGenerating = true;
+    if (mode === 'images') {
+      toast('开始为 ' + selectedShots.length + ' 个分镜生成图片', 'info');
+    }
     setStatus('发送生成任务...');
   }
 
@@ -795,15 +843,19 @@
       els.storyboardList.innerHTML = '';
       els.storyboardEmpty.style.display = 'block';
       els.storyboardCount.textContent = '0 个分镜';
+      updateStoryboardSelectionUI();
       return;
     }
     els.storyboardEmpty.style.display = 'none';
     els.storyboardCount.textContent = storyboards.length + ' 个分镜';
 
     els.storyboardList.innerHTML = storyboards.map((sb, i) => `
-      <div class="storyboard-card" data-index="${i}">
+      <div class="storyboard-card ${sb.selected !== false ? 'is-selected' : ''}" data-index="${i}">
         <div class="storyboard-card-header">
-          <span class="storyboard-card-title">🎬 第 ${sb.shot_number || i + 1} 镜 — ${escapeHtml(sb.scene || '未命名场景')}</span>
+          <label class="storyboard-card-select">
+            <input type="checkbox" class="sb-select-cb" data-index="${i}" ${sb.selected !== false ? 'checked' : ''}>
+            <span class="storyboard-card-title">🎬 第 ${sb.shot_number || i + 1} 镜 — ${escapeHtml(sb.scene || '未命名场景')}</span>
+          </label>
           <span style="font-size:12px;color:var(--text-secondary)">${sb.duration || 3}s</span>
         </div>
         <div class="storyboard-card-body">
@@ -834,6 +886,7 @@
         </div>
       </div>
     `).join('');
+    updateStoryboardSelectionUI();
   }
 
   // ======================== 视频轨道 ========================
@@ -1278,6 +1331,25 @@
   document.getElementById('btn-gen-images').addEventListener('click', () => {
     startGeneration('images');
   });
+
+  if (els.btnSelectAllShots) {
+    els.btnSelectAllShots.addEventListener('click', () => {
+      const allSelected = storyboards.length > 0 && countSelectedStoryboards() === storyboards.length;
+      setAllStoryboardsSelected(!allSelected);
+    });
+  }
+
+  if (els.storyboardList) {
+    els.storyboardList.addEventListener('change', (e) => {
+      if (!e.target.classList.contains('sb-select-cb')) return;
+      const idx = parseInt(e.target.dataset.index, 10);
+      if (Number.isNaN(idx) || !storyboards[idx]) return;
+      storyboards[idx].selected = e.target.checked;
+      const card = e.target.closest('.storyboard-card');
+      if (card) card.classList.toggle('is-selected', e.target.checked);
+      updateStoryboardSelectionUI();
+    });
+  }
 
   // 生成视频
   document.getElementById('btn-gen-video').addEventListener('click', () => {

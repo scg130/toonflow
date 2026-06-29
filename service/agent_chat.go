@@ -86,7 +86,7 @@ func (a *AgentChat) HandleMessage(ctx context.Context, projectID, episodeID, sta
 			out.Reply += "\n\n⚠️ 执行失败: " + err.Error()
 		} else {
 			if actionType == "generate_storyboard" {
-				work = a.refineStoryboardWork(ctx, projectID, episodeID, reply, work)
+				work = a.refineStoryboardWork(ctx, projectID, episodeID, resp.Content, work)
 			}
 			ReportProgress(ctx, actionType, 100, "执行完成: "+actionLabel(actionType))
 			out.Action = action
@@ -94,6 +94,15 @@ func (a *AgentChat) HandleMessage(ctx context.Context, projectID, episodeID, sta
 		}
 	} else {
 		ReportProgress(ctx, "chat", 100, "完成")
+	}
+
+	if out.Work == nil && episodeID != "" && LooksLikeStoryboardTable(reply) {
+		if items, _ := parseStoryboardResponse(reply); StoryboardScore(items) > 1 {
+			items = NormalizeStoryboardItems(items)
+			a.persistStoryboard(projectID, episodeID, items)
+			out.Work = items
+			logger.CtxInfo(ctx, "storyboard auto-saved from chat reply shots=%d", len(items))
+		}
 	}
 
 	a.saveMessage(projectID, episodeID, "user", userMsg, "")
@@ -290,6 +299,13 @@ func (a *AgentChat) generateScript(ctx context.Context, projectID, episodeID str
 }
 
 func (a *AgentChat) generateStoryboard(ctx context.Context, projectID, episodeID string) ([]task.StoryboardItem, error) {
+	if fromChat := a.storyboardFromRecentChat(projectID, episodeID, 10); StoryboardScore(fromChat) > 1 {
+		fromChat = NormalizeStoryboardItems(fromChat)
+		a.persistStoryboard(projectID, episodeID, fromChat)
+		logger.CtxInfo(ctx, "storyboard loaded from chat history shots=%d", len(fromChat))
+		return fromChat, nil
+	}
+
 	script := a.loadWork(projectID, episodeID, "script")
 	if script == "" {
 		var s string
@@ -312,19 +328,48 @@ func (a *AgentChat) generateStoryboard(ctx context.Context, projectID, episodeID
 	return items, nil
 }
 
-func (a *AgentChat) refineStoryboardWork(ctx context.Context, projectID, episodeID, reply string, work interface{}) interface{} {
+func (a *AgentChat) refineStoryboardWork(ctx context.Context, projectID, episodeID, aiContent string, work interface{}) interface{} {
 	items, _ := work.([]task.StoryboardItem)
-	if len(items) > 1 {
-		return items
-	}
-	fromReply, _ := parseStoryboardResponse(reply)
-	fromReply = NormalizeStoryboardItems(fromReply)
-	if len(fromReply) > len(items) {
-		logger.CtxInfo(ctx, "storyboard parsed from chat reply shots=%d", len(fromReply))
-		a.persistStoryboard(projectID, episodeID, fromReply)
-		return fromReply
+	fromAI, _ := parseStoryboardResponse(strings.TrimSpace(aiContent))
+	fromChat := a.storyboardFromRecentChat(projectID, episodeID, 10)
+
+	best := PickBestStoryboard(items, fromAI, fromChat)
+	if StoryboardScore(best) > StoryboardScore(items) {
+		best = NormalizeStoryboardItems(best)
+		logger.CtxInfo(ctx, "storyboard refined shots=%d", len(best))
+		a.persistStoryboard(projectID, episodeID, best)
+		return best
 	}
 	return items
+}
+
+func (a *AgentChat) storyboardFromRecentChat(projectID, episodeID string, limit int) []task.StoryboardItem {
+	return StoryboardFromRecentChat(a.DB, projectID, episodeID, limit)
+}
+
+// StoryboardFromRecentChat parses the best storyboard from recent assistant messages.
+func StoryboardFromRecentChat(db *sql.DB, projectID, episodeID string, limit int) []task.StoryboardItem {
+	rows, err := db.Query(`
+		SELECT content FROM o_chat_message
+		WHERE project_id = ? AND (episode_id = ? OR episode_id = '') AND role = 'assistant'
+		ORDER BY created_at DESC LIMIT ?`, projectID, episodeID, limit)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var best []task.StoryboardItem
+	for rows.Next() {
+		var content string
+		if rows.Scan(&content) != nil {
+			continue
+		}
+		parsed, _ := parseStoryboardResponse(content)
+		if StoryboardScore(parsed) > StoryboardScore(best) {
+			best = parsed
+		}
+	}
+	return best
 }
 
 func (a *AgentChat) persistStoryboard(projectID, episodeID string, items []task.StoryboardItem) {

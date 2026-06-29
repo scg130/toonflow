@@ -30,6 +30,8 @@ type WSRequest struct {
 	FPS           int     `json:"fps,omitempty"`
 	Mode          string  `json:"mode,omitempty"`       // full, parse, images, video
 	ProjectID     string  `json:"project_id,omitempty"`
+	EpisodeID     string  `json:"episode_id,omitempty"`
+	ShotNumbers   []int   `json:"shot_numbers,omitempty"` // empty = all shots
 }
 
 // WSResponse represents a server-to-client message.

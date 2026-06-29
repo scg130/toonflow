@@ -28,6 +28,8 @@ type Task struct {
 	Script        string           `json:"script"`
 	Style         string           `json:"style"`
 	Mode          string           `json:"mode,omitempty"` // full, parse, images, video
+	EpisodeID     string           `json:"episode_id,omitempty"`
+	GenerateShots []int            `json:"generate_shots,omitempty"` // empty = all shots
 	FrameDuration float64          `json:"frame_duration"`
 	Resolution    string           `json:"resolution"`
 	FPS           int              `json:"fps"`

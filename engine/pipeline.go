@@ -91,18 +91,24 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 		}
 
 		t.SetState(task.StateDrawing, "gen_image")
-		total := len(t.Storyboard)
-		for i, item := range t.Storyboard {
+		selected := shotFilterSet(t.GenerateShots)
+		indices := storyboardIndicesToGenerate(t.Storyboard, selected)
+		if len(indices) == 0 {
+			return fmt.Errorf("no shots selected for image generation")
+		}
+		total := len(indices)
+		for seq, idx := range indices {
+			item := t.Storyboard[idx]
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			default:
 			}
 
-			progress := 30 + float32(i+1)/float32(total)*50
+			progress := 30 + float32(seq+1)/float32(total)*50
 			t.UpdateProgress(progress)
-			p.broadcast(t, fmt.Sprintf("生成中 (%d/%d)", i+1, total), progress, map[string]interface{}{
-				"current_shot": i + 1,
+			p.broadcast(t, fmt.Sprintf("生成中 (%d/%d)", seq+1, total), progress, map[string]interface{}{
+				"current_shot": seq + 1,
 				"total_shots":  total,
 			})
 
@@ -112,7 +118,7 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 			}
 
 			imageURL := fmt.Sprintf("/output/%s/shot_%03d.png", t.ID, item.ShotNumber)
-			t.Storyboard[i].ImageURL = imageURL
+			t.Storyboard[idx].ImageURL = imageURL
 
 			t.Images = append(t.Images, task.ImageArtifact{
 				ShotNumber: item.ShotNumber,
@@ -121,10 +127,10 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 				Status:     "done",
 			})
 
-			p.broadcast(t, fmt.Sprintf("图片完成 (%d/%d)", i+1, total), progress, map[string]interface{}{
-				"current_shot": i + 1,
+			p.broadcast(t, fmt.Sprintf("图片完成 (%d/%d)", seq+1, total), progress, map[string]interface{}{
+				"current_shot": seq + 1,
 				"total_shots":  total,
-				"shot":         t.Storyboard[i],
+				"shot":         t.Storyboard[idx],
 			})
 		}
 
@@ -371,4 +377,25 @@ func saveDataURL(path, dataURL string) error {
 		return err
 	}
 	return os.WriteFile(path, decoded, 0644)
+}
+
+func shotFilterSet(nums []int) map[int]bool {
+	if len(nums) == 0 {
+		return nil
+	}
+	set := make(map[int]bool, len(nums))
+	for _, n := range nums {
+		set[n] = true
+	}
+	return set
+}
+
+func storyboardIndicesToGenerate(items []task.StoryboardItem, selected map[int]bool) []int {
+	var indices []int
+	for i, item := range items {
+		if selected == nil || selected[item.ShotNumber] {
+			indices = append(indices, i)
+		}
+	}
+	return indices
 }

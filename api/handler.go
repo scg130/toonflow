@@ -689,6 +689,15 @@ func (r *Router) storyboardsListHandler(c *gin.Context) {
 		return
 	}
 	shots = service.NormalizeStoryboardItems(shots)
+	if episodeID != "" && service.StoryboardScore(shots) <= 1 {
+		if refreshed := service.StoryboardFromRecentChat(r.db.DB, projectID, episodeID, 10); service.StoryboardScore(refreshed) > service.StoryboardScore(shots) {
+			refreshed = service.NormalizeStoryboardItems(refreshed)
+			shotsJSON, _ := json.Marshal(refreshed)
+			sbID := fmt.Sprintf("sb_%s_%s", projectID, episodeID)
+			_, _ = r.db.Exec(`UPDATE o_storyboard SET shots = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, string(shotsJSON), sbID)
+			shots = refreshed
+		}
+	}
 	c.JSON(http.StatusOK, shots)
 }
 

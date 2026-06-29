@@ -10,9 +10,12 @@ import (
 )
 
 var (
-	reShotHeader = regexp.MustCompile(`(?i)^(?:#{1,3}\s*)?(?:\*\*)?(?:镜头|Shot|第\s*(\d+)\s*镜|镜\s*(\d+))`)
-	reShotNum    = regexp.MustCompile(`(?i)(?:Shot|镜头)\s*(\d+)(?:-(\d+))?`)
-	reSceneLine  = regexp.MustCompile(`(?i)^(?:#{1,3}\s*)?(?:\*\*)?(?:场景|Scene|场次)\s*\d*[:：\s]+(.+)`)
+	reShotHeader  = regexp.MustCompile(`(?i)^(?:#{1,3}\s*)?(?:\*\*)?(?:镜头|Shot|第\s*(\d+)\s*镜|镜\s*(\d+))`)
+	reShotNum     = regexp.MustCompile(`(?i)(?:Shot|镜头)\s*(\d+)(?:-(\d+))?`)
+	reSceneLine   = regexp.MustCompile(`(?i)^(?:#{1,3}\s*)?(?:\*\*)?(?:场景|Scene|场次)\s*\d*[:：\s]+(.+)`)
+	reTableShotID = regexp.MustCompile(`(?i)^(?:VC|SC|S)?(\d+)$`)
+	reActHeader   = regexp.MustCompile(`【([^】]+)】`)
+	reVCInText    = regexp.MustCompile(`(?i)\bVC\d+\b`)
 )
 
 // NormalizeStoryboardItems fills defaults and fixes shot numbers.
@@ -56,6 +59,11 @@ func parseStoryboardResponse(text string) ([]task.StoryboardItem, error) {
 				return NormalizeStoryboardItems(items), nil
 			}
 		}
+	}
+
+	items = parseTableStoryboard(text)
+	if len(items) > 0 {
+		return NormalizeStoryboardItems(items), nil
 	}
 
 	items = parseMarkdownShots(text)
@@ -249,7 +257,176 @@ func fallbackParseShots(text string) []task.StoryboardItem {
 		items = append(items, *current)
 	}
 	if len(items) == 0 {
+		if reVCInText.MatchString(text) || strings.Contains(text, "镜头号") {
+			return items
+		}
 		items = append(items, task.StoryboardItem{ShotNumber: 1, Description: text, Duration: 3.0, Prompt: text})
 	}
 	return items
+}
+
+// LooksLikeStoryboardTable detects markdown table storyboard scripts (VC01, etc.).
+func LooksLikeStoryboardTable(text string) bool {
+	return strings.Contains(text, "|") && (reVCInText.MatchString(text) || strings.Contains(text, "镜头号"))
+}
+
+// StoryboardScore ranks parse quality; higher is better.
+func StoryboardScore(items []task.StoryboardItem) int {
+	if len(items) == 0 {
+		return 0
+	}
+	if len(items) == 1 {
+		d := strings.ToLower(items[0].Description)
+		if strings.Contains(d, "storyboard breakdown") || strings.Contains(d, "shot # | scene") {
+			return 1
+		}
+	}
+	return len(items) * 10
+}
+
+// PickBestStoryboard chooses the highest-quality candidate.
+func PickBestStoryboard(candidates ...[]task.StoryboardItem) []task.StoryboardItem {
+	var best []task.StoryboardItem
+	for _, c := range candidates {
+		c = NormalizeStoryboardItems(c)
+		if StoryboardScore(c) > StoryboardScore(best) {
+			best = c
+		}
+	}
+	return best
+}
+
+func parseTableStoryboard(text string) []task.StoryboardItem {
+	if !strings.Contains(text, "|") {
+		return nil
+	}
+
+	var items []task.StoryboardItem
+	currentScene := ""
+
+	for _, raw := range strings.Split(text, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+
+		if m := reActHeader.FindStringSubmatch(line); len(m) > 1 && (strings.Contains(line, "幕") || strings.Contains(line, "SCENE") || strings.Contains(line, "Scene")) {
+			currentScene = cleanMarkdown(m[1])
+			continue
+		}
+
+		if !strings.HasPrefix(line, "|") {
+			continue
+		}
+		if strings.Contains(line, ":---") || strings.Contains(line, "|:---") {
+			continue
+		}
+
+		cells := splitTableCells(line)
+		if len(cells) < 3 {
+			continue
+		}
+
+		shotID := cleanMarkdown(cells[0])
+		if !isTableShotCell(shotID) {
+			continue
+		}
+
+		shotNum := extractTableShotNumber(shotID)
+		if shotNum <= 0 {
+			shotNum = len(items) + 1
+		}
+
+		descIdx, camIdx, durIdx := tableColumnIndexes(cells)
+		desc := cleanMarkdown(cells[descIdx])
+		if descIdx != 1 && len(cells) > 1 {
+			shotType := cleanMarkdown(cells[1])
+			if shotType != "" && !strings.EqualFold(shotType, shotID) {
+				desc = strings.TrimSpace(shotType + " — " + desc)
+			}
+		}
+
+		camera := ""
+		if camIdx >= 0 && camIdx < len(cells) {
+			camera = cleanMarkdown(cells[camIdx])
+		}
+		duration := 3.0
+		if durIdx >= 0 && durIdx < len(cells) {
+			fmtScanFloat(cleanMarkdown(cells[durIdx]), &duration)
+		}
+
+		items = append(items, task.StoryboardItem{
+			ShotNumber:  shotNum,
+			Scene:       currentScene,
+			Description: desc,
+			Camera:      camera,
+			Duration:    duration,
+			Prompt:      desc,
+		})
+	}
+	return items
+}
+
+func splitTableCells(line string) []string {
+	line = strings.Trim(line, "|")
+	parts := strings.Split(line, "|")
+	cells := make([]string, 0, len(parts))
+	for _, p := range parts {
+		cells = append(cells, strings.TrimSpace(p))
+	}
+	return cells
+}
+
+func isTableShotCell(cell string) bool {
+	cell = strings.TrimSpace(cell)
+	if cell == "" {
+		return false
+	}
+	lower := strings.ToLower(cell)
+	if strings.Contains(lower, "镜头号") || strings.Contains(lower, "shot #") || strings.Contains(lower, "shot number") {
+		return false
+	}
+	if reVCInText.MatchString(cell) {
+		return true
+	}
+	if reTableShotID.MatchString(strings.ToUpper(strings.Trim(cell, "*"))) {
+		return true
+	}
+	if matched, _ := regexp.MatchString(`(?i)^(?:镜头|shot)\s*\d+`, cell); matched {
+		return true
+	}
+	return false
+}
+
+func extractTableShotNumber(id string) int {
+	id = strings.Trim(id, "*")
+	if m := regexp.MustCompile(`(?i)(?:VC|SC|S)?(\d+)`).FindStringSubmatch(id); len(m) > 1 {
+		n, _ := strconv.Atoi(m[1])
+		return n
+	}
+	return 0
+}
+
+func tableColumnIndexes(cells []string) (descIdx, camIdx, durIdx int) {
+	descIdx = 2
+	camIdx = 3
+	durIdx = len(cells) - 1
+	if len(cells) <= 4 {
+		descIdx = 1
+		camIdx = 2
+		if len(cells) > 3 {
+			durIdx = len(cells) - 1
+		} else {
+			durIdx = -1
+		}
+	}
+	return descIdx, camIdx, durIdx
+}
+
+func cleanMarkdown(s string) string {
+	s = strings.ReplaceAll(s, "<br>", " ")
+	s = strings.ReplaceAll(s, "<br/>", " ")
+	s = regexp.MustCompile(`\*+`).ReplaceAllString(s, "")
+	s = strings.Join(strings.Fields(s), " ")
+	return strings.TrimSpace(s)
 }
