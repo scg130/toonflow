@@ -332,17 +332,47 @@
             <option value="">请选择</option>
             <option value="comedy">喜剧</option>
             <option value="drama">剧情</option>
-            <option value="romance">爱情</option>
+            <option value="romance">爱情 / 甜宠</option>
+            <option value="comedy_romance">轻喜剧爱情</option>
+            <option value="urban">都市</option>
+            <option value="workplace">职场</option>
+            <option value="campus">校园 / 青春</option>
+            <option value="family">家庭 / 伦理</option>
+            <option value="historical">古装 / 历史</option>
+            <option value="wuxia">武侠</option>
+            <option value="xianxia">仙侠 / 玄幻</option>
+            <option value="transmigration">穿越 / 重生</option>
+            <option value="revenge">复仇 / 爽文</option>
+            <option value="mystery">悬疑</option>
+            <option value="thriller">惊悚</option>
+            <option value="crime">犯罪</option>
             <option value="horror">恐怖</option>
             <option value="scifi">科幻</option>
-            <option value="mystery">悬疑</option>
-            <option value="action">动作</option>
             <option value="fantasy">奇幻</option>
+            <option value="action">动作</option>
+            <option value="war">战争</option>
+            <option value="sports">体育 / 竞技</option>
+            <option value="slice_of_life">日常 / 治愈</option>
+            <option value="musical">音乐 / 歌舞</option>
+            <option value="documentary">纪实</option>
+            <option value="inspirational">励志</option>
+            <option value="female_lead">大女主</option>
+            <option value="male_lead">大男主</option>
+            <option value="palace">宫斗</option>
+            <option value="republic_era">民国</option>
+            <option value="__custom__">自定义…</option>
           </select>
+          <input type="text" id="proj-type-custom" class="select-custom-input" placeholder="输入自定义题材，如：赛博修仙">
+          <div class="form-hint">可选择预设题材，或在下方直接输入（填写后优先使用）</div>
         </div>
         <div class="form-group">
           <label>画风</label>
-          <select id="proj-artstyle"></select>
+          <select id="proj-artstyle">
+            <option value="">默认画风</option>
+            <option value="__custom__">自定义…</option>
+          </select>
+          <input type="text" id="proj-artstyle-custom" class="select-custom-input" placeholder="输入自定义画风，如：赛博朋克水墨">
+          <div class="form-hint">可从上方选择预设，或在下方直接输入自定义画风（填写后优先使用）</div>
         </div>
       </div>
       <div class="form-row">
@@ -459,6 +489,6 @@
   </div>
 </div>
 
-<script src="/static/js/app.js?v=20260629b"></script>
+<script src="/static/js/app.js?v=20260629c"></script>
 </body>
 </html>

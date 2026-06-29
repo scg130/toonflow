@@ -1346,6 +1346,68 @@
     els.modalNewProject.style.display = 'none';
   }
 
+  const GENRE_LABELS = {
+    comedy: '喜剧', drama: '剧情', romance: '爱情 / 甜宠', comedy_romance: '轻喜剧爱情',
+    urban: '都市', workplace: '职场', campus: '校园 / 青春', family: '家庭 / 伦理',
+    historical: '古装 / 历史', wuxia: '武侠', xianxia: '仙侠 / 玄幻',
+    transmigration: '穿越 / 重生', revenge: '复仇 / 爽文', mystery: '悬疑', thriller: '惊悚',
+    crime: '犯罪', horror: '恐怖', scifi: '科幻', fantasy: '奇幻', action: '动作',
+    war: '战争', sports: '体育 / 竞技', slice_of_life: '日常 / 治愈', musical: '音乐 / 歌舞',
+    documentary: '纪实', inspirational: '励志', female_lead: '大女主', male_lead: '大男主',
+    palace: '宫斗', republic_era: '民国',
+  };
+
+  function setTypeFields(value) {
+    const sel = document.getElementById('proj-type');
+    const custom = document.getElementById('proj-type-custom');
+    if (!sel || !custom) return;
+    const opts = [...sel.options].map(o => o.value).filter(v => v && v !== '__custom__');
+    if (value && !opts.includes(value)) {
+      sel.value = '__custom__';
+      custom.value = value;
+    } else {
+      sel.value = value || '';
+      custom.value = '';
+    }
+  }
+
+  function readTypeValue() {
+    const custom = document.getElementById('proj-type-custom');
+    const customVal = custom ? custom.value.trim() : '';
+    if (customVal) return customVal;
+    const sel = document.getElementById('proj-type');
+    if (!sel || sel.value === '__custom__') return '';
+    return sel.value;
+  }
+
+  function formatProjectType(type) {
+    if (!type) return '未设置';
+    return GENRE_LABELS[type] || type;
+  }
+
+  function setArtStyleFields(value) {
+    const sel = document.getElementById('proj-artstyle');
+    const custom = document.getElementById('proj-artstyle-custom');
+    if (!sel || !custom) return;
+    const opts = [...sel.options].map(o => o.value).filter(v => v && v !== '__custom__');
+    if (value && !opts.includes(value)) {
+      sel.value = '__custom__';
+      custom.value = value;
+    } else {
+      sel.value = value || '';
+      custom.value = '';
+    }
+  }
+
+  function readArtStyleValue() {
+    const custom = document.getElementById('proj-artstyle-custom');
+    const customVal = custom ? custom.value.trim() : '';
+    if (customVal) return customVal;
+    const sel = document.getElementById('proj-artstyle');
+    if (!sel || sel.value === '__custom__') return '';
+    return sel.value;
+  }
+
   function openProjectModal(projectId) {
     editingProjectId = projectId;
     document.getElementById('project-modal-title').textContent = projectId ? '编辑项目' : '新建项目';
@@ -1354,8 +1416,8 @@
       if (!projectId) {
         document.getElementById('proj-name').value = '';
         document.getElementById('proj-intro').value = '';
-        document.getElementById('proj-type').value = '';
-        document.getElementById('proj-artstyle').value = '';
+        setTypeFields('');
+        setArtStyleFields('');
         document.getElementById('proj-ratio').value = '16:9';
         document.getElementById('proj-image-model').value = '';
         return;
@@ -1363,8 +1425,8 @@
       return apiFetch('/api/projects/' + projectId).then(r => r.json()).then(proj => {
         document.getElementById('proj-name').value = proj.name || '';
         document.getElementById('proj-intro').value = proj.intro || '';
-        document.getElementById('proj-type').value = proj.type || '';
-        document.getElementById('proj-artstyle').value = proj.art_style || '';
+        setTypeFields(proj.type || '');
+        setArtStyleFields(proj.art_style || '');
         document.getElementById('proj-ratio').value = proj.video_ratio || '16:9';
         document.getElementById('proj-image-model').value = proj.image_model || '';
       });
@@ -1375,21 +1437,56 @@
   function loadStylesForSelect() {
     return apiFetch('/api/styles').then(r => r.json()).then(list => {
       const sel = document.getElementById('proj-artstyle');
-      sel.innerHTML = '<option value="">默认画风</option>' + (list || []).map(s =>
-        `<option value="${s.name}">${s.label || s.name}</option>`
+      const customVal = document.getElementById('proj-artstyle-custom')?.value || '';
+      const selected = sel.value;
+      const preset = (list || []).map(s =>
+        `<option value="${escapeHtml(s.name)}">${escapeHtml(s.label || s.name)}</option>`
       ).join('');
-    }).catch(() => {});
+      sel.innerHTML =
+        '<option value="">默认画风</option>' +
+        preset +
+        '<option value="__custom__">自定义…</option>';
+      setArtStyleFields(customVal || (selected && selected !== '__custom__' ? selected : ''));
+    }).catch(() => {
+      const sel = document.getElementById('proj-artstyle');
+      if (sel && sel.options.length <= 2) {
+        sel.innerHTML = '<option value="">默认画风</option><option value="__custom__">自定义…</option>';
+      }
+    });
   }
+
+  document.getElementById('proj-type').addEventListener('change', () => {
+    const sel = document.getElementById('proj-type');
+    const custom = document.getElementById('proj-type-custom');
+    if (sel?.value !== '__custom__' && custom) custom.value = '';
+    if (sel?.value === '__custom__' && custom) custom.focus();
+  });
+  document.getElementById('proj-artstyle').addEventListener('change', () => {
+    const sel = document.getElementById('proj-artstyle');
+    const custom = document.getElementById('proj-artstyle-custom');
+    if (sel?.value !== '__custom__' && custom) custom.value = '';
+  });
 
   document.getElementById('btn-save-project').addEventListener('click', () => {
     const name = document.getElementById('proj-name').value.trim();
     if (!name) { toast('请输入项目名称', 'warning'); return; }
 
+    const typeVal = readTypeValue();
+    const artStyleVal = readArtStyleValue();
+    if (document.getElementById('proj-type').value === '__custom__' && !typeVal) {
+      toast('请输入自定义题材类型', 'warning');
+      return;
+    }
+    if (document.getElementById('proj-artstyle').value === '__custom__' && !artStyleVal) {
+      toast('请输入自定义画风', 'warning');
+      return;
+    }
+
     const data = {
       name: name,
       intro: document.getElementById('proj-intro').value,
-      type: document.getElementById('proj-type').value,
-      art_style: document.getElementById('proj-artstyle').value,
+      type: typeVal,
+      art_style: artStyleVal,
       video_ratio: document.getElementById('proj-ratio').value,
       image_model: document.getElementById('proj-image-model').value,
       status: 'draft',
