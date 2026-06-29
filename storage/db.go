@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"toonflow/auth"
+
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -52,10 +54,18 @@ func (db *DB) migrate() error {
 	db.Exec(`ALTER TABLE o_project ADD COLUMN mode TEXT DEFAULT '[]'`)
 	db.Exec(`ALTER TABLE o_project ADD COLUMN create_time DATETIME DEFAULT CURRENT_TIMESTAMP`)
 	db.Exec(`ALTER TABLE o_project ADD COLUMN update_time DATETIME DEFAULT CURRENT_TIMESTAMP`)
+	// Create user table
+	db.Exec(`CREATE TABLE IF NOT EXISTS o_user (
+		id TEXT PRIMARY KEY,
+		username TEXT NOT NULL UNIQUE,
+		password TEXT NOT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`)
 	// Create asset and storyboard tables
 	db.Exec(`CREATE TABLE IF NOT EXISTS o_assets (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		project_id TEXT NOT NULL,
+		user_id TEXT DEFAULT '',
 		name TEXT NOT NULL,
 		desc TEXT,
 		type TEXT NOT NULL,
@@ -118,15 +128,44 @@ func (db *DB) migrate() error {
 		selected INTEGER DEFAULT 0,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`)
-	db.Exec(`CREATE TABLE IF NOT EXISTS o_agentDeploy (
-		key TEXT PRIMARY KEY,
-		agent_type TEXT NOT NULL,
-		model TEXT,
-		temperature REAL DEFAULT 0.7,
-		max_tokens INTEGER DEFAULT 4096,
-		use_mode TEXT DEFAULT 'auto',
+	db.Exec(`CREATE TABLE IF NOT EXISTS o_agent_work (
+		id TEXT PRIMARY KEY,
+		project_id TEXT NOT NULL,
+		episode_id TEXT DEFAULT '',
+		work_type TEXT NOT NULL,
+		content TEXT NOT NULL DEFAULT '',
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`)
+	db.Exec(`CREATE TABLE IF NOT EXISTS o_source_text (
+		id TEXT PRIMARY KEY,
+		project_id TEXT NOT NULL,
+		volume TEXT DEFAULT '正文卷',
+		chapter_name TEXT DEFAULT '',
+		content TEXT NOT NULL,
+		events TEXT DEFAULT '',
+		sort_num INTEGER DEFAULT 0,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`)
+	db.Exec(`CREATE TABLE IF NOT EXISTS o_episode (
+		id TEXT PRIMARY KEY,
+		project_id TEXT NOT NULL,
+		episode_num INTEGER NOT NULL DEFAULT 1,
+		title TEXT NOT NULL DEFAULT '',
+		params_json TEXT DEFAULT '{}',
+		script_content TEXT DEFAULT '',
+		events_ref TEXT DEFAULT '',
+		status TEXT DEFAULT 'draft',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`)
+	db.Exec(`CREATE TABLE IF NOT EXISTS o_chat_message (
+		id TEXT PRIMARY KEY,
+		project_id TEXT NOT NULL,
+		episode_id TEXT DEFAULT '',
+		role TEXT NOT NULL,
+		content TEXT NOT NULL,
+		action_json TEXT DEFAULT '',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`)
 	// Now create the main tables
 	schema := `
@@ -173,6 +212,7 @@ func (db *DB) migrate() error {
 	-- 项目（对标 ToonFlow o_project）
 	CREATE TABLE IF NOT EXISTS o_project (
 		id              TEXT PRIMARY KEY,
+		user_id         TEXT DEFAULT '',
 		name            TEXT NOT NULL DEFAULT '',
 		intro           TEXT,
 		type            TEXT DEFAULT '',          -- 题材类型
@@ -191,6 +231,7 @@ func (db *DB) migrate() error {
 	CREATE TABLE IF NOT EXISTS o_assets (
 		id            INTEGER PRIMARY KEY AUTOINCREMENT,
 		project_id    TEXT NOT NULL,
+		user_id       TEXT DEFAULT '',
 		name          TEXT NOT NULL,
 		desc          TEXT,
 		type          TEXT NOT NULL,              -- role/scene/prop
@@ -317,11 +358,24 @@ func (db *DB) migrate() error {
 
 	-- 种子代理配置
 	INSERT OR IGNORE INTO o_agentDeploy (key, agent_type, model, temperature, max_tokens) VALUES
-		('script_agent', 'script', 'gpt-4o', 0.7, 8000),
-		('production_agent', 'production', 'gpt-4o', 0.7, 8000),
-		('director_agent', 'director', 'gpt-4o', 0.7, 4096),
-		('supervision_agent', 'supervision', 'gpt-4o', 0.3, 1000);
+		('script_agent', 'script', 'agnes-2.0-flash', 0.7, 8000),
+		('production_agent', 'production', 'agnes-2.0-flash', 0.7, 8000),
+		('director_agent', 'director', 'agnes-2.0-flash', 0.7, 4096),
+		('supervision_agent', 'supervision', 'agnes-2.0-flash', 0.3, 1000);
 	`
 	_, err := db.Exec(schema)
-	return err
+	if err != nil {
+		return err
+	}
+
+	if err := auth.SeedAdmin(db.DB); err != nil {
+		return fmt.Errorf("seed admin: %w", err)
+	}
+	// Backfill user_id columns on databases created before auth support
+	db.Exec(`ALTER TABLE o_project ADD COLUMN user_id TEXT DEFAULT ''`)
+	db.Exec(`ALTER TABLE o_assets ADD COLUMN user_id TEXT DEFAULT ''`)
+	// Bind legacy rows without owner to default admin
+	db.Exec(`UPDATE o_project SET user_id = ? WHERE user_id IS NULL OR user_id = ''`, auth.DefaultAdminID)
+	db.Exec(`UPDATE o_assets SET user_id = ? WHERE user_id IS NULL OR user_id = ''`, auth.DefaultAdminID)
+	return nil
 }

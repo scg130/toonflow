@@ -1,0 +1,11 @@
+2026-06-29 16:02:24.955 [log_id=system] ToonFlow starting log_dir=logs
+2026-06-29 16:02:24.959 [log_id=system] Database initialized
+2026-06-29 16:02:24.961 [log_id=system] Skills loaded from skills
+2026-06-29 16:02:24.961 [log_id=system] Using adapter: Agnes-AI
+2026-06-29 16:02:24.961 [log_id=system] Listening on http://localhost:9090
+2026-06-29 16:02:27.927 [log_id=log_1782720147927395000] request start method=GET path=/ws ip=127.0.0.1
+2026-06-29 16:02:27.927 [log_id=log_1782720147927395000] request end status=401 latency=339.542µs
+2026-06-29 16:02:30.935 [log_id=log_1782720150935550000] request start method=GET path=/ws ip=127.0.0.1
+2026-06-29 16:02:30.935 [log_id=log_1782720150935550000] request end status=401 latency=393.75µs
+2026-06-29 16:02:33.947 [log_id=log_1782720153947117000] request start method=GET path=/ws ip=127.0.0.1
+2026-06-29 16:02:33.948 [log_id=log_1782720153947117000] request end status=401 latency=1.303541ms

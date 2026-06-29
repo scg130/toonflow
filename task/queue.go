@@ -9,18 +9,22 @@ import (
 
 // Queue manages concurrent task execution.
 type Queue struct {
-	mu       sync.Mutex
-	tasks    map[string]*Task
-	done     chan *Task
-	maxConc  int
+	mu         sync.Mutex
+	tasks      map[string]*Task
+	history    []*Task
+	maxHistory int
+	done       chan *Task
+	maxConc    int
 }
 
 // NewQueue creates a new task queue.
 func NewQueue(maxConcurrency int) *Queue {
 	return &Queue{
-		tasks:   make(map[string]*Task),
-		done:    make(chan *Task, 100),
-		maxConc: maxConcurrency,
+		tasks:      make(map[string]*Task),
+		history:    make([]*Task, 0, 64),
+		maxHistory: 100,
+		done:       make(chan *Task, 100),
+		maxConc:    maxConcurrency,
 	}
 }
 
@@ -33,6 +37,9 @@ func (q *Queue) Submit(t *Task, fn func(context.Context, *Task) error) {
 
 	if active > q.maxConc {
 		t.SetError("max concurrent tasks reached")
+		delete(q.tasks, t.ID)
+		q.addHistoryLocked(t)
+		q.mu.Unlock()
 		q.done <- t
 		return
 	}
@@ -41,6 +48,7 @@ func (q *Queue) Submit(t *Task, fn func(context.Context, *Task) error) {
 		defer func() {
 			q.mu.Lock()
 			delete(q.tasks, t.ID)
+			q.addHistoryLocked(t)
 			q.mu.Unlock()
 			q.done <- t
 		}()
@@ -75,15 +83,25 @@ func (q *Queue) GetTask(id string) (*Task, bool) {
 	return t, ok
 }
 
-// AllTasks returns copies of all tasks.
+// AllTasks returns copies of active and recent completed tasks.
 func (q *Queue) AllTasks() []*Task {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	result := make([]*Task, 0, len(q.tasks))
+	result := make([]*Task, 0, len(q.tasks)+len(q.history))
+	for _, t := range q.history {
+		result = append(result, t.Clone())
+	}
 	for _, t := range q.tasks {
 		result = append(result, t.Clone())
 	}
 	return result
+}
+
+func (q *Queue) addHistoryLocked(t *Task) {
+	q.history = append(q.history, t.Clone())
+	if len(q.history) > q.maxHistory {
+		q.history = q.history[len(q.history)-q.maxHistory:]
+	}
 }
 
 // RetryableError is an error that can be retried.

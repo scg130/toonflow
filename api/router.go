@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"toonflow/adapter"
+	"toonflow/auth"
 	"toonflow/engine"
 	"toonflow/skill"
 	"toonflow/storage"
@@ -21,10 +22,11 @@ func SetupRouter(
 	skillMgr *skill.Manager,
 	v adapter.Vendor,
 	wsBC *ws.ConnManager,
+	sessions *auth.Store,
 	outputDir, staticDir string,
 	port int,
 ) *gin.Engine {
-	router := NewRouter(db, queue, engineCfg, skillMgr, v, wsBC, outputDir, staticDir, port)
+	router := NewRouter(db, queue, engineCfg, skillMgr, v, wsBC, sessions, outputDir, staticDir, port)
 	return router.Setup()
 }
 

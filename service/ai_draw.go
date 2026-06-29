@@ -30,9 +30,9 @@ func GenerateImages(ctx context.Context, items []task.StoryboardItem, style, res
 			prompt += ", camera: " + item.Camera
 		}
 
-		resp, err := v.ImageRequest(ctx, "dall-e-3", adapter.ImageParams{
+		resp, err := v.ImageRequest(ctx, adapter.DefaultImageModel, adapter.ImageParams{
 			Prompt:      prompt,
-			Model:       "dall-e-3",
+			Model:       adapter.DefaultImageModel,
 			AspectRatio: resToAspect(resolution),
 		})
 		if err != nil {

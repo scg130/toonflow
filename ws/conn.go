@@ -22,12 +22,14 @@ var Upgrader = websocket.Upgrader{
 
 // WSRequest represents a client-to-server message.
 type WSRequest struct {
-	Action         string  `json:"action"`
-	Script         string  `json:"script,omitempty"`
-	Style          string  `json:"style,omitempty"`
-	FrameDuration  float64 `json:"frame_duration,omitempty"`
-	Resolution     string  `json:"resolution,omitempty"`
-	FPS            int     `json:"fps,omitempty"`
+	Action        string  `json:"action"`
+	Script        string  `json:"script,omitempty"`
+	Style         string  `json:"style,omitempty"`
+	FrameDuration float64 `json:"frame_duration,omitempty"`
+	Resolution    string  `json:"resolution,omitempty"`
+	FPS           int     `json:"fps,omitempty"`
+	Mode          string  `json:"mode,omitempty"`       // full, parse, images, video
+	ProjectID     string  `json:"project_id,omitempty"`
 }
 
 // WSResponse represents a server-to-client message.
@@ -47,10 +49,16 @@ func MustMarshalJSON(v interface{}) json.RawMessage {
 
 // ConnManager manages WebSocket connections and message broadcasting.
 type ConnManager struct {
-	clients   map[*websocket.Conn]bool
-	mu        sync.RWMutex
-	broadcast chan WSResponse
-	pongWait  time.Duration
+	clients    map[*websocket.Conn]bool
+	mu         sync.RWMutex
+	broadcast  chan WSResponse
+	pongWait   time.Duration
+	generation *GenerationService
+}
+
+// SetGenerationService attaches the generation handler.
+func (cm *ConnManager) SetGenerationService(gs *GenerationService) {
+	cm.generation = gs
 }
 
 // NewConnManager creates a new connection manager.
@@ -167,10 +175,11 @@ func handleAction(cm *ConnManager, req *WSRequest) {
 	case "ping":
 		cm.Broadcast(WSResponse{Code: 0, Msg: "pong"})
 	case "start_generate":
-		cm.Broadcast(WSResponse{
-			Code: 0, Msg: "任务已接收", Step: "waiting",
-			Data: MustMarshalJSON(map[string]string{"action": "started"}),
-		})
+		if cm.generation != nil {
+			cm.generation.handleStartGenerate(cm, req)
+		} else {
+			cm.Broadcast(WSResponse{Code: 1, Msg: "generation service unavailable", Step: "error"})
+		}
 	case "cancel_generate":
 		cm.Broadcast(WSResponse{Code: 0, Msg: "已取消"})
 	default:

@@ -10,12 +10,14 @@ import (
 	"time"
 	"toonflow/adapter"
 	"toonflow/api"
+	"toonflow/auth"
 	"toonflow/engine"
 	"toonflow/skill"
 	"toonflow/storage"
 	"toonflow/task"
 	"toonflow/ws"
 	"toonflow/config"
+	"toonflow/logger"
 )
 
 func main() {
@@ -25,41 +27,52 @@ func main() {
 
 	cfg := config.Load()
 
+	if err := logger.Init(cfg.LogDir); err != nil {
+		log.Fatalf("Failed to init logger: %v", err)
+	}
+	logger.Default.Info("system", "ToonFlow starting log_dir="+cfg.LogDir)
+
 	// Initialize database
 	db, err := storage.Init(cfg.DBPath)
 	if err != nil {
+		logger.Default.Error("system", "database init failed", err)
 		log.Fatalf("Failed to init database: %v", err)
 	}
 	defer db.Close()
-	log.Println("Database initialized")
+	logger.Default.Info("system", "Database initialized")
 
 	// Initialize skill manager
 	skillMgr := skill.NewManager(cfg.SkillsDir)
 	if err := skillMgr.Load(); err != nil {
+		logger.Default.Error("system", "failed to load skills", err)
 		log.Printf("Warning: failed to load skills: %v", err)
 	}
-	log.Printf("Skills loaded from %s", cfg.SkillsDir)
+	logger.Default.Info("system", "Skills loaded from "+cfg.SkillsDir)
 
-	// Get default adapter
-	v, ok := adapter.Get(cfg.DefaultVendor)
-	if !ok {
-		log.Fatalf("Unknown default vendor: %s", cfg.DefaultVendor)
-	}
-	log.Printf("Using adapter: %s", cfg.DefaultVendor)
+	// Resolve AI vendor from DB / environment
+	v := adapter.ResolveFromDB(db.DB, cfg.DefaultVendor)
+	logger.Default.Info("system", "Using adapter: "+v.VendorConfig().Name)
+
+	// Session store
+	sessions := auth.NewStore(24 * time.Hour)
 
 	// Initialize WebSocket manager
 	broadcaster := ws.NewConnManager()
 	broadcaster.Run()
+
+	// Initialize task queue
+	queue := task.NewQueue(cfg.MaxConcurrentTasks)
 
 	// Initialize pipeline with broadcaster
 	pipelineCfg := &engine.Config{
 		OutputDir:   cfg.OutputDir,
 		TaskTimeout: cfg.TaskTimeout,
 	}
-	_ = engine.New(v, skillMgr, pipelineCfg, broadcaster)
+	pipeline := engine.New(v, skillMgr, pipelineCfg, broadcaster)
 
-	// Initialize task queue
-	queue := task.NewQueue(cfg.MaxConcurrentTasks)
+	// Wire WebSocket generation handler
+	genSvc := ws.NewGenerationService(pipeline, queue, db.DB, cfg.OutputDir, cfg.TaskTimeout)
+	broadcaster.SetGenerationService(genSvc)
 
 	// Create directories
 	os.MkdirAll(cfg.OutputDir, 0755)
@@ -78,19 +91,22 @@ func main() {
 		skillMgr,
 		v,
 		broadcaster,
+		sessions,
 		cfg.OutputDir,
 		staticDir,
 		cfg.Port,
 	)
 
 	addr := ":" + itoa(cfg.Port)
+	logger.Default.Info("system", "Listening on http://localhost"+addr)
 	log.Printf("Listening on http://localhost%s", addr)
 
 	server := &http.Server{
-		Addr:         addr,
-		Handler:      router,
-		ReadTimeout:  60 * time.Second,
-		WriteTimeout: 60 * time.Second,
+		Addr:    addr,
+		Handler: router,
+		// AI 分析/分集等接口可能耗时数分钟
+		ReadTimeout:  15 * time.Minute,
+		WriteTimeout: 15 * time.Minute,
 	}
 
 	// Graceful shutdown

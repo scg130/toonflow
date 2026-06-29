@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"toonflow/adapter"
@@ -12,21 +11,31 @@ import (
 
 // ParseScript uses the LLM to parse a raw script into storyboard items.
 func ParseScript(ctx context.Context, script, style string, skillMgr *skill.Manager, v adapter.Vendor) ([]task.StoryboardItem, error) {
-	systemPrompt := "You are a professional short drama storyboard artist. Parse the script into numbered shots with scene, description, camera, and duration.\n\n"
-	systemPrompt += skillMgr.Get("art_skills") + "\n"
-	systemPrompt += skillMgr.Get("production_execution") + "\n"
-	systemPrompt += skillMgr.Get("story_skills") + "\n"
+	systemPrompt := `你是专业短剧分镜师。将剧本拆分为多个独立镜头。
+必须只输出 JSON 数组，不要 markdown 说明文字。每项字段：
+- shot_number (int) 镜头序号
+- scene (string) 场景名
+- description (string) 中文画面描述
+- camera (string) 运镜，如固定镜头/推镜/摇镜
+- duration (float) 秒数，默认3
+- prompt (string) 英文 AI 绘画提示词，含画风与构图
+
+示例：[{"shot_number":1,"scene":"柳树下","description":"...","camera":"特写","duration":3,"prompt":"..."}]`
+
+	systemPrompt += "\n\n" + skillMgr.Get("art_skills")
+	systemPrompt += "\n" + skillMgr.Get("production_execution")
+	systemPrompt += "\n" + skillMgr.Get("story_skills")
 	if style != "" {
-		systemPrompt += fmt.Sprintf("\nArt style: %s. Maintain consistency across all shots.\n", style)
+		systemPrompt += fmt.Sprintf("\n画风: %s，prompt 中需体现。\n", style)
 	}
 
-	resp, err := v.TextRequest(ctx, "gpt-4o", adapter.TextParams{
+	resp, err := v.TextRequest(ctx, adapter.DefaultTextModel, adapter.TextParams{
 		Messages: []adapter.TextMessage{
 			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: script},
+			{Role: "user", Content: "请将以下剧本拆分为分镜 JSON 数组：\n\n" + script},
 		},
-		Temperature: 0.7,
-		MaxTokens:   8000,
+		Temperature: 0.5,
+		MaxTokens:   12000,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("text request: %w", err)
@@ -36,82 +45,10 @@ func ParseScript(ctx context.Context, script, style string, skillMgr *skill.Mana
 	if err != nil {
 		return nil, fmt.Errorf("parse response: %w", err)
 	}
-	return items, nil
-}
-
-func parseStoryboardResponse(text string) ([]task.StoryboardItem, error) {
-	// Try JSON first
-	var items []task.StoryboardItem
-	if err := json.Unmarshal([]byte(text), &items); err == nil {
-		return items, nil
-	}
-
-	// Try extracting from markdown code block
-	text = strings.TrimSpace(text)
-	if start := strings.Index(text, "["); start != -1 {
-		if end := strings.LastIndex(text, "]"); end != -1 {
-			if err := json.Unmarshal([]byte(text[start:end+1]), &items); err == nil {
-				return items, nil
-			}
+	if len(items) <= 1 && strings.Contains(resp.Content, "Shot") {
+		if md := parseMarkdownShots(resp.Content); len(md) > len(items) {
+			items = md
 		}
 	}
-
-	return fallbackParseShots(text), nil
-}
-
-func fallbackParseShots(text string) []task.StoryboardItem {
-	var items []task.StoryboardItem
-	lines := strings.Split(text, "\n")
-	var current *task.StoryboardItem
-	shotNum := 0
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		if strings.HasPrefix(line, "镜头") || strings.HasPrefix(line, "Shot ") || strings.HasPrefix(line, "Shot\n") {
-			if current != nil {
-				items = append(items, *current)
-			}
-			shotNum++
-			current = &task.StoryboardItem{ShotNumber: shotNum, Duration: 3.0}
-			continue
-		}
-
-		if current == nil {
-			current = &task.StoryboardItem{ShotNumber: shotNum, Description: line, Duration: 3.0}
-			continue
-		}
-
-		if idx := strings.IndexAny(line, ":："); idx != -1 {
-			key := strings.TrimSpace(line[:idx])
-			val := strings.TrimSpace(line[idx+1:])
-			switch key {
-			case "场景", "Scene":
-				current.Scene = val
-			case "描述", "Description":
-				current.Description = val
-			case "镜头", "Camera":
-				current.Camera = val
-			case "时长", "Duration":
-				fmt.Sscanf(val, "%f", &current.Duration)
-			case "Prompt":
-				current.Prompt = val
-			}
-		} else {
-			current.Description += " " + line
-		}
-	}
-
-	if current != nil {
-		items = append(items, *current)
-	}
-
-	if len(items) == 0 {
-		items = append(items, task.StoryboardItem{ShotNumber: 1, Description: text, Duration: 3.0})
-	}
-
-	return items
+	return NormalizeStoryboardItems(items), nil
 }

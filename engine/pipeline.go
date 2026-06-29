@@ -22,6 +22,8 @@ type Pipeline struct {
 	skillMgr    *skill.Manager
 	cfg         *Config
 	broadcaster *ws.ConnManager
+	textModel   string
+	imageModel  string
 }
 
 // Config holds pipeline configuration.
@@ -37,82 +39,177 @@ func New(v adapter.Vendor, skillMgr *skill.Manager, cfg *Config, bc *ws.ConnMana
 		skillMgr:    skillMgr,
 		cfg:         cfg,
 		broadcaster: bc,
+		textModel:   adapter.DefaultTextModel,
+		imageModel:  adapter.DefaultImageModel,
 	}
 }
 
-// Execute runs the full generation pipeline for a task.
+// Execute runs the generation pipeline for a task according to its mode.
 func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
+	mode := t.Mode
+	if mode == "" {
+		mode = "full"
+	}
+
 	taskDir := filepath.Join(p.cfg.OutputDir, t.ID)
-	if err := os.MkdirAll(taskDir, 0755); err != nil {
-		return fmt.Errorf("create task dir: %w", err)
+	if mode != "parse" {
+		if err := os.MkdirAll(taskDir, 0755); err != nil {
+			return fmt.Errorf("create task dir: %w", err)
+		}
 	}
 
-	// Step 1: Parse script
-	t.SetState(task.StateParsing, "parse_script")
-	p.broadcast(t, "剧本解析中...", 10)
+	// Step 1: Parse script (full or parse mode)
+	if mode == "full" || mode == "parse" {
+		t.SetState(task.StateParsing, "parse_script")
+		p.broadcast(t, "剧本解析中...", 10, nil)
 
-	items, err := p.parseScript(ctx, t)
-	if err != nil {
-		return fmt.Errorf("parse script: %w", err)
+		items, err := p.parseScript(ctx, t)
+		if err != nil {
+			return fmt.Errorf("parse script: %w", err)
+		}
+		t.Storyboard = items
+		t.UpdateProgress(30)
+		t.SetState(task.StateStoryboard, "gen_storyboard")
+		p.broadcast(t, "分镜生成完成", 30, map[string]interface{}{
+			"storyboard": items,
+			"current_shot": 0,
+			"total_shots": len(items),
+		})
+
+		if mode == "parse" {
+			t.SetState(task.StateDone, "finish")
+			t.UpdateProgress(100)
+			p.broadcast(t, "分镜生成完成", 100, map[string]interface{}{"storyboard": items})
+			return nil
+		}
 	}
-	t.Storyboard = items
-	t.UpdateProgress(30)
-	p.broadcast(t, "分镜生成完成", 30)
 
-	// Step 2: Generate images
-	t.SetState(task.StateDrawing, "gen_image")
-	for i, item := range items {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+	// Step 2: Generate images (full or images mode)
+	if mode == "full" || mode == "images" {
+		if len(t.Storyboard) == 0 {
+			return fmt.Errorf("no storyboard to generate images")
 		}
 
-		progress := 30 + float32(i+1)/float32(len(items))*50
-		t.UpdateProgress(progress)
-		p.broadcast(t, fmt.Sprintf("生成中 (%d/%d)", i+1, len(items)), progress)
+		t.SetState(task.StateDrawing, "gen_image")
+		total := len(t.Storyboard)
+		for i, item := range t.Storyboard {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
 
-		localPath := filepath.Join(taskDir, fmt.Sprintf("shot_%03d.png", item.ShotNumber))
-		if err := p.genImage(ctx, t, item, localPath); err != nil {
-			return fmt.Errorf("shot %d: %w", item.ShotNumber, err)
+			progress := 30 + float32(i+1)/float32(total)*50
+			t.UpdateProgress(progress)
+			p.broadcast(t, fmt.Sprintf("生成中 (%d/%d)", i+1, total), progress, map[string]interface{}{
+				"current_shot": i + 1,
+				"total_shots":  total,
+			})
+
+			localPath := filepath.Join(taskDir, fmt.Sprintf("shot_%03d.png", item.ShotNumber))
+			if err := p.genImage(ctx, t, item, localPath); err != nil {
+				return fmt.Errorf("shot %d: %w", item.ShotNumber, err)
+			}
+
+			imageURL := fmt.Sprintf("/output/%s/shot_%03d.png", t.ID, item.ShotNumber)
+			t.Storyboard[i].ImageURL = imageURL
+
+			t.Images = append(t.Images, task.ImageArtifact{
+				ShotNumber: item.ShotNumber,
+				LocalPath:  localPath,
+				DataURL:    imageURL,
+				Status:     "done",
+			})
+
+			p.broadcast(t, fmt.Sprintf("图片完成 (%d/%d)", i+1, total), progress, map[string]interface{}{
+				"current_shot": i + 1,
+				"total_shots":  total,
+				"shot":         t.Storyboard[i],
+			})
 		}
 
-		t.Images = append(t.Images, task.ImageArtifact{
-			ShotNumber: item.ShotNumber,
-			LocalPath:  localPath,
-			Status:     "done",
+		if mode == "images" {
+			t.SetState(task.StateDone, "finish")
+			t.UpdateProgress(100)
+			p.broadcast(t, "图片生成完成", 100, map[string]interface{}{
+				"storyboard": t.Storyboard,
+			})
+			return nil
+		}
+	}
+
+	// Step 3: Merge video (full or video mode)
+	if mode == "full" || mode == "video" {
+		if len(t.Images) == 0 {
+			if err := p.loadImagesFromStoryboard(t); err != nil {
+				return err
+			}
+		}
+		if len(t.Images) == 0 {
+			return fmt.Errorf("no images to merge")
+		}
+
+		t.SetState(task.StateMerging, "merge_video")
+		p.broadcast(t, "视频合成中...", 85, nil)
+
+		outputPath := filepath.Join(taskDir, "output.mp4")
+		if err := mergeVideo(t, outputPath); err != nil {
+			return fmt.Errorf("merge video: %w", err)
+		}
+
+		t.VideoPath = outputPath
+		videoURL := fmt.Sprintf("/output/%s/output.mp4", t.ID)
+		t.SetState(task.StateDone, "finish")
+		t.UpdateProgress(100)
+		p.broadcast(t, "生成完成！", 100, map[string]interface{}{
+			"video_url":  videoURL,
+			"storyboard": t.Storyboard,
 		})
 	}
-
-	// Step 3: Merge video
-	t.SetState(task.StateMerging, "merge_video")
-	p.broadcast(t, "视频合成中...", 85)
-
-	outputPath := filepath.Join(taskDir, "output.mp4")
-	if err := mergeVideo(t, outputPath); err != nil {
-		return fmt.Errorf("merge video: %w", err)
-	}
-
-	t.VideoPath = outputPath
-	t.SetState(task.StateDone, "finish")
-	t.UpdateProgress(100)
-	p.broadcast(t, "生成完成！", 100)
 
 	return nil
 }
 
-func (p *Pipeline) broadcast(t *task.Task, msg string, progress float32) {
-	if p.broadcaster != nil {
-		p.broadcaster.Broadcast(ws.WSResponse{
-			Code:     0,
-			Msg:      msg,
-			Step:     t.Step,
-			Progress: progress,
-			Data:     ws.MustMarshalJSON(map[string]interface{}{
-				"task_id": t.ID,
-			}),
+func (p *Pipeline) loadImagesFromStoryboard(t *task.Task) error {
+	for _, item := range t.Storyboard {
+		if item.ImageURL == "" {
+			continue
+		}
+		rel := strings.TrimPrefix(item.ImageURL, "/output/")
+		localPath := filepath.Join(p.cfg.OutputDir, rel)
+		if _, err := os.Stat(localPath); err != nil {
+			continue
+		}
+		t.Images = append(t.Images, task.ImageArtifact{
+			ShotNumber: item.ShotNumber,
+			LocalPath:  localPath,
+			DataURL:    item.ImageURL,
+			Status:     "done",
 		})
 	}
+	if len(t.Images) == 0 {
+		return fmt.Errorf("no generated images found in storyboard")
+	}
+	return nil
+}
+
+func (p *Pipeline) broadcast(t *task.Task, msg string, progress float32, extra map[string]interface{}) {
+	if p.broadcaster == nil {
+		return
+	}
+	data := map[string]interface{}{
+		"task_id": t.ID,
+	}
+	for k, v := range extra {
+		data[k] = v
+	}
+	p.broadcaster.Broadcast(ws.WSResponse{
+		Code:     0,
+		Msg:      msg,
+		Step:     t.Step,
+		Progress: progress,
+		Data:     ws.MustMarshalJSON(data),
+	})
 }
 
 func (p *Pipeline) parseScript(ctx context.Context, t *task.Task) ([]task.StoryboardItem, error) {
@@ -124,7 +221,7 @@ func (p *Pipeline) parseScript(ctx context.Context, t *task.Task) ([]task.Storyb
 		systemPrompt += fmt.Sprintf("\nArt style: %s. Maintain consistency.\n", t.Style)
 	}
 
-	resp, err := p.adapter.TextRequest(ctx, "gpt-4o", adapter.TextParams{
+	resp, err := p.adapter.TextRequest(ctx, p.textModel, adapter.TextParams{
 		Messages: []adapter.TextMessage{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: t.Script},
@@ -140,7 +237,10 @@ func (p *Pipeline) parseScript(ctx context.Context, t *task.Task) ([]task.Storyb
 }
 
 func (p *Pipeline) genImage(ctx context.Context, t *task.Task, item task.StoryboardItem, localPath string) error {
-	prompt := item.Description
+	prompt := item.Prompt
+	if prompt == "" {
+		prompt = item.Description
+	}
 	if t.Style != "" {
 		prompt += ", " + t.Style + " art style"
 	}
@@ -148,9 +248,9 @@ func (p *Pipeline) genImage(ctx context.Context, t *task.Task, item task.Storybo
 		prompt += ", camera: " + item.Camera
 	}
 
-	resp, err := p.adapter.ImageRequest(ctx, "dall-e-3", adapter.ImageParams{
+	resp, err := p.adapter.ImageRequest(ctx, p.imageModel, adapter.ImageParams{
 		Prompt:      prompt,
-		Model:       "dall-e-3",
+		Model:       p.imageModel,
 		AspectRatio: resToAspect(t.Resolution),
 	})
 	if err != nil {
@@ -181,6 +281,7 @@ func parseStoryboardText(text, resolution string) []task.StoryboardItem {
 		}
 
 		if cur == nil {
+			num++
 			cur = &task.StoryboardItem{ShotNumber: num, Description: line, Duration: 3.0}
 			continue
 		}

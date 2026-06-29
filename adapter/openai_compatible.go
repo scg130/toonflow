@@ -23,6 +23,13 @@ func init() {
 	Register(&OpenAIVendor{})
 }
 
+// NewOpenAIVendor returns a configured OpenAI-compatible vendor instance.
+func NewOpenAIVendor(baseURL, apiKey string) *OpenAIVendor {
+	v := &OpenAIVendor{}
+	v.Configure(baseURL, apiKey)
+	return v
+}
+
 // VendorConfig returns the OpenAI-compatible vendor metadata.
 func (v *OpenAIVendor) VendorConfig() VendorConfig {
 	return VendorConfig{
@@ -51,6 +58,12 @@ func (v *OpenAIVendor) Configure(baseURL, apiKey string) {
 
 // TextRequest sends a text completion request to the OpenAI-compatible API.
 func (v *OpenAIVendor) TextRequest(ctx interface{}, model string, params TextParams) (*TextResponse, error) {
+	if v.client == nil {
+		return nil, fmt.Errorf("AI vendor not configured: add vendor in settings or set OPENAI_API_KEY")
+	}
+	if v.apiKey == "" {
+		return nil, fmt.Errorf("API key not configured")
+	}
 	c, ok := ctx.(context.Context)
 	if !ok {
 		c = context.Background()
@@ -115,6 +128,12 @@ func (v *OpenAIVendor) TextRequest(ctx interface{}, model string, params TextPar
 
 // ImageRequest sends an image generation request to the OpenAI-compatible API.
 func (v *OpenAIVendor) ImageRequest(ctx interface{}, model string, params ImageParams) (*ImageResponse, error) {
+	if v.client == nil {
+		return nil, fmt.Errorf("AI vendor not configured: add vendor in settings or set OPENAI_API_KEY")
+	}
+	if v.apiKey == "" {
+		return nil, fmt.Errorf("API key not configured")
+	}
 	c, ok := ctx.(context.Context)
 	if !ok {
 		c = context.Background()

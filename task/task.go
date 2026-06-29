@@ -23,9 +23,11 @@ const (
 // Task represents a single generation job.
 type Task struct {
 	ID            string           `json:"id"`
+	ProjectID     string           `json:"project_id,omitempty"`
 	UserID        string           `json:"user_id"`
 	Script        string           `json:"script"`
 	Style         string           `json:"style"`
+	Mode          string           `json:"mode,omitempty"` // full, parse, images, video
 	FrameDuration float64          `json:"frame_duration"`
 	Resolution    string           `json:"resolution"`
 	FPS           int              `json:"fps"`
@@ -56,6 +58,7 @@ type StoryboardItem struct {
 	Camera      string  `json:"camera"`
 	Duration    float64 `json:"duration"`
 	Prompt      string  `json:"prompt"`
+	ImageURL    string  `json:"image_url,omitempty"`
 }
 
 // ImageArtifact represents a generated image for one shot.
@@ -67,11 +70,12 @@ type ImageArtifact struct {
 }
 
 // NewTask creates a new task with defaults.
-func NewTask(id, userID, script, style string, frameDuration float64, resolution string, fps int, timeout time.Duration) *Task {
+func NewTask(id, projectID, script, style string, frameDuration float64, resolution string, fps int, timeout time.Duration) *Task {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	return &Task{
 		ID:            id,
-		UserID:        userID,
+		ProjectID:     projectID,
+		UserID:        "",
 		Script:        script,
 		Style:         style,
 		FrameDuration: frameDuration,

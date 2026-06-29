@@ -26,6 +26,9 @@ type Config struct {
 
 	// Skills
 	SkillsDir string
+
+	// Logs
+	LogDir string
 }
 
 // DefaultConfig returns a Config with sensible defaults.
@@ -37,9 +40,10 @@ func DefaultConfig() *Config {
 		OutputDir:          filepath.Join(".", "output"),
 		MaxConcurrentTasks: 5,
 		TaskTimeout:        10 * time.Minute,
-		DefaultVendor:      "openai_compatible",
+		DefaultVendor:      "agnes_ai",
 		FFmpegPath:         "ffmpeg",
 		SkillsDir:          filepath.Join(".", "skills"),
+		LogDir:             "",
 	}
 }
 
@@ -54,6 +58,7 @@ func Load() *Config {
 	flag.DurationVar(&cfg.TaskTimeout, "task-timeout", cfg.TaskTimeout, "Per-task timeout duration")
 	flag.StringVar(&cfg.FFmpegPath, "ffmpeg", cfg.FFmpegPath, "FFmpeg binary path")
 	flag.StringVar(&cfg.SkillsDir, "skills-dir", cfg.SkillsDir, "Skills markdown directory")
+	flag.StringVar(&cfg.LogDir, "log-dir", "", "Log directory (default: alongside database)")
 
 	// Environment variable overrides
 	if p := os.Getenv("TOONFLOW_PORT"); p != "" {
@@ -65,10 +70,15 @@ func Load() *Config {
 
 	flag.Parse()
 
+	if cfg.LogDir == "" {
+		cfg.LogDir = filepath.Join(".", "logs")
+	}
+
 	// Ensure directories exist
 	os.MkdirAll(filepath.Dir(cfg.DBPath), 0755)
 	os.MkdirAll(cfg.OutputDir, 0755)
 	os.MkdirAll(cfg.SkillsDir, 0755)
+	os.MkdirAll(cfg.LogDir, 0755)
 
 	return cfg
 }
