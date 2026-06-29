@@ -513,9 +513,18 @@ func (v *AgnesAIVendor) VideoRequest(ctx interface{}, model string, params Video
 
 func (v *AgnesAIVendor) pollVideoResult(ctx context.Context, videoID, model string) (*VideoResponse, error) {
 	pollURL := fmt.Sprintf("%s/agnesapi?video_id=%s&model_name=%s", v.apiRoot(), videoID, model)
-	ticker := time.NewTicker(3 * time.Second)
+	const pollInterval = 10 * time.Second
+	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
+	// 创建任务后先等待再查，降低触发 video status 限流的概率。
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(pollInterval):
+	}
+
+	backoff := pollInterval
 	for {
 		req, err := http.NewRequestWithContext(ctx, "GET", pollURL, nil)
 		if err != nil {
@@ -531,14 +540,29 @@ func (v *AgnesAIVendor) pollVideoResult(ctx context.Context, videoID, model stri
 		raw, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
+		if resp.StatusCode == http.StatusTooManyRequests {
+			logger.CtxInfo(ctx, "agnes video poll 429, backoff %s video_id=%s", backoff, videoID)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+			if backoff < 30*time.Second {
+				backoff += pollInterval
+			}
+			continue
+		}
+
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("agnes video poll error %d: %s", resp.StatusCode, string(raw))
 		}
 
+		backoff = pollInterval
+
 		type pollResp struct {
-			Status              string `json:"status"`
-			RemixedFromVideoID  string `json:"remixed_from_video_id"`
-			Error               any    `json:"error"`
+			Status             string `json:"status"`
+			RemixedFromVideoID string `json:"remixed_from_video_id"`
+			Error              any    `json:"error"`
 		}
 		var result pollResp
 		if err := json.Unmarshal(raw, &result); err != nil {
