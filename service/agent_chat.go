@@ -373,6 +373,9 @@ func StoryboardFromRecentChat(db *sql.DB, projectID, episodeID string, limit int
 }
 
 func (a *AgentChat) persistStoryboard(projectID, episodeID string, items []task.StoryboardItem) {
+	if existing, err := LoadStoryboardItems(a.DB, projectID, episodeID); err == nil && len(existing) > 0 {
+		items = MergeStoryboardMedia(existing, items)
+	}
 	shotsJSON, _ := json.Marshal(items)
 	sbID := fmt.Sprintf("sb_%s_%s", projectID, episodeID)
 	_, _ = a.DB.Exec(`

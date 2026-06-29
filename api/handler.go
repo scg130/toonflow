@@ -121,6 +121,14 @@ func (r *Router) Setup() *gin.Engine {
 		protected.GET("/storyboards", r.storyboardsListHandler)
 		protected.GET("/styles", r.stylesHandler)
 
+		protected.GET("/projects/:id/shot-clips", r.shotClipsListHandler)
+		protected.POST("/projects/:id/episodes/:epId/shots/:shotNum/generate-video", r.shotClipGenerateHandler)
+		protected.PUT("/shot-clips/:clipId/select", r.shotClipSelectHandler)
+		protected.DELETE("/shot-clips/:clipId", r.shotClipDeleteHandler)
+		protected.GET("/projects/:id/timeline", r.timelineGetHandler)
+		protected.PUT("/projects/:id/timeline", r.timelineSaveHandler)
+		protected.POST("/projects/:id/timeline/export", r.timelineExportHandler)
+
 		protected.GET("/settings", r.settingsGetHandler)
 		protected.PUT("/settings", r.settingsUpdateHandler)
 
@@ -691,6 +699,7 @@ func (r *Router) storyboardsListHandler(c *gin.Context) {
 	shots = service.NormalizeStoryboardItems(shots)
 	if episodeID != "" && service.StoryboardScore(shots) <= 1 {
 		if refreshed := service.StoryboardFromRecentChat(r.db.DB, projectID, episodeID, 10); service.StoryboardScore(refreshed) > service.StoryboardScore(shots) {
+			refreshed = service.MergeStoryboardMedia(shots, refreshed)
 			refreshed = service.NormalizeStoryboardItems(refreshed)
 			shotsJSON, _ := json.Marshal(refreshed)
 			sbID := fmt.Sprintf("sb_%s_%s", projectID, episodeID)

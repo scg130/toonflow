@@ -18,8 +18,9 @@
   let wbStage = 'source';
   let planningType = 'skeleton';
   let storyboards = [];
+  let shotClips = [];        // 分镜视频版本
+  let timeline = null;       // 时间线编辑状态
   let assets = [];           // 当前项目的资产列表
-  let videoTracks = [];      // 视频轨道
   let isGenerating = false;
 
   // ======================== DOM 引用 ========================
@@ -38,9 +39,10 @@
     storyboardCount: document.getElementById('storyboard-count'),
     storyboardSelectedCount: document.getElementById('storyboard-selected-count'),
     btnSelectAllShots: document.getElementById('btn-select-all-shots'),
-    // 视频
-    videoTracks: document.getElementById('video-tracks'),
-    videoPreview: document.getElementById('video-preview-area'),
+    timelineVideoClips: document.getElementById('timeline-video-clips'),
+    timelineAudioClips: document.getElementById('timeline-audio-clips'),
+    timelinePreview: document.getElementById('timeline-preview'),
+    videoExportArea: document.getElementById('video-export-area'),
     outputVideo: document.getElementById('output-video'),
     downloadLink: document.getElementById('download-link'),
     // 任务
@@ -431,6 +433,11 @@
     if (panel === 'planning') loadPlanningContent();
     if (panel === 'storyboard' && currentProject) {
       loadProjectStoryboards(currentProject.id, currentEpisode?.id);
+      loadShotClips();
+    }
+    if (panel === 'video' && currentProject && currentEpisode) {
+      loadShotClips();
+      loadTimeline();
     }
   }
 
@@ -654,16 +661,17 @@
       duration: sb.duration ?? sb.Duration ?? 3,
       prompt: sb.prompt ?? sb.Prompt ?? sb.description ?? sb.Description ?? '',
       image_url: sb.image_url ?? sb.ImageURL ?? '',
-      selected: sb.selected !== false,
+      image_remote_url: sb.image_remote_url ?? sb.ImageRemoteURL ?? '',
+      selected: sb.selected === true,
     }));
   }
 
   function getSelectedShotNumbers() {
-    return storyboards.filter(sb => sb.selected !== false).map(sb => sb.shot_number);
+    return storyboards.filter(sb => sb.selected === true).map(sb => sb.shot_number);
   }
 
   function countSelectedStoryboards() {
-    return storyboards.filter(sb => sb.selected !== false).length;
+    return storyboards.filter(sb => sb.selected === true).length;
   }
 
   function updateStoryboardSelectionUI() {
@@ -698,19 +706,267 @@
       });
   }
 
-  function updateVideoTracksFromStoryboards() {
-    videoTracks = (storyboards || [])
-      .filter(sb => sb.image_url)
-      .map(sb => ({
-        shot_number: sb.shot_number,
-        thumbnail: sb.image_url,
-        duration: sb.duration || 3,
-        selected: false,
-      }));
-    renderVideoTracks();
+  function updateVideoTracksFromStoryboards() { /* deprecated: use timeline editor */ }
+
+  function clipsForShot(shotNumber) {
+    return (shotClips || []).filter(c => c.shot_number === shotNumber);
   }
 
-  function startGeneration(mode) {
+  function loadShotClips() {
+    if (!currentProject || !currentEpisode) { shotClips = []; return Promise.resolve([]); }
+    return apiFetch('/api/projects/' + currentProject.id + '/shot-clips?episode_id=' +
+      encodeURIComponent(currentEpisode.id))
+      .then(r => r.json())
+      .then(list => { shotClips = list || []; renderStoryboards(); return shotClips; })
+      .catch(() => { shotClips = []; });
+  }
+
+  function generateShotVideo(shotNumber) {
+    if (!currentProject || !currentEpisode) { toast('请先选择项目与集', 'warning'); return Promise.resolve(); }
+    const sb = storyboards.find(s => s.shot_number === shotNumber);
+    if (sb && sb.image_url && !sb.image_remote_url) {
+      toast('该分镜图片缺少 Agnes 远程链接，请先重新生成图片再生成视频', 'warning');
+      return Promise.resolve();
+    }
+    toast('正在生成第 ' + shotNumber + ' 镜视频…', 'info');
+    return apiFetch('/api/projects/' + currentProject.id + '/episodes/' + currentEpisode.id +
+      '/shots/' + shotNumber + '/generate-video', {
+      method: 'POST',
+      signal: AbortSignal.timeout(15 * 60 * 1000),
+    }).then(r => {
+      if (!r.ok) return r.json().then(j => { throw new Error(j.error || '生成失败'); });
+      return r.json();
+    }).then(res => {
+      const srcLabel = res.source === 'ai' ? 'AI 图生视频' : '图片动态化(兜底)';
+      toast('第 ' + shotNumber + ' 镜视频 v' + res.version + ' 已生成 · ' + srcLabel, res.source === 'ai' ? 'success' : 'info');
+      loadShotClips();
+    }).catch(err => { toast('生成失败: ' + (err.message || err), 'error'); });
+  }
+
+  async function batchGenerateShotVideos() {
+    const shots = getSelectedShotNumbers();
+    if (!shots.length) {
+      toast('请至少勾选一个分镜', 'warning');
+      return;
+    }
+    if (!currentProject || !currentEpisode) {
+      toast('请先选择项目与集', 'warning');
+      return;
+    }
+    toast('开始为 ' + shots.length + ' 个分镜生成视频', 'info');
+    for (const shotNum of shots) {
+      await generateShotVideo(shotNum);
+    }
+  }
+
+  function selectShotClip(clipId) {
+    apiFetch('/api/shot-clips/' + clipId + '/select', { method: 'PUT' })
+      .then(r => r.json())
+      .then(() => loadShotClips())
+      .catch(() => toast('选版失败', 'error'));
+  }
+
+  function deleteShotClip(clipId) {
+    if (!confirm('确定删除此视频版本？')) return;
+    apiFetch('/api/shot-clips/' + clipId, { method: 'DELETE' })
+      .then(r => {
+        if (!r.ok) return r.json().then(j => { throw new Error(j.error || '删除失败'); });
+        toast('已删除', 'info');
+        loadShotClips();
+      })
+      .catch(err => toast('删除失败: ' + (err.message || err), 'error'));
+  }
+
+  function loadTimeline() {
+    if (!currentProject || !currentEpisode) return Promise.resolve(null);
+    return apiFetch('/api/projects/' + currentProject.id + '/timeline?episode_id=' +
+      encodeURIComponent(currentEpisode.id))
+      .then(r => r.json())
+      .then(tl => { timeline = tl; renderTimelineEditor(); return tl; })
+      .catch(() => { timeline = null; renderTimelineEditor(); });
+  }
+
+  function saveTimeline() {
+    if (!currentProject || !currentEpisode || !timeline) return;
+    timeline.project_id = currentProject.id;
+    timeline.episode_id = currentEpisode.id;
+    apiFetch('/api/projects/' + currentProject.id + '/timeline', {
+      method: 'PUT',
+      body: JSON.stringify(timeline),
+    }).then(() => toast('时间线已保存', 'success'))
+      .catch(() => toast('保存失败', 'error'));
+  }
+
+  function exportTimeline() {
+    if (!currentProject || !currentEpisode) return;
+    if (timeline) saveTimeline();
+    toast('正在导出成片…', 'info');
+    apiFetch('/api/projects/' + currentProject.id + '/timeline/export', {
+      method: 'POST',
+      body: JSON.stringify({ episode_id: currentEpisode.id, timeline: timeline }),
+      signal: AbortSignal.timeout(10 * 60 * 1000),
+    }).then(r => r.json()).then(res => {
+      if (res.error) throw new Error(res.error);
+      showVideoResult(res.video_url);
+      toast('导出完成', 'success');
+    }).catch(err => toast('导出失败: ' + (err.message || err), 'error'));
+  }
+
+  function reloadTimelineFromSelected() {
+    loadTimeline().then(() => toast('已从选中分镜视频载入时间线', 'success'));
+  }
+
+  function getVideoTrack() {
+    if (!timeline) return null;
+    return (timeline.tracks || []).find(t => t.type === 'video') || null;
+  }
+
+  function getAudioTrack() {
+    if (!timeline) return null;
+    return (timeline.tracks || []).find(t => t.type === 'audio') || null;
+  }
+
+  function renderTimelineEditor() {
+    if (!els.timelineVideoClips) return;
+    const vTrack = getVideoTrack();
+    const aTrack = getAudioTrack();
+    const vClips = vTrack ? vTrack.clips || [] : [];
+    const aClips = aTrack ? aTrack.clips || [] : [];
+
+    if (vClips.length === 0) {
+      els.timelineVideoClips.innerHTML = '<div class="empty-state-sm"><p>暂无片段，点击「载入选中分镜」或先在分镜页生成视频</p></div>';
+    } else {
+      els.timelineVideoClips.innerHTML = vClips.map((clip, i) => `
+        <div class="timeline-clip-item" data-v-index="${i}">
+          <div class="timeline-clip-header">
+            <span class="timeline-clip-label">${escapeHtml(clip.label || ('片段 ' + (i + 1)))}</span>
+            <div class="timeline-clip-actions">
+              <button class="btn btn-sm btn-outline tl-preview-btn" data-url="${escapeHtml(clip.file_url || '')}">预览</button>
+              <button class="btn btn-sm btn-outline tl-up-btn" data-i="${i}">↑</button>
+              <button class="btn btn-sm btn-outline tl-down-btn" data-i="${i}">↓</button>
+              <button class="btn btn-sm btn-outline tl-del-btn" data-i="${i}">×</button>
+            </div>
+          </div>
+          <div class="timeline-clip-trim">
+            <div><label>入点 (s)</label><input type="number" step="0.1" min="0" class="tl-trim-start" data-i="${i}" value="${clip.start || 0}"></div>
+            <div><label>出点 (s)</label><input type="number" step="0.1" min="0" class="tl-trim-end" data-i="${i}" value="${clip.end || clip.duration || 3}"></div>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    if (aClips.length === 0) {
+      els.timelineAudioClips.innerHTML = '<div class="empty-state-sm"><p>可添加背景音乐或配音 URL</p></div>';
+    } else {
+      els.timelineAudioClips.innerHTML = aClips.map((clip, i) => `
+        <div class="timeline-clip-item">
+          <div class="timeline-clip-header">
+            <span class="timeline-clip-label">🎵 音频 ${i + 1}</span>
+            <button class="btn btn-sm btn-outline tl-audio-del" data-i="${i}">×</button>
+          </div>
+          <div style="font-size:11px;color:var(--text-secondary);word-break:break-all">${escapeHtml(clip.file_url || '')}</div>
+          <div class="timeline-clip-trim" style="margin-top:6px">
+            <div><label>起始 (s)</label><input type="number" step="0.1" min="0" class="tl-audio-start" data-i="${i}" value="${clip.start || 0}"></div>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    bindTimelineEvents();
+  }
+
+  function bindTimelineEvents() {
+    if (!els.timelineVideoClips) return;
+    els.timelineVideoClips.querySelectorAll('.tl-preview-btn').forEach(btn => {
+      btn.onclick = () => { if (els.timelinePreview) els.timelinePreview.src = btn.dataset.url; };
+    });
+    els.timelineVideoClips.querySelectorAll('.tl-trim-start').forEach(inp => {
+      inp.onchange = () => {
+        const track = getVideoTrack(); if (!track) return;
+        const i = parseInt(inp.dataset.i, 10);
+        track.clips[i].start = parseFloat(inp.value) || 0;
+      };
+    });
+    els.timelineVideoClips.querySelectorAll('.tl-trim-end').forEach(inp => {
+      inp.onchange = () => {
+        const track = getVideoTrack(); if (!track) return;
+        const i = parseInt(inp.dataset.i, 10);
+        track.clips[i].end = parseFloat(inp.value) || track.clips[i].duration;
+      };
+    });
+    els.timelineVideoClips.querySelectorAll('.tl-up-btn').forEach(btn => {
+      btn.onclick = () => moveTimelineClip('video', parseInt(btn.dataset.i, 10), -1);
+    });
+    els.timelineVideoClips.querySelectorAll('.tl-down-btn').forEach(btn => {
+      btn.onclick = () => moveTimelineClip('video', parseInt(btn.dataset.i, 10), 1);
+    });
+    els.timelineVideoClips.querySelectorAll('.tl-del-btn').forEach(btn => {
+      btn.onclick = () => {
+        const track = getVideoTrack(); if (!track) return;
+        track.clips.splice(parseInt(btn.dataset.i, 10), 1);
+        renderTimelineEditor();
+      };
+    });
+    if (els.timelineAudioClips) {
+      els.timelineAudioClips.querySelectorAll('.tl-audio-del').forEach(btn => {
+        btn.onclick = () => {
+          const track = getAudioTrack(); if (!track) return;
+          track.clips.splice(parseInt(btn.dataset.i, 10), 1);
+          renderTimelineEditor();
+        };
+      });
+      els.timelineAudioClips.querySelectorAll('.tl-audio-start').forEach(inp => {
+        inp.onchange = () => {
+          const track = getAudioTrack(); if (!track) return;
+          track.clips[parseInt(inp.dataset.i, 10)].start = parseFloat(inp.value) || 0;
+        };
+      });
+    }
+  }
+
+  function moveTimelineClip(type, index, delta) {
+    const track = type === 'video' ? getVideoTrack() : getAudioTrack();
+    if (!track || !track.clips) return;
+    const newIdx = index + delta;
+    if (newIdx < 0 || newIdx >= track.clips.length) return;
+    const tmp = track.clips[index];
+    track.clips[index] = track.clips[newIdx];
+    track.clips[newIdx] = tmp;
+    renderTimelineEditor();
+  }
+
+  function addTimelineAudio() {
+    const url = document.getElementById('timeline-audio-url')?.value?.trim();
+    if (!url) { toast('请输入音频 URL', 'warning'); return; }
+    if (!timeline) timeline = { tracks: [{ type: 'video', clips: [] }, { type: 'audio', clips: [] }] };
+    let aTrack = getAudioTrack();
+    if (!aTrack) {
+      aTrack = { type: 'audio', clips: [] };
+      timeline.tracks.push(aTrack);
+    }
+    aTrack.clips.push({ id: 'aud_' + Date.now(), file_url: url, start: 0, duration: 0 });
+    document.getElementById('timeline-audio-url').value = '';
+    renderTimelineEditor();
+  }
+
+  function renderShotClipVersions(shotNumber) {
+    const versions = clipsForShot(shotNumber);
+    if (!versions.length) {
+      return '<div class="shot-clip-versions"><div class="shot-clip-versions-title">视频版本：暂无</div></div>';
+    }
+    return `<div class="shot-clip-versions">
+      <div class="shot-clip-versions-title">视频版本 (${versions.length})</div>
+      <div class="shot-clip-version-list">${versions.map(v => `
+        <div class="shot-clip-version ${v.is_selected ? 'selected' : ''}" title="v${v.version}">
+          <button type="button" class="shot-clip-version-del" data-clip-id="${escapeHtml(v.id)}">×</button>
+          <video src="${escapeHtml(v.file_url)}" muted data-clip-id="${escapeHtml(v.id)}"></video>
+          <div class="shot-clip-version-meta">v${v.version}${v.is_selected ? ' ✓' : ''}${v.source === 'fallback' ? ' ·兜底' : ''}</div>
+        </div>
+      `).join('')}</div>
+    </div>`;
+  }
+
+  function startGeneration(mode, shotNumbers) {
     if (!currentProject) { toast('请先选择或创建项目', 'warning'); return; }
     const script = getEpisodeScript();
     if ((mode === 'full' || mode === 'parse') && !script) {
@@ -722,13 +978,16 @@
       toast('请先生成分镜', 'warning');
       return;
     }
-    const selectedShots = getSelectedShotNumbers();
+    const selectedShots = Array.isArray(shotNumbers) && shotNumbers.length
+      ? shotNumbers
+      : getSelectedShotNumbers();
     if (mode === 'images' && selectedShots.length === 0) {
       toast('请至少勾选一个分镜', 'warning');
       return;
     }
-    if (mode === 'video' && !storyboards.some(sb => sb.image_url)) {
-      toast('请先生成图片', 'warning');
+    if (mode === 'video') {
+      toast('请在「视频」页使用时间线手动导出成片', 'info');
+      switchWorkbenchPanel('video');
       return;
     }
 
@@ -748,9 +1007,19 @@
     });
     isGenerating = true;
     if (mode === 'images') {
-      toast('开始为 ' + selectedShots.length + ' 个分镜生成图片', 'info');
+      toast(selectedShots.length === 1
+        ? '正在为第 ' + selectedShots[0] + ' 镜生成图片'
+        : '开始为 ' + selectedShots.length + ' 个分镜生成图片', 'info');
     }
     setStatus('发送生成任务...');
+  }
+
+  function generateShotImage(shotNumber) {
+    if (isGenerating) {
+      toast('已有生成任务进行中，请稍候', 'warning');
+      return;
+    }
+    startGeneration('images', [shotNumber]);
   }
 
   // ======================== 资产 CRUD ========================
@@ -808,6 +1077,9 @@
         body: JSON.stringify({ enable: enabled ? 1 : 0 }),
       }).catch(() => toast('切换状态失败', 'error'));
     },
+    generateShotVideo: generateShotVideo,
+    selectShotClip: selectShotClip,
+    deleteShotClip: deleteShotClip,
   };
 
   // ======================== 画风列表 ========================
@@ -850,13 +1122,17 @@
     els.storyboardCount.textContent = storyboards.length + ' 个分镜';
 
     els.storyboardList.innerHTML = storyboards.map((sb, i) => `
-      <div class="storyboard-card ${sb.selected !== false ? 'is-selected' : ''}" data-index="${i}">
+      <div class="storyboard-card ${sb.selected === true ? 'is-selected' : ''}" data-index="${i}">
         <div class="storyboard-card-header">
           <label class="storyboard-card-select">
-            <input type="checkbox" class="sb-select-cb" data-index="${i}" ${sb.selected !== false ? 'checked' : ''}>
+            <input type="checkbox" class="sb-select-cb" data-index="${i}" ${sb.selected === true ? 'checked' : ''}>
             <span class="storyboard-card-title">🎬 第 ${sb.shot_number || i + 1} 镜 — ${escapeHtml(sb.scene || '未命名场景')}</span>
           </label>
-          <span style="font-size:12px;color:var(--text-secondary)">${sb.duration || 3}s</span>
+          <div class="storyboard-card-header-right">
+            <span class="storyboard-card-duration">${sb.duration || 3}s</span>
+            <button class="btn btn-sm btn-outline sb-gen-image-btn" type="button" data-shot="${sb.shot_number || i + 1}">🎨 生成图片</button>
+            <button class="btn btn-sm btn-primary sb-gen-video-btn" type="button" data-shot="${sb.shot_number || i + 1}">🎬 生成视频</button>
+          </div>
         </div>
         <div class="storyboard-card-body">
           <div class="storyboard-card-content">
@@ -884,41 +1160,44 @@
             }
           </div>
         </div>
+        ${renderShotClipVersions(sb.shot_number || i + 1)}
+        ${sb.image_url && !sb.image_remote_url ?
+          '<div class="shot-remote-url-hint">⚠️ 图片需重新生成才能走 Agnes 图生视频</div>' : ''}
       </div>
     `).join('');
+    els.storyboardList.querySelectorAll('.sb-gen-image-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        generateShotImage(parseInt(btn.dataset.shot, 10));
+      });
+    });
+    els.storyboardList.querySelectorAll('.sb-gen-video-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        generateShotVideo(parseInt(btn.dataset.shot, 10));
+      });
+    });
+    els.storyboardList.querySelectorAll('.shot-clip-version-del').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        deleteShotClip(btn.dataset.clipId);
+      });
+    });
+    els.storyboardList.querySelectorAll('.shot-clip-version video').forEach(v => {
+      v.addEventListener('click', (e) => {
+        e.stopPropagation();
+        selectShotClip(v.dataset.clipId);
+      });
+    });
     updateStoryboardSelectionUI();
   }
 
   // ======================== 视频轨道 ========================
-  function renderVideoTracks() {
-    if (videoTracks.length === 0) {
-      els.videoTracks.innerHTML = '<div class="empty-state-sm"><p>生成图片后此处显示视频轨道</p></div>';
-      return;
-    }
-    els.videoTracks.innerHTML = videoTracks.map((vt, i) => `
-      <div class="video-track-item ${vt.selected ? 'selected' : ''}" data-index="${i}">
-        <div class="video-track-thumb">
-          ${vt.thumbnail ? `<img src="${vt.thumbnail}">` : ''}
-        </div>
-        <div class="video-track-info">
-          <div>Shot ${vt.shot_number || i + 1}</div>
-          <div class="video-track-duration">${vt.duration || 3}s</div>
-        </div>
-      </div>
-    `).join('');
-
-    els.videoTracks.querySelectorAll('.video-track-item').forEach(item => {
-      item.addEventListener('click', () => {
-        els.videoTracks.querySelectorAll('.video-track-item').forEach(t => t.classList.remove('selected'));
-        item.classList.add('selected');
-      });
-    });
-  }
-
   function showVideoResult(url) {
-    els.videoPreview.style.display = 'block';
-    els.outputVideo.src = url;
-    els.downloadLink.href = url;
+    if (els.videoExportArea) els.videoExportArea.style.display = 'block';
+    if (els.outputVideo) els.outputVideo.src = url;
+    if (els.downloadLink) { els.downloadLink.href = url; els.downloadLink.download = 'toonflow_export.mp4'; }
   }
 
   // ======================== 任务列表 ========================
@@ -1181,6 +1460,8 @@
     loadChatMessages();
     if (currentProject) {
       loadProjectStoryboards(currentProject.id, currentEpisode?.id);
+      loadShotClips();
+      if (wbStage === 'video') loadTimeline();
     }
   });
 
@@ -1351,10 +1632,14 @@
     });
   }
 
-  // 生成视频
-  document.getElementById('btn-gen-video').addEventListener('click', () => {
-    startGeneration('video');
+  document.getElementById('btn-batch-gen-video')?.addEventListener('click', () => {
+    batchGenerateShotVideos();
   });
+
+  document.getElementById('btn-timeline-reload')?.addEventListener('click', reloadTimelineFromSelected);
+  document.getElementById('btn-timeline-save')?.addEventListener('click', saveTimeline);
+  document.getElementById('btn-timeline-export')?.addEventListener('click', exportTimeline);
+  document.getElementById('btn-timeline-add-audio')?.addEventListener('click', addTimelineAudio);
 
   // 设置加载与保存（浏览器 localStorage 优先，服务端为备份）
   const GENERAL_SETTINGS_KEY = 'toonflow_general_settings';

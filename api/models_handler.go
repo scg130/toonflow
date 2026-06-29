@@ -113,9 +113,10 @@ func (r *Router) modelTestImageHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"ok":       true,
-		"model":    resp.Model,
-		"data_url": resp.DataURL,
+		"ok":         true,
+		"model":      resp.Model,
+		"data_url":   resp.DataURL,
+		"remote_url": resp.RemoteURL,
 	})
 }
 

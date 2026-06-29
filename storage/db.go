@@ -158,6 +158,7 @@ func (db *DB) migrate() error {
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`)
+	db.Exec(`ALTER TABLE o_shot_clip ADD COLUMN source TEXT DEFAULT 'ai'`)
 	db.Exec(`CREATE TABLE IF NOT EXISTS o_chat_message (
 		id TEXT PRIMARY KEY,
 		project_id TEXT NOT NULL,
@@ -166,6 +167,29 @@ func (db *DB) migrate() error {
 		content TEXT NOT NULL,
 		action_json TEXT DEFAULT '',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`)
+	db.Exec(`CREATE TABLE IF NOT EXISTS o_shot_clip (
+		id TEXT PRIMARY KEY,
+		project_id TEXT NOT NULL,
+		episode_id TEXT NOT NULL DEFAULT '',
+		shot_number INTEGER NOT NULL,
+		version INTEGER NOT NULL DEFAULT 1,
+		prompt TEXT,
+		source_image_url TEXT,
+		file_url TEXT,
+		duration REAL DEFAULT 3,
+		status TEXT DEFAULT 'pending',
+		source TEXT DEFAULT 'ai',
+		is_selected INTEGER DEFAULT 0,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`)
+	db.Exec(`CREATE TABLE IF NOT EXISTS o_timeline (
+		id TEXT PRIMARY KEY,
+		project_id TEXT NOT NULL,
+		episode_id TEXT NOT NULL DEFAULT '',
+		data_json TEXT NOT NULL DEFAULT '{}',
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(project_id, episode_id)
 	)`)
 	// Now create the main tables
 	schema := `

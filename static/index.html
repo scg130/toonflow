@@ -125,6 +125,7 @@
                 <button class="btn btn-sm btn-outline" id="btn-select-all-shots" type="button">全选</button>
                 <button class="btn btn-sm btn-outline" id="btn-gen-storyboard">🤖 AI 生成分镜</button>
                 <button class="btn btn-sm btn-outline" id="btn-gen-images">🎨 批量生成图片</button>
+                <button class="btn btn-sm btn-outline" id="btn-batch-gen-video">🎬 批量生成视频</button>
               </div>
             </div>
             <div id="storyboard-container" class="storyboard-container">
@@ -149,13 +150,39 @@
 
           <!-- 视频 -->
           <div class="wb-panel" id="wb-panel-video">
-            <div class="panel-header"><h3>视频生成</h3></div>
-            <div class="video-gen-area">
-              <button class="btn btn-primary" id="btn-gen-video">🎬 生成视频</button>
-              <div id="video-tracks" class="video-tracks"></div>
-              <div id="video-preview-area" class="video-preview-area" style="display:none;">
-                <video id="output-video" controls></video>
-                <a id="download-link" class="btn btn-primary btn-block" download>⬇️ 下载成片</a>
+            <div class="main-toolbar">
+              <div class="toolbar-left">
+                <span class="toolbar-title">视频剪辑</span>
+                <span class="toolbar-count">手动合成 · 类剪映简易版</span>
+              </div>
+              <div class="toolbar-right">
+                <button class="btn btn-sm btn-outline" id="btn-timeline-reload">↻ 载入选中分镜</button>
+                <button class="btn btn-sm btn-outline" id="btn-timeline-save">💾 保存时间线</button>
+                <button class="btn btn-sm btn-primary" id="btn-timeline-export">🎬 导出成片</button>
+              </div>
+            </div>
+            <div class="video-editor">
+              <p class="video-editor-hint">步骤 1：在「分镜」页为每个镜头单独生成视频（可多次生成、选版、删除）。步骤 2：在此调整顺序、裁剪入出点、添加音频，最后手动导出。</p>
+              <div class="video-editor-layout">
+                <div class="timeline-panel">
+                  <h4>视频轨道</h4>
+                  <div id="timeline-video-clips" class="timeline-clips"></div>
+                  <h4 style="margin-top:16px">音频轨道</h4>
+                  <div class="timeline-audio-add">
+                    <input type="text" id="timeline-audio-url" class="form-input" placeholder="音频 URL（/output/... 或 http）">
+                    <button class="btn btn-sm btn-outline" id="btn-timeline-add-audio" type="button">＋ 添加音频</button>
+                  </div>
+                  <div id="timeline-audio-clips" class="timeline-clips"></div>
+                </div>
+                <div class="timeline-preview-panel">
+                  <h4>预览</h4>
+                  <video id="timeline-preview" controls class="timeline-preview-video"></video>
+                  <div id="video-export-area" class="video-preview-area" style="display:none;margin-top:12px;">
+                    <p style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;">导出成片</p>
+                    <video id="output-video" controls></video>
+                    <a id="download-link" class="btn btn-primary btn-block" download style="margin-top:8px;">⬇️ 下载成片</a>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -432,6 +459,6 @@
   </div>
 </div>
 
-<script src="/static/js/app.js"></script>
+<script src="/static/js/app.js?v=20260629b"></script>
 </body>
 </html>

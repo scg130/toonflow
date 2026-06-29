@@ -63,16 +63,20 @@ type ImageParams struct {
 
 // ImageResponse is the result of an image generation request.
 type ImageResponse struct {
-	DataURL string `json:"data_url"` // base64-encoded PNG data URL
-	Model   string `json:"model"`
+	DataURL   string `json:"data_url"`            // local path, data URL, or remote URL (legacy)
+	RemoteURL string `json:"remote_url,omitempty"` // Agnes CDN URL (typically valid ~24h)
+	Model     string `json:"model"`
 }
 
 // VideoParams holds parameters for video generation requests.
 type VideoParams struct {
-	Prompt   string  `json:"prompt"`
-	ImageURL string  `json:"image_url,omitempty"`
-	Model    string  `json:"model"`
-	Duration float32 `json:"duration,omitempty"`
+	Prompt    string  `json:"prompt"`
+	ImageURL  string  `json:"image_url,omitempty"`
+	Model     string  `json:"model"`
+	Duration  float32 `json:"duration,omitempty"`
+	Width     int     `json:"width,omitempty"`
+	Height    int     `json:"height,omitempty"`
+	Negative  string  `json:"negative_prompt,omitempty"`
 }
 
 // VideoResponse is the result of a video generation request.

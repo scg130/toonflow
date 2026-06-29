@@ -1,7 +1,9 @@
 package service
 
 import (
+	"database/sql"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -41,6 +43,55 @@ func NormalizeStoryboardItems(items []task.StoryboardItem) []task.StoryboardItem
 			it.Camera = "固定镜头"
 		}
 		out = append(out, it)
+	}
+	return out
+}
+
+// LoadStoryboardItems reads storyboard shots from DB for an episode.
+func LoadStoryboardItems(db *sql.DB, projectID, episodeID string) ([]task.StoryboardItem, error) {
+	if projectID == "" || episodeID == "" {
+		return nil, fmt.Errorf("project_id and episode_id required")
+	}
+	sbID := fmt.Sprintf("sb_%s_%s", projectID, episodeID)
+	var shotsJSON string
+	err := db.QueryRow(`SELECT shots FROM o_storyboard WHERE id = ?`, sbID).Scan(&shotsJSON)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var items []task.StoryboardItem
+	if err := json.Unmarshal([]byte(shotsJSON), &items); err != nil {
+		return nil, err
+	}
+	return NormalizeStoryboardItems(items), nil
+}
+
+// MergeStoryboardMedia keeps generated image fields when storyboard text is refreshed.
+func MergeStoryboardMedia(existing, incoming []task.StoryboardItem) []task.StoryboardItem {
+	if len(existing) == 0 || len(incoming) == 0 {
+		return incoming
+	}
+	byShot := make(map[int]task.StoryboardItem, len(existing))
+	for _, it := range existing {
+		if it.ShotNumber > 0 {
+			byShot[it.ShotNumber] = it
+		}
+	}
+	out := make([]task.StoryboardItem, len(incoming))
+	for i, it := range incoming {
+		out[i] = it
+		prev, ok := byShot[it.ShotNumber]
+		if !ok {
+			continue
+		}
+		if prev.ImageURL != "" {
+			out[i].ImageURL = prev.ImageURL
+		}
+		if prev.ImageRemoteURL != "" {
+			out[i].ImageRemoteURL = prev.ImageRemoteURL
+		}
 	}
 	return out
 }

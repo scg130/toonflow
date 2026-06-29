@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"toonflow/logger"
 )
 
 // AgnesAIVendor implements Vendor for Agnes-AI official API
@@ -208,14 +210,15 @@ func (v *AgnesAIVendor) ImageRequest(ctx interface{}, model string, params Image
 		Model:        model,
 		Prompt:       params.Prompt,
 		Size:         size,
-		ReturnBase64: true,
+		ReturnBase64: false,
 	}
-	body.ExtraBody.ResponseFormat = "b64_json"
+	body.ExtraBody.ResponseFormat = "url"
 
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal image request: %w", err)
 	}
+	logger.CtxInfo(c, "agnes image api request model=%s size=%s body=%s", model, size, string(payload))
 
 	req, err := http.NewRequestWithContext(c, "POST", v.baseURL+"/images/generations", bytes.NewReader(payload))
 	if err != nil {
@@ -232,42 +235,175 @@ func (v *AgnesAIVendor) ImageRequest(ctx interface{}, model string, params Image
 
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(resp.Body)
+		logger.CtxInfo(c, "agnes image api response status=%d body=%s", resp.StatusCode, sanitizeImageJSONForLog(raw))
 		return nil, fmt.Errorf("agnes image error %d: %s", resp.StatusCode, string(raw))
 	}
 
-	type imgResp struct {
-		Data []struct {
-			B64JSON string `json:"b64_json"`
-			URL     string `json:"url"`
-		} `json:"data"`
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read image resp: %w", err)
 	}
-	var apiResp imgResp
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+	logger.CtxInfo(c, "agnes image api response status=%d body=%s", resp.StatusCode, sanitizeImageJSONForLog(raw))
+
+	var respData map[string]interface{}
+	if err := json.Unmarshal(raw, &respData); err != nil {
 		return nil, fmt.Errorf("decode image resp: %w", err)
 	}
-	if len(apiResp.Data) == 0 {
-		return nil, fmt.Errorf("agnes image empty data")
+
+	imgURL, b64, err := extractImageURLOrB64(respData)
+	if err != nil {
+		return nil, err
+	}
+	if imgURL != "" {
+		logger.CtxInfo(c, "agnes image parsed remote_url=%s", imgURL)
+		return &ImageResponse{DataURL: imgURL, RemoteURL: imgURL, Model: model}, nil
+	}
+	if b64 == "" {
+		return nil, fmt.Errorf("agnes image empty data: %s", truncateForError(string(raw), 400))
 	}
 
-	item := apiResp.Data[0]
-	if item.URL != "" {
-		return &ImageResponse{DataURL: item.URL, Model: model}, nil
-	}
-	if item.B64JSON == "" {
-		return nil, fmt.Errorf("agnes image empty data")
-	}
+	logger.CtxInfo(c, "agnes image parsed base64 len=%d (no remote url)", len(b64))
 
 	// 校验base64合法性
-	_, err = base64.StdEncoding.DecodeString(item.B64JSON)
+	_, err = base64.StdEncoding.DecodeString(b64)
 	if err != nil {
 		return nil, fmt.Errorf("image base64 decode failed: %w", err)
 	}
 
-	dataURL := "data:image/png;base64," + item.B64JSON
+	dataURL := "data:image/png;base64," + b64
 	return &ImageResponse{
 		DataURL: dataURL,
 		Model:   model,
 	}, nil
+}
+
+// extractImageURLOrB64 parses Agnes image API responses (data[].url, output[], top-level url, etc.).
+func extractImageURLOrB64(data map[string]interface{}) (imgURL, b64 string, err error) {
+	if errVal, ok := data["error"]; ok && errVal != nil {
+		switch e := errVal.(type) {
+		case map[string]interface{}:
+			msg := stringField(e, "message")
+			if msg == "" {
+				msg = stringField(e, "code")
+			}
+			if msg == "" {
+				msg = fmt.Sprint(e)
+			}
+			return "", "", fmt.Errorf("文生图 API 错误: %s", msg)
+		case string:
+			if strings.TrimSpace(e) != "" {
+				return "", "", fmt.Errorf("文生图 API 错误: %s", e)
+			}
+		}
+	}
+
+	if items, ok := data["data"].([]interface{}); ok && len(items) > 0 {
+		switch first := items[0].(type) {
+		case map[string]interface{}:
+			for _, key := range []string{"url", "image_url", "image"} {
+				if u := stringField(first, key); isHTTPURL(u) {
+					return u, "", nil
+				}
+			}
+			if b := stringField(first, "b64_json"); b != "" {
+				return "", b, nil
+			}
+			if b := stringField(first, "base64"); b != "" {
+				return "", b, nil
+			}
+			// 兜底：data[0] 内任意 https 字符串（如 platform-outputs.agnes-ai.space/...）
+			for _, v := range first {
+				if s, ok := v.(string); ok && isHTTPURL(s) {
+					return s, "", nil
+				}
+			}
+		case string:
+			if isHTTPURL(first) {
+				return first, "", nil
+			}
+			return "", first, nil
+		}
+	}
+
+	if out, ok := data["output"].([]interface{}); ok && len(out) > 0 {
+		if x, ok := out[0].(string); ok {
+			if isHTTPURL(x) {
+				return x, "", nil
+			}
+			return "", x, nil
+		}
+	}
+
+	for _, key := range []string{"url", "image_url", "image"} {
+		if u := stringField(data, key); isHTTPURL(u) {
+			return u, "", nil
+		}
+	}
+
+	return "", "", nil
+}
+
+func isHTTPURL(s string) bool {
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
+
+func stringField(m map[string]interface{}, key string) string {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return ""
+	}
+	s, ok := v.(string)
+	if !ok {
+		return ""
+	}
+	return s
+}
+
+func truncateForError(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
+}
+
+// sanitizeImageJSONForLog keeps full JSON structure but omits huge base64 payloads.
+func sanitizeImageJSONForLog(raw []byte) string {
+	var data interface{}
+	if err := json.Unmarshal(raw, &data); err != nil {
+		if len(raw) > 4096 {
+			return string(raw[:4096]) + "...(truncated)"
+		}
+		return string(raw)
+	}
+	sanitizeB64Fields(data)
+	out, err := json.Marshal(data)
+	if err != nil {
+		return string(raw)
+	}
+	s := string(out)
+	if len(s) > 16384 {
+		return s[:16384] + "...(truncated)"
+	}
+	return s
+}
+
+func sanitizeB64Fields(v interface{}) {
+	switch x := v.(type) {
+	case map[string]interface{}:
+		for k, val := range x {
+			if k == "b64_json" || k == "base64" {
+				if s, ok := val.(string); ok && len(s) > 80 {
+					x[k] = fmt.Sprintf("<base64 len=%d>", len(s))
+					continue
+				}
+			}
+			sanitizeB64Fields(val)
+		}
+	case []interface{}:
+		for _, item := range x {
+			sanitizeB64Fields(item)
+		}
+	}
 }
 
 // VideoRequest creates an async video task and polls until completion.
@@ -301,20 +437,37 @@ func (v *AgnesAIVendor) VideoRequest(ctx interface{}, model string, params Video
 	}
 
 	type reqBody struct {
-		Model      string `json:"model"`
-		Prompt     string `json:"prompt"`
-		Height     int    `json:"height,omitempty"`
-		Width      int    `json:"width,omitempty"`
-		NumFrames  int    `json:"num_frames,omitempty"`
-		FrameRate  int    `json:"frame_rate,omitempty"`
+		Model           string `json:"model"`
+		Prompt          string `json:"prompt"`
+		Image           string `json:"image,omitempty"`
+		Height          int    `json:"height,omitempty"`
+		Width           int    `json:"width,omitempty"`
+		NumFrames       int    `json:"num_frames,omitempty"`
+		FrameRate       int    `json:"frame_rate,omitempty"`
+		NegativePrompt  string `json:"negative_prompt,omitempty"`
+		NumInferenceSteps int  `json:"num_inference_steps,omitempty"`
+	}
+	width := params.Width
+	height := params.Height
+	if width <= 0 {
+		width = 1152
+	}
+	if height <= 0 {
+		height = 768
 	}
 	body := reqBody{
 		Model:     model,
 		Prompt:    params.Prompt,
-		Height:    768,
-		Width:     1152,
+		Image:     params.ImageURL,
+		Height:    height,
+		Width:     width,
 		NumFrames: numFrames,
 		FrameRate: frameRate,
+		NegativePrompt: params.Negative,
+		NumInferenceSteps: 30,
+	}
+	if body.NegativePrompt == "" {
+		body.NegativePrompt = "static image, frozen, no motion, blurry, distorted"
 	}
 
 	payload, err := json.Marshal(body)

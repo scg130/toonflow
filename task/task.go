@@ -59,8 +59,9 @@ type StoryboardItem struct {
 	Description string  `json:"description"`
 	Camera      string  `json:"camera"`
 	Duration    float64 `json:"duration"`
-	Prompt      string  `json:"prompt"`
-	ImageURL    string  `json:"image_url,omitempty"`
+	Prompt         string  `json:"prompt"`
+	ImageURL       string  `json:"image_url,omitempty"`
+	ImageRemoteURL string  `json:"image_remote_url,omitempty"` // Agnes CDN, e.g. platform-outputs.agnes-ai.space (~24h)
 }
 
 // ImageArtifact represents a generated image for one shot.

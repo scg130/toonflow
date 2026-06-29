@@ -4,13 +4,17 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 	"toonflow/adapter"
+	"toonflow/logger"
 	"toonflow/skill"
 	"toonflow/task"
 	"toonflow/ws"
@@ -113,16 +117,22 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 			})
 
 			localPath := filepath.Join(taskDir, fmt.Sprintf("shot_%03d.png", item.ShotNumber))
-			if err := p.genImage(ctx, t, item, localPath); err != nil {
+			remoteURL, err := p.genImage(ctx, t, item, localPath)
+			if err != nil {
 				return fmt.Errorf("shot %d: %w", item.ShotNumber, err)
 			}
 
 			imageURL := fmt.Sprintf("/output/%s/shot_%03d.png", t.ID, item.ShotNumber)
 			t.Storyboard[idx].ImageURL = imageURL
+			if remoteURL != "" {
+				t.Storyboard[idx].ImageRemoteURL = remoteURL
+			}
+
+			absLocalPath, _ := filepath.Abs(localPath)
 
 			t.Images = append(t.Images, task.ImageArtifact{
 				ShotNumber: item.ShotNumber,
-				LocalPath:  localPath,
+				LocalPath:  absLocalPath,
 				DataURL:    imageURL,
 				Status:     "done",
 			})
@@ -181,9 +191,8 @@ func (p *Pipeline) loadImagesFromStoryboard(t *task.Task) error {
 		if item.ImageURL == "" {
 			continue
 		}
-		rel := strings.TrimPrefix(item.ImageURL, "/output/")
-		localPath := filepath.Join(p.cfg.OutputDir, rel)
-		if _, err := os.Stat(localPath); err != nil {
+		localPath, ok := resolveOutputFilePath(p.cfg.OutputDir, item.ImageURL)
+		if !ok {
 			continue
 		}
 		t.Images = append(t.Images, task.ImageArtifact{
@@ -196,6 +205,7 @@ func (p *Pipeline) loadImagesFromStoryboard(t *task.Task) error {
 	if len(t.Images) == 0 {
 		return fmt.Errorf("no generated images found in storyboard")
 	}
+	sortImagesByShot(t.Images)
 	return nil
 }
 
@@ -242,7 +252,7 @@ func (p *Pipeline) parseScript(ctx context.Context, t *task.Task) ([]task.Storyb
 	return parseStoryboardText(resp.Content, t.Resolution), nil
 }
 
-func (p *Pipeline) genImage(ctx context.Context, t *task.Task, item task.StoryboardItem, localPath string) error {
+func (p *Pipeline) genImage(ctx context.Context, t *task.Task, item task.StoryboardItem, localPath string) (string, error) {
 	prompt := item.Prompt
 	if prompt == "" {
 		prompt = item.Description
@@ -260,9 +270,24 @@ func (p *Pipeline) genImage(ctx context.Context, t *task.Task, item task.Storybo
 		AspectRatio: resToAspect(t.Resolution),
 	})
 	if err != nil {
-		return err
+		logger.CtxInfo(ctx, "genImage shot=%d failed: %v", item.ShotNumber, err)
+		return "", err
 	}
-	return saveDataURL(localPath, resp.DataURL)
+	logger.CtxInfo(ctx, "genImage shot=%d adapter resp model=%s data_url=%q remote_url=%q",
+		item.ShotNumber, resp.Model, summarizeDataURL(resp.DataURL), resp.RemoteURL)
+	if err := saveGeneratedImage(localPath, resp); err != nil {
+		return "", err
+	}
+	remoteURL := resp.RemoteURL
+	if remoteURL == "" && strings.HasPrefix(resp.DataURL, "http") {
+		remoteURL = resp.DataURL
+	}
+	if remoteURL != "" {
+		logger.CtxInfo(ctx, "genImage shot=%d saved local=%s image_remote_url=%s", item.ShotNumber, localPath, remoteURL)
+	} else {
+		logger.CtxInfo(ctx, "genImage shot=%d saved local=%s (no image_remote_url, base64 only)", item.ShotNumber, localPath)
+	}
+	return remoteURL, nil
 }
 
 func parseStoryboardText(text, resolution string) []task.StoryboardItem {
@@ -333,19 +358,31 @@ func mergeVideo(t *task.Task, outputPath string) error {
 	defer os.Remove(listPath)
 	defer f.Close()
 
+	sortImagesByShot(t.Images)
+
 	for _, img := range t.Images {
 		count := int(t.FrameDuration * float64(t.FPS))
 		if count < 1 {
 			count = 1
 		}
+		filePath := ffmpegConcatPath(img.LocalPath)
 		for i := 0; i < count; i++ {
-			fmt.Fprintf(f, "file '%s'\n", img.LocalPath)
+			fmt.Fprintf(f, "file '%s'\n", filePath)
 		}
 	}
 
+	absOutput, err := filepath.Abs(outputPath)
+	if err != nil {
+		absOutput = outputPath
+	}
+	absList, err := filepath.Abs(listPath)
+	if err != nil {
+		absList = listPath
+	}
+
 	cmd := exec.Command("ffmpeg", "-y", "-f", "concat", "-safe", "0",
-		"-i", listPath, "-c:v", "libx264", "-pix_fmt", "yuv420p",
-		"-r", strconv.Itoa(t.FPS), outputPath)
+		"-i", absList, "-c:v", "libx264", "-pix_fmt", "yuv420p",
+		"-r", strconv.Itoa(t.FPS), absOutput)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("ffmpeg: %s", string(out))
@@ -362,6 +399,41 @@ func resToAspect(res string) string {
 	default:
 		return "16:9"
 	}
+}
+
+func saveGeneratedImage(path string, resp *adapter.ImageResponse) error {
+	if resp == nil {
+		return fmt.Errorf("empty image response")
+	}
+	if strings.HasPrefix(resp.DataURL, "http://") || strings.HasPrefix(resp.DataURL, "https://") {
+		return downloadImageURL(path, resp.DataURL)
+	}
+	return saveDataURL(path, resp.DataURL)
+}
+
+func downloadImageURL(path, url string) error {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return fmt.Errorf("download image status %d", res.StatusCode)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(f, res.Body)
+	return err
 }
 
 func saveDataURL(path, dataURL string) error {
@@ -398,4 +470,45 @@ func storyboardIndicesToGenerate(items []task.StoryboardItem, selected map[int]b
 		}
 	}
 	return indices
+}
+
+func resolveOutputFilePath(outputDir, imageURL string) (string, bool) {
+	rel := strings.TrimPrefix(imageURL, "/output/")
+	rel = strings.TrimPrefix(rel, "/")
+	if rel == "" || strings.Contains(rel, "..") {
+		return "", false
+	}
+	localPath := filepath.Join(outputDir, rel)
+	absPath, err := filepath.Abs(localPath)
+	if err != nil {
+		absPath = localPath
+	}
+	if _, err := os.Stat(absPath); err != nil {
+		return "", false
+	}
+	return absPath, true
+}
+
+func ffmpegConcatPath(path string) string {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		absPath = path
+	}
+	return strings.ReplaceAll(absPath, "'", `'\''`)
+}
+
+func sortImagesByShot(images []task.ImageArtifact) {
+	sort.Slice(images, func(i, j int) bool {
+		return images[i].ShotNumber < images[j].ShotNumber
+	})
+}
+
+func summarizeDataURL(s string) string {
+	if strings.HasPrefix(s, "data:") {
+		return fmt.Sprintf("<data-url len=%d>", len(s))
+	}
+	if len(s) > 200 {
+		return s[:200] + "..."
+	}
+	return s
 }

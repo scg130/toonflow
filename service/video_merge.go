@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"toonflow/task"
 )
 
@@ -28,19 +30,23 @@ func MergeVideo(images []task.ImageArtifact, frameDuration float64, resolution s
 		if count < 1 {
 			count = 1
 		}
+		filePath := strings.ReplaceAll(absPath(img.LocalPath), "'", `'\''`)
 		for i := 0; i < count; i++ {
-			fmt.Fprintf(f, "file '%s'\n", img.LocalPath)
+			fmt.Fprintf(f, "file '%s'\n", filePath)
 		}
 	}
+
+	absOut, _ := filepath.Abs(outputPath)
+	absList, _ := filepath.Abs(listPath)
 
 	cmd := exec.Command(
 		"ffmpeg", "-y",
 		"-f", "concat", "-safe", "0",
-		"-i", listPath,
+		"-i", absList,
 		"-c:v", "libx264",
 		"-pix_fmt", "yuv420p",
 		"-r", strconv.Itoa(fps),
-		outputPath,
+		absOut,
 	)
 
 	var stderr bytes.Buffer
@@ -57,4 +63,12 @@ func CleanTemp(dir string) {
 	if dir != "" {
 		os.RemoveAll(dir)
 	}
+}
+
+func absPath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	return abs
 }

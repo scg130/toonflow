@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,13 +42,17 @@ func GenerateImages(ctx context.Context, items []task.StoryboardItem, style, res
 		}
 
 		localPath := filepath.Join(outputDir, fmt.Sprintf("shot_%03d.png", item.ShotNumber))
-		if err := saveDataURL(localPath, resp.DataURL); err != nil {
+		if strings.HasPrefix(resp.DataURL, "http://") || strings.HasPrefix(resp.DataURL, "https://") {
+			if err := downloadImageURLLocal(localPath, resp.DataURL); err != nil {
+				return artifacts, fmt.Errorf("shot %d save: %w", item.ShotNumber, err)
+			}
+		} else if err := saveDataURL(localPath, resp.DataURL); err != nil {
 			return artifacts, fmt.Errorf("shot %d save: %w", item.ShotNumber, err)
 		}
 
 		artifacts[i] = task.ImageArtifact{
 			ShotNumber: item.ShotNumber,
-			DataURL:    resp.DataURL,
+			DataURL:    resp.RemoteURL,
 			LocalPath:  localPath,
 			Status:     "done",
 		}
@@ -64,6 +70,27 @@ func resToAspect(res string) string {
 	default:
 		return "16:9"
 	}
+}
+
+func downloadImageURLLocal(path, url string) error {
+	res, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return fmt.Errorf("download status %d", res.StatusCode)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(f, res.Body)
+	return err
 }
 
 func saveDataURL(path, dataURL string) error {
