@@ -8,7 +8,6 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-
 	"toonflow/adapter"
 	"toonflow/api"
 	"toonflow/engine"
@@ -16,6 +15,7 @@ import (
 	"toonflow/storage"
 	"toonflow/task"
 	"toonflow/ws"
+	"toonflow/config"
 )
 
 func main() {
@@ -23,7 +23,7 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	log.Println("ToonFlow starting...")
 
-	cfg := Load()
+	cfg := config.Load()
 
 	// Initialize database
 	db, err := storage.Init(cfg.DBPath)
