@@ -37,7 +37,7 @@
   let timeline = null;       // 时间线编辑状态
   let assets = [];           // 当前项目的资产列表
   let isGenerating = false;
-  let clipVersionModalShot = null;
+  let clipVersionDropdownShot = null;
 
   // ======================== DOM 引用 ========================
   const els = {
@@ -81,9 +81,6 @@
     mediaPreviewVideo: document.getElementById('media-preview-video'),
     mediaPreviewPanel: document.getElementById('media-preview-panel'),
     mediaPreviewResizeGrip: document.getElementById('media-preview-resize-grip'),
-    modalClipVersions: document.getElementById('modal-clip-versions'),
-    clipVersionsTitle: document.getElementById('clip-versions-title'),
-    clipVersionsList: document.getElementById('clip-versions-list'),
     loginOverlay: document.getElementById('login-overlay'),
     userBadge: document.getElementById('user-badge'),
     btnLogout: document.getElementById('btn-logout'),
@@ -819,7 +816,6 @@
     return apiFetch('/api/shot-clips/' + clipId + '/select', { method: 'PUT' })
       .then(r => r.json())
       .then(() => loadShotClips())
-      .then(() => refreshClipVersionModalIfOpen())
       .catch(() => toast('选版失败', 'error'));
   }
 
@@ -831,64 +827,57 @@
         toast('已删除', 'info');
         return loadShotClips();
       })
-      .then(() => refreshClipVersionModalIfOpen())
+      .then(() => {
+        if (clipVersionDropdownShot != null && !clipsForShot(clipVersionDropdownShot).length) {
+          clipVersionDropdownShot = null;
+        }
+      })
       .catch(err => toast('删除失败: ' + (err.message || err), 'error'));
   }
 
-  function refreshClipVersionModalIfOpen() {
-    if (clipVersionModalShot == null) return;
-    renderClipVersionModalContent(clipVersionModalShot);
+  function closeClipVersionDropdown() {
+    clipVersionDropdownShot = null;
+    syncClipVersionDropdownUI();
   }
 
-  function openClipVersionModal(shotNum) {
-    clipVersionModalShot = shotNum;
-    if (els.modalClipVersions) els.modalClipVersions.style.display = 'flex';
-    renderClipVersionModalContent(shotNum);
+  function toggleClipVersionDropdown(shotNum) {
+    clipVersionDropdownShot = clipVersionDropdownShot === shotNum ? null : shotNum;
+    syncClipVersionDropdownUI();
   }
 
-  function closeClipVersionModal() {
-    clipVersionModalShot = null;
-    if (els.modalClipVersions) els.modalClipVersions.style.display = 'none';
+  function syncClipVersionDropdownUI() {
+    if (!els.storyboardList) return;
+    els.storyboardList.querySelectorAll('.sb-version-dropdown').forEach(el => {
+      const shot = parseInt(el.dataset.shot, 10);
+      const open = shot === clipVersionDropdownShot;
+      el.classList.toggle('is-open', open);
+      const btn = el.querySelector('.sb-version-toggle');
+      if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    els.storyboardList.querySelectorAll('.storyboard-card').forEach(card => {
+      card.classList.toggle('has-version-menu-open', !!card.querySelector('.sb-version-dropdown.is-open'));
+    });
   }
 
-  function renderClipVersionModalContent(shotNum) {
-    if (!els.clipVersionsList || !els.clipVersionsTitle) return;
-    const versions = clipsForShot(shotNum).slice().sort((a, b) => (a.version || 0) - (b.version || 0));
-    els.clipVersionsTitle.textContent = '第 ' + shotNum + ' 镜 — 视频版本';
-    if (!versions.length) {
-      els.clipVersionsList.innerHTML = '<div class="clip-versions-empty">暂无视频版本</div>';
-      return;
-    }
-    els.clipVersionsList.innerHTML = versions.map(v => {
+  function renderStoryboardClipVersionMenu(shotNum, sortedVersions, versionBtnLabel) {
+    const isOpen = clipVersionDropdownShot === shotNum;
+    const items = sortedVersions.map(v => {
       const title = '第 ' + shotNum + ' 镜 — 视频 v' + v.version;
+      const label = 'v' + v.version + (v.is_selected ? ' ✓' : '') + (v.source === 'fallback' ? ' ·兜底' : '');
       return `<div class="clip-version-row">
-        <button type="button" class="clip-version-chip ${v.is_selected ? 'selected' : ''}" data-clip-id="${escapeHtml(v.id)}" title="切换到此版本">
-          v${v.version}${v.is_selected ? ' ✓ 当前' : ''}${v.source === 'fallback' ? ' ·兜底' : ''}
-        </button>
-        <div class="clip-version-row-actions">
-          ${v.file_url
-            ? `<button type="button" class="btn btn-sm btn-outline clip-version-preview-btn" data-url="${escapeHtml(v.file_url)}" data-title="${escapeHtml(title)}">预览</button>`
-            : ''}
-          <button type="button" class="btn btn-sm btn-outline clip-version-del-btn" data-clip-id="${escapeHtml(v.id)}">删除</button>
-        </div>
+        <button type="button" class="clip-version-chip ${v.is_selected ? 'selected' : ''}" data-clip-id="${escapeHtml(v.id)}" title="切换到此版本">${label}</button>
+        ${v.file_url
+          ? `<button type="button" class="btn btn-sm btn-outline clip-version-preview-btn" data-url="${escapeHtml(v.file_url)}" data-title="${escapeHtml(title)}">预览</button>`
+          : ''}
+        <button type="button" class="btn btn-sm btn-outline clip-version-del-btn" data-clip-id="${escapeHtml(v.id)}">删除</button>
       </div>`;
     }).join('');
-
-    els.clipVersionsList.querySelectorAll('.clip-version-chip').forEach(btn => {
-      btn.addEventListener('click', () => selectShotClip(btn.dataset.clipId));
-    });
-    els.clipVersionsList.querySelectorAll('.clip-version-del-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        deleteShotClip(btn.dataset.clipId);
-      });
-    });
-    els.clipVersionsList.querySelectorAll('.clip-version-preview-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        openMediaPreview('video', btn.dataset.url, btn.dataset.title);
-      });
-    });
+    return `<div class="sb-version-dropdown${isOpen ? ' is-open' : ''}" data-shot="${shotNum}">
+      <button type="button" class="btn btn-sm btn-outline sb-version-toggle sb-col-btn" data-shot="${shotNum}" aria-expanded="${isOpen}"${sortedVersions.length ? '' : ' disabled title="暂无视频版本"'}>
+        ${versionBtnLabel}<span class="sb-version-caret" aria-hidden="true">▾</span>
+      </button>
+      <div class="sb-version-menu" role="menu">${items || '<div class="clip-versions-empty">暂无版本</div>'}</div>
+    </div>`;
   }
 
   function loadTimeline() {
@@ -1153,7 +1142,7 @@
 
     return `<div class="sb-media-col sb-media-col-video">
       <div class="sb-media-col-version-bar">
-        <button type="button" class="btn btn-sm btn-outline sb-version-open-btn sb-col-btn" data-shot="${shotNum}"${sortedVersions.length ? '' : ' disabled title="暂无视频版本"'}>${versionBtnLabel}</button>
+        ${renderStoryboardClipVersionMenu(shotNum, sortedVersions, versionBtnLabel)}
       </div>
       <div class="sb-media-col-toolbar">
         ${previewBtn}
@@ -1369,13 +1358,10 @@
         generateShotVideo(parseInt(btn.dataset.shot, 10));
       });
     });
-    els.storyboardList.querySelectorAll('.sb-version-open-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (btn.disabled) return;
-        openClipVersionModal(parseInt(btn.dataset.shot, 10));
-      });
-    });
+    if (clipVersionDropdownShot != null && !clipsForShot(clipVersionDropdownShot).length) {
+      clipVersionDropdownShot = null;
+    }
+    syncClipVersionDropdownUI();
     updateStoryboardSelectionUI();
   }
 
@@ -1941,22 +1927,56 @@
       updateStoryboardSelectionUI();
     });
     els.storyboardList.addEventListener('click', (e) => {
+      const toggle = e.target.closest('.sb-version-toggle');
+      if (toggle) {
+        e.stopPropagation();
+        if (toggle.disabled) return;
+        toggleClipVersionDropdown(parseInt(toggle.dataset.shot, 10));
+        return;
+      }
+      const delBtn = e.target.closest('.clip-version-del-btn');
+      if (delBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        deleteShotClip(delBtn.dataset.clipId);
+        return;
+      }
+      const chip = e.target.closest('.clip-version-chip');
+      if (chip) {
+        e.preventDefault();
+        e.stopPropagation();
+        selectShotClip(chip.dataset.clipId);
+        return;
+      }
+      const versionPreview = e.target.closest('.clip-version-preview-btn');
+      if (versionPreview) {
+        e.preventDefault();
+        e.stopPropagation();
+        openMediaPreview('video', versionPreview.dataset.url, versionPreview.dataset.title);
+        return;
+      }
       const btn = e.target.closest('.sb-media-preview-btn');
       if (!btn) return;
       e.stopPropagation();
       openMediaPreview(btn.dataset.previewType, btn.dataset.url, btn.dataset.title);
     });
+    els.storyboardList.addEventListener('mousedown', (e) => {
+      if (e.target.closest('.sb-version-menu') || e.target.closest('.sb-version-toggle')) {
+        e.stopPropagation();
+      }
+    });
   }
+
+  document.addEventListener('click', (e) => {
+    if (clipVersionDropdownShot == null) return;
+    if (e.target.closest('.sb-version-dropdown')) return;
+    closeClipVersionDropdown();
+  }, false);
 
   document.getElementById('btn-close-media-preview')?.addEventListener('click', closeMediaPreview);
   els.modalMediaPreview?.addEventListener('click', (e) => {
     if (e.target === els.modalMediaPreview) closeMediaPreview();
   });
-  document.getElementById('btn-close-clip-versions')?.addEventListener('click', closeClipVersionModal);
-  els.modalClipVersions?.addEventListener('click', (e) => {
-    if (e.target === els.modalClipVersions) closeClipVersionModal();
-  });
-  els.modalClipVersions?.querySelector('.modal')?.addEventListener('click', (e) => e.stopPropagation());
   els.mediaPreviewPanel?.addEventListener('click', (e) => e.stopPropagation());
 
   (function initMediaPreviewResize() {
