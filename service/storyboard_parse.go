@@ -92,6 +92,9 @@ func MergeStoryboardMedia(existing, incoming []task.StoryboardItem) []task.Story
 		if prev.ImageRemoteURL != "" {
 			out[i].ImageRemoteURL = prev.ImageRemoteURL
 		}
+		if len(prev.AssetIDs) > 0 && len(out[i].AssetIDs) == 0 {
+			out[i].AssetIDs = prev.AssetIDs
+		}
 	}
 	return out
 }

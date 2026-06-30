@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"time"
 	"toonflow/adapter"
 	"toonflow/logger"
+	"toonflow/service"
 	"toonflow/skill"
 	"toonflow/task"
 	"toonflow/ws"
@@ -26,6 +28,7 @@ type Pipeline struct {
 	skillMgr    *skill.Manager
 	cfg         *Config
 	broadcaster *ws.ConnManager
+	db          *sql.DB
 	textModel   string
 	imageModel  string
 }
@@ -37,12 +40,13 @@ type Config struct {
 }
 
 // New creates a new Pipeline.
-func New(v adapter.Vendor, skillMgr *skill.Manager, cfg *Config, bc *ws.ConnManager) *Pipeline {
+func New(v adapter.Vendor, skillMgr *skill.Manager, cfg *Config, bc *ws.ConnManager, db *sql.DB) *Pipeline {
 	return &Pipeline{
 		adapter:     v,
 		skillMgr:    skillMgr,
 		cfg:         cfg,
 		broadcaster: bc,
+		db:          db,
 		textModel:   adapter.DefaultTextModel,
 		imageModel:  adapter.DefaultImageModel,
 	}
@@ -90,6 +94,18 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 		}
 	}
 
+	// Step 1.5: Ensure assets exist before image generation (full mode auto-extracts)
+	if mode == "full" {
+		if err := p.ensureProjectAssets(ctx, t); err != nil {
+			return err
+		}
+	}
+	if mode == "full" || mode == "images" {
+		if err := p.requireProjectAssets(t); err != nil {
+			return err
+		}
+	}
+
 	// Step 2: Generate images (full or images mode)
 	if mode == "full" || mode == "images" {
 		if len(t.Storyboard) == 0 {
@@ -129,6 +145,12 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 			if remoteURL != "" {
 				t.Storyboard[idx].ImageRemoteURL = remoteURL
 			}
+			if p.db != nil && t.ProjectID != "" {
+				_, _, assetIDs := service.ShotImageParams(p.db, t.ProjectID, item)
+				if len(assetIDs) > 0 {
+					t.Storyboard[idx].AssetIDs = assetIDs
+				}
+			}
 
 			absLocalPath, _ := filepath.Abs(localPath)
 
@@ -159,6 +181,9 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 
 	// Step 3: Merge video (full or video mode)
 	if mode == "full" || mode == "video" {
+		if err := p.requireStoryboardImages(t); err != nil {
+			return err
+		}
 		if len(t.Images) == 0 {
 			if err := p.loadImagesFromStoryboard(t); err != nil {
 				return err
@@ -259,22 +284,26 @@ func (p *Pipeline) parseScript(ctx context.Context, t *task.Task) ([]task.Storyb
 }
 
 func (p *Pipeline) genImage(ctx context.Context, t *task.Task, item task.StoryboardItem, localPath string) (string, error) {
-	prompt := item.Prompt
-	if prompt == "" {
-		prompt = item.Description
+	var refURL, assetPrompt string
+	if p.db != nil && t.ProjectID != "" {
+		refURL, assetPrompt, _ = service.ShotImageParams(p.db, t.ProjectID, item)
 	}
-	if t.Style != "" {
-		prompt += ", " + t.Style + " art style"
-	}
-	if item.Camera != "" {
-		prompt += ", camera: " + item.Camera
-	}
+	prompt := service.BuildShotImagePrompt(item, t.Style, service.ResolutionToVideoRatio(t.Resolution), assetPrompt)
 
 	resp, err := p.adapter.ImageRequest(ctx, p.imageModel, adapter.ImageParams{
-		Prompt:      prompt,
-		Model:       p.imageModel,
-		AspectRatio: resToAspect(t.Resolution),
+		Prompt:            prompt,
+		Model:             p.imageModel,
+		AspectRatio:       resToAspect(t.Resolution),
+		ReferenceImageURL: refURL,
 	})
+	if err != nil && refURL != "" {
+		logger.CtxTrace(ctx, "genImage shot=%d reference image failed, fallback to text: %v", item.ShotNumber, err)
+		resp, err = p.adapter.ImageRequest(ctx, p.imageModel, adapter.ImageParams{
+			Prompt:      prompt,
+			Model:       p.imageModel,
+			AspectRatio: resToAspect(t.Resolution),
+		})
+	}
 	if err != nil {
 		logger.CtxError(ctx, err, "genImage shot=%d failed", item.ShotNumber)
 		return "", err
@@ -517,4 +546,56 @@ func summarizeDataURL(s string) string {
 		return s[:200] + "..."
 	}
 	return s
+}
+
+func (p *Pipeline) requireProjectAssets(t *task.Task) error {
+	if p.db == nil || t.ProjectID == "" {
+		return fmt.Errorf("请先从剧本提取资产后再生成图片")
+	}
+	return service.RequireProjectAssets(p.db, t.ProjectID)
+}
+
+func (p *Pipeline) ensureProjectAssets(ctx context.Context, t *task.Task) error {
+	if p.db == nil || t.ProjectID == "" {
+		return fmt.Errorf("请先从剧本提取资产后再生成图片")
+	}
+	n, err := service.CountProjectAssets(p.db, t.ProjectID)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	if t.EpisodeID == "" {
+		return fmt.Errorf("请先从剧本提取资产后再生成图片")
+	}
+
+	t.SetState(task.StateStoryboard, "extract_assets")
+	p.broadcast(t, "提取资产中...", 32, nil)
+	_, err = service.ExtractAssetsFromEpisode(ctx, p.db, p.adapter, t.UserID, t.ProjectID, t.EpisodeID)
+	if err != nil {
+		return fmt.Errorf("提取资产: %w", err)
+	}
+	n, err = service.CountProjectAssets(p.db, t.ProjectID)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("请先从剧本提取资产后再生成图片")
+	}
+	p.broadcast(t, "资产提取完成", 35, nil)
+	return nil
+}
+
+func (p *Pipeline) requireStoryboardImages(t *task.Task) error {
+	if len(t.Storyboard) == 0 {
+		return fmt.Errorf("请先生成分镜图片")
+	}
+	for _, item := range t.Storyboard {
+		if item.ImageURL != "" {
+			continue
+		}
+		return fmt.Errorf("请先生成第 %d 镜图片后再生成视频", item.ShotNumber)
+	}
+	return nil
 }

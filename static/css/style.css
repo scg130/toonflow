@@ -297,7 +297,29 @@ body {
 .panel-toolbar .btn { flex: 1; min-width: 60px; justify-content: center; }
 
 /* Asset List */
-.asset-list { display: flex; flex-direction: column; gap: 6px; }
+.asset-list { display: flex; flex-direction: column; gap: 6px; flex: 1; min-height: 120px; overflow-y: auto; padding: 4px 0; }
+.asset-count-label { margin-left: auto; font-size: 12px; color: var(--text-secondary); align-self: center; white-space: nowrap; }
+.asset-filter-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.asset-filter-btn {
+  padding: 4px 12px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-dark);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.asset-filter-btn:hover { border-color: var(--accent-blue); color: var(--text-primary); }
+.asset-filter-btn.active {
+  border-color: var(--btn-primary);
+  background: rgba(99, 102, 241, 0.15);
+  color: var(--text-primary);
+}
 
 .asset-item {
   display: flex;
@@ -323,6 +345,12 @@ body {
   justify-content: center;
   font-size: 16px;
   flex-shrink: 0;
+  overflow: hidden;
+}
+.asset-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .asset-info { flex: 1; min-width: 0; }
@@ -1419,6 +1447,16 @@ body {
   align-self: flex-start;
   background: var(--bg-dark);
   border: 1px solid var(--border);
+}
+
+.wb-chat-msg.assistant.streaming .chat-stream-cursor {
+  display: inline;
+  color: var(--accent-blue, #6366f1);
+  animation: chat-cursor-blink 0.9s step-end infinite;
+}
+
+@keyframes chat-cursor-blink {
+  50% { opacity: 0; }
 }
 
 .wb-chat-input-area {

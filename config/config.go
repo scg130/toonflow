@@ -10,8 +10,8 @@ import (
 // Config holds the application-wide configuration.
 type Config struct {
 	// Server
-	Port     int
-	DBPath   string
+	Port      int
+	DBPath    string
 	OutputDir string
 
 	// Concurrency
@@ -35,7 +35,7 @@ type Config struct {
 func DefaultConfig() *Config {
 	home, _ := os.UserHomeDir()
 	return &Config{
-		Port:               8080,
+		Port:               9090,
 		DBPath:             filepath.Join(home, ".toonflow", "toonflow.db"),
 		OutputDir:          filepath.Join(".", "output"),
 		MaxConcurrentTasks: 5,

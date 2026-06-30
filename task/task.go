@@ -65,6 +65,7 @@ type StoryboardItem struct {
 	Camera      string  `json:"camera"`
 	Duration    float64 `json:"duration"`
 	Prompt         string  `json:"prompt"`
+	AssetIDs       []int   `json:"asset_ids,omitempty"`
 	ImageURL       string  `json:"image_url,omitempty"`
 	ImageRemoteURL string  `json:"image_remote_url,omitempty"` // Agnes CDN, e.g. platform-outputs.agnes-ai.space (~24h)
 }

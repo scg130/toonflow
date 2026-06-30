@@ -24,13 +24,7 @@ func GenerateImages(ctx context.Context, items []task.StoryboardItem, style, res
 		default:
 		}
 
-		prompt := item.Description
-		if style != "" {
-			prompt += ", " + style + " art style"
-		}
-		if item.Camera != "" {
-			prompt += ", camera: " + item.Camera
-		}
+		prompt := BuildShotImagePrompt(item, style, ResolutionToVideoRatio(resolution), "")
 
 		resp, err := v.ImageRequest(ctx, adapter.DefaultImageModel, adapter.ImageParams{
 			Prompt:      prompt,

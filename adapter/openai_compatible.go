@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -70,17 +71,22 @@ func (v *OpenAIVendor) TextRequest(ctx interface{}, model string, params TextPar
 	}
 
 	type request struct {
-		Model    string         `json:"model"`
-		Messages []TextMessage  `json:"messages"`
-		Temperature *float32    `json:"temperature,omitempty"`
-		MaxTokens     int       `json:"max_tokens,omitempty"`
+		Model       string        `json:"model"`
+		Messages    []TextMessage `json:"messages"`
+		Temperature *float32      `json:"temperature,omitempty"`
+		MaxTokens   int           `json:"max_tokens,omitempty"`
+		Stream      bool          `json:"stream,omitempty"`
 	}
 
 	reqBody := request{
 		Model:     model,
 		Messages:  params.Messages,
-		Temperature: func() *float32 { t := params.Temperature; return &t }(),
 		MaxTokens: params.MaxTokens,
+		Stream:    params.OnDelta != nil,
+	}
+	if params.Temperature != 0 {
+		t := params.Temperature
+		reqBody.Temperature = &t
 	}
 
 	payload, err := json.Marshal(reqBody)
@@ -94,6 +100,9 @@ func (v *OpenAIVendor) TextRequest(ctx interface{}, model string, params TextPar
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+v.apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
+	if reqBody.Stream {
+		httpReq.Header.Set("Accept", "text/event-stream")
+	}
 
 	resp, err := v.client.Do(httpReq)
 	if err != nil {
@@ -104,6 +113,17 @@ func (v *OpenAIVendor) TextRequest(ctx interface{}, model string, params TextPar
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+	}
+
+	if reqBody.Stream {
+		content, err := ConsumeChatSSE(resp.Body, params.OnDelta)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(content) == "" {
+			return nil, fmt.Errorf("empty stream response")
+		}
+		return &TextResponse{Content: content, Model: model}, nil
 	}
 
 	var apiResp struct {

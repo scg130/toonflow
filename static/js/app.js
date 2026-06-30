@@ -36,8 +36,11 @@
   let shotClips = [];        // 分镜视频版本
   let timeline = null;       // 时间线编辑状态
   let assets = [];           // 当前项目的资产列表
+  let editingAssetId = null; // 编辑中的资产 id
+  let assetFilter = 'all';   // all | role | scene | prop
   let isGenerating = false;
   let clipVersionDropdownShot = null;
+  let chatStreamSession = null;
 
   // ======================== DOM 引用 ========================
   const els = {
@@ -89,14 +92,20 @@
   // ======================== 鉴权 ========================
   function unwrapApiBody(body) {
     if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
-    if (body.log_id && 'data' in body && Object.keys(body).length === 2) {
-      return body.data;
-    }
+    if (body.log_id != null && 'data' in body) return body.data;
     return body;
+  }
+
+  function normalizeAssetList(list) {
+    if (Array.isArray(list)) return list;
+    if (list && Array.isArray(list.data)) return list.data;
+    if (list && Array.isArray(list.assets)) return list.assets;
+    return [];
   }
 
   function apiFetch(url, options) {
     options = options || {};
+    options.credentials = 'same-origin';
     options.headers = options.headers || {};
     if (authToken) {
       options.headers['Authorization'] = 'Bearer ' + authToken;
@@ -208,9 +217,7 @@
 
   document.querySelectorAll('.planning-tab').forEach(tab => {
     tab.addEventListener('click', () => {
-      document.querySelectorAll('.planning-tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      planningType = tab.dataset.plan;
+      setPlanningTab(tab.dataset.plan);
       loadPlanningContent();
     });
   });
@@ -290,6 +297,25 @@
       }
       updateChatProgress(msg.msg || '处理中...', msg.progress);
       setStatus(msg.msg || '处理中...');
+      if (msg.progress >= 100 && msg.data && msg.data.action === 'extract_assets' && currentProject) {
+        loadProjectAssets(currentProject.id);
+        switchWorkbenchPanel('assets');
+      }
+      return;
+    }
+    if (msg.step === 'chat_stream') {
+      if (!chatStreamSession || !msg.data) return;
+      if (msg.data.project_id && currentProject && msg.data.project_id !== currentProject.id) return;
+      if (msg.data.log_id && chatStreamSession.logId && msg.data.log_id !== chatStreamSession.logId) return;
+      if (msg.data.log_id) chatStreamSession.logId = msg.data.log_id;
+      enqueueChatStreamDelta(msg.data.delta || '');
+      return;
+    }
+    if (msg.step === 'chat_stream_end') {
+      if (!chatStreamSession || !msg.data) return;
+      if (msg.data.project_id && currentProject && msg.data.project_id !== currentProject.id) return;
+      if (msg.data.log_id && chatStreamSession.logId && msg.data.log_id !== chatStreamSession.logId) return;
+      flushChatStreamQueue();
       return;
     }
     switch (msg.step) {
@@ -442,6 +468,8 @@
   function selectProject(id) {
     apiFetch('/api/projects/' + id).then(r => r.json()).then(proj => {
       currentProject = proj;
+      assets = normalizeAssetList(proj.assets);
+      renderAssets();
       els.projectName.textContent = proj.name;
       els.projectName.style.display = 'inline';
       els.projectDisplay.textContent = '当前项目: ' + proj.name;
@@ -458,6 +486,9 @@
     document.querySelectorAll('.wb-panel').forEach(p => p.classList.remove('active'));
     const el = document.getElementById('wb-panel-' + panel);
     if (el) el.classList.add('active');
+    if (panel === 'assets' && currentProject) {
+      loadProjectAssets(currentProject.id);
+    }
     if (panel === 'planning') loadPlanningContent();
     if (panel === 'storyboard' && currentProject) {
       loadProjectStoryboards(currentProject.id, currentEpisode?.id);
@@ -560,15 +591,76 @@
     });
   }
 
-  function loadPlanningContent() {
-    if (!currentProject || !currentEpisode) return;
+  function setPlanningTab(type) {
+    planningType = type || 'skeleton';
+    document.querySelectorAll('.planning-tab').forEach(t => {
+      t.classList.toggle('active', t.dataset.plan === planningType);
+    });
+  }
+
+  function sanitizePlanningContent(content) {
+    if (!content) return '';
+    const lines = String(content).split('\n');
+    const out = [];
+    for (const line of lines) {
+      const t = line.trim().replace(/^`+|`+$/g, '');
+      if (/^ACTION\s*[:：]/i.test(t)) continue;
+      if (/^SHOT\s*[:：]/i.test(t)) continue;
+      out.push(line);
+    }
+    return out.join('\n').trim();
+  }
+
+  function showPlanningContent(content) {
     const el = document.getElementById('planning-content');
     if (!el) return;
-    apiFetch('/api/projects/' + currentProject.id + '/agent-work?type=' + planningType + '&episode_id=' + currentEpisode.id)
+    const cleaned = sanitizePlanningContent(content);
+    const text = cleaned ? cleaned : '暂无内容，请让 AI 生成或点击下方按钮';
+    el.textContent = text;
+  }
+
+  function loadPlanningContent() {
+    if (!currentProject || !currentEpisode) return;
+    showPlanningContent('加载中...');
+    apiFetch('/api/projects/' + currentProject.id + '/agent-work?type=' + planningType + '&episode_id=' + encodeURIComponent(currentEpisode.id))
       .then(r => r.json())
       .then(data => {
-        el.textContent = data.content || '暂无内容，请让 AI 生成或点击下方按钮';
-      }).catch(() => {});
+        showPlanningContent(data.content || '');
+      }).catch(() => {
+        showPlanningContent('');
+      });
+  }
+
+  const planningTypeLabels = { skeleton: '故事骨架', strategy: '改编策略', script: '剧本' };
+
+  function generatePlanningWork(type) {
+    if (!currentProject || !currentEpisode) {
+      toast('请先选择一集', 'warning');
+      return Promise.reject(new Error('no episode'));
+    }
+    setPlanningTab(type);
+    switchWorkbenchPanel('planning');
+    showPlanningContent('正在生成' + (planningTypeLabels[type] || '') + '，请稍候...');
+    updateChatProgress('正在生成' + (planningTypeLabels[type] || '') + '...', 40);
+    return apiFetch('/api/projects/' + currentProject.id + '/agent-work/generate', {
+      method: 'POST',
+      body: JSON.stringify({ episode_id: currentEpisode.id, type: type }),
+      signal: AbortSignal.timeout(10 * 60 * 1000),
+    }).then(r => {
+      if (!r.ok) return r.json().then(j => { throw new Error(j.error || '生成失败'); });
+      return r.json();
+    }).then(data => {
+      updateChatProgress('', 0);
+      showPlanningContent(data.content || '');
+      if (type === 'script') loadEpisodes();
+      toast((planningTypeLabels[type] || '内容') + '已生成', 'success');
+      return data;
+    }).catch(err => {
+      updateChatProgress('', 0);
+      toast('生成失败: ' + (err.message || err), 'error');
+      loadPlanningContent();
+      throw err;
+    });
   }
 
   function loadChatMessages() {
@@ -580,7 +672,7 @@
         const box = document.getElementById('wb-chat-messages');
         if (!box) return;
         if (!msgs.length) {
-          box.innerHTML = '<div class="wb-chat-msg assistant">你好！我是 AI-VIDEO 创作助手。\n\n建议流程：\n1. 导入原文\n2. 事件分析 + AI 分集\n3. 选择一集，生成故事骨架 → 改编策略 → 剧本\n4. 生成分镜 → 图片 → 视频\n\n直接告诉我你想做什么即可。</div>';
+          box.innerHTML = '<div class="wb-chat-msg assistant">你好！我是 AI-VIDEO 创作助手。\n\n建议流程：\n1. 导入原文\n2. 事件分析 + AI 分集\n3. 选择一集，生成故事骨架 → 改编策略 → 剧本\n4. 生成分镜 → 提取资产 → 图片 → 视频\n\n操作方式：\n· 点击界面按钮 → 直接执行对应步骤\n· 聊天对话 → 仅在你明确要求且 AI 输出 ACTION 时才执行流程；否则为普通问答\n\n直接告诉我你想做什么即可。</div>';
           return;
         }
         box.innerHTML = msgs.map(m =>
@@ -606,6 +698,154 @@
     text.textContent = message;
   }
 
+  function extractAssetsDirect(opts) {
+    opts = opts || {};
+    if (!currentProject) { toast('请先选择项目', 'warning'); return Promise.reject(); }
+    if (!currentEpisode) { toast('请先选择一集', 'warning'); return Promise.reject(); }
+    if (opts.showProgress !== false) updateChatProgress('正在从剧本提取资产...', 30);
+    return apiFetch('/api/projects/' + currentProject.id + '/assets/extract', {
+      method: 'POST',
+      body: JSON.stringify({ episode_id: currentEpisode.id }),
+      signal: AbortSignal.timeout(10 * 60 * 1000),
+    })
+      .then(r => r.json().then(body => ({ ok: r.ok, body: unwrapApiBody(body) })))
+      .then(({ ok, body }) => {
+        if (!ok) throw new Error((body && body.error) || '提取失败');
+        const n = body && body.count != null ? body.count : assets.length;
+        return loadProjectAssets(currentProject.id).then(() => {
+          switchWorkbenchPanel('assets');
+          if (opts.showProgress !== false) updateChatProgress('', 0);
+          toast('已提取 ' + n + ' 项资产', 'success');
+          return n;
+        });
+      })
+      .catch(err => {
+        if (opts.showProgress !== false) updateChatProgress('', 0);
+        toast(err.message || '提取失败', 'error');
+        throw err;
+      });
+  }
+
+  function scrollChatToBottom() {
+    const box = document.getElementById('wb-chat-messages');
+    if (box) box.scrollTop = box.scrollHeight;
+  }
+
+  function beginChatStreamBubble(hint) {
+    const box = document.getElementById('wb-chat-messages');
+    if (!box) return null;
+    const id = 'chat-stream-' + Date.now();
+    const hintText = hint ? escapeHtml(hint) : '';
+    box.innerHTML += `<div class="wb-chat-msg assistant streaming" id="${id}">${hintText}<span class="chat-stream-cursor">▍</span></div>`;
+    scrollChatToBottom();
+    chatStreamSession = {
+      el: document.getElementById(id),
+      cursor: document.querySelector('#' + id + ' .chat-stream-cursor'),
+      queue: '',
+      timer: null,
+      logId: null,
+    };
+    return chatStreamSession.el;
+  }
+
+  function enqueueChatStreamDelta(delta) {
+    if (!chatStreamSession || !chatStreamSession.el || !delta) return;
+    chatStreamSession.queue += delta;
+    if (!chatStreamSession.timer) {
+      chatStreamSession.timer = setInterval(tickChatStreamTypewriter, 18);
+    }
+  }
+
+  function tickChatStreamTypewriter() {
+    if (!chatStreamSession || !chatStreamSession.el) return;
+    if (!chatStreamSession.queue) {
+      clearInterval(chatStreamSession.timer);
+      chatStreamSession.timer = null;
+      return;
+    }
+    const backlog = chatStreamSession.queue.length;
+    const step = backlog > 80 ? 6 : backlog > 30 ? 3 : 1;
+    const chunk = chatStreamSession.queue.slice(0, step);
+    chatStreamSession.queue = chatStreamSession.queue.slice(step);
+    const cursor = chatStreamSession.cursor;
+    if (cursor && cursor.parentNode === chatStreamSession.el) {
+      chatStreamSession.el.insertBefore(document.createTextNode(chunk), cursor);
+    } else {
+      chatStreamSession.el.appendChild(document.createTextNode(chunk));
+    }
+    scrollChatToBottom();
+  }
+
+  function flushChatStreamQueue() {
+    if (!chatStreamSession) return;
+    if (chatStreamSession.timer) {
+      clearInterval(chatStreamSession.timer);
+      chatStreamSession.timer = null;
+    }
+    if (chatStreamSession.queue && chatStreamSession.el) {
+      const cursor = chatStreamSession.cursor;
+      const rest = chatStreamSession.queue;
+      chatStreamSession.queue = '';
+      if (cursor && cursor.parentNode === chatStreamSession.el) {
+        chatStreamSession.el.insertBefore(document.createTextNode(rest), cursor);
+      } else {
+        chatStreamSession.el.appendChild(document.createTextNode(rest));
+      }
+    }
+    scrollChatToBottom();
+  }
+
+  function finalizeChatStreamBubble(finalText) {
+    flushChatStreamQueue();
+    if (chatStreamSession && chatStreamSession.el) {
+      const text = (finalText != null && finalText !== '') ? String(finalText) : chatStreamSession.el.textContent.replace(/▍$/, '');
+      chatStreamSession.el.textContent = text;
+      chatStreamSession.el.classList.remove('streaming');
+    }
+    chatStreamSession = null;
+    scrollChatToBottom();
+  }
+
+  function runWorkflowAction(action, params) {
+    if (!currentProject) {
+      toast('请先选择项目', 'warning');
+      return Promise.reject(new Error('no project'));
+    }
+    const needsEpisode = {
+      generate_skeleton: 1, generate_strategy: 1, generate_script: 1,
+      generate_storyboard: 1, extract_assets: 1, generate_shot_image: 1,
+    };
+    if (needsEpisode[action] && !currentEpisode) {
+      toast('请先选择一集', 'warning');
+      return Promise.reject(new Error('no episode'));
+    }
+    updateChatProgress('正在执行...', 30);
+    return apiFetch('/api/projects/' + currentProject.id + '/chat/action', {
+      method: 'POST',
+      body: JSON.stringify({
+        action: action,
+        episode_id: currentEpisode ? currentEpisode.id : '',
+        params: params || {},
+      }),
+      signal: AbortSignal.timeout(10 * 60 * 1000),
+    }).then(r => {
+      if (!r.ok) return r.json().then(j => { throw new Error((j && j.error) || '执行失败'); });
+      return r.json();
+    }).then(res => {
+      updateChatProgress('', 0);
+      if (res.action && res.action.type) {
+        handleChatAction(res);
+      } else if (res.reply) {
+        toast(res.reply, 'info');
+      }
+      return res;
+    }).catch(err => {
+      updateChatProgress('', 0);
+      toast(err.message || '执行失败', 'error');
+      throw err;
+    });
+  }
+
   function sendChat(message, silent) {
     if (!currentProject) { toast('请先选择项目', 'warning'); return Promise.reject(); }
     const box = document.getElementById('wb-chat-messages');
@@ -614,6 +854,7 @@
       box.scrollTop = box.scrollHeight;
     }
     updateChatProgress('等待 AI 响应...', 5);
+    beginChatStreamBubble('');
     return apiFetch('/api/projects/' + currentProject.id + '/chat', {
       method: 'POST',
       body: JSON.stringify({
@@ -624,35 +865,56 @@
       signal: AbortSignal.timeout(10 * 60 * 1000),
     }).then(r => r.json()).then(res => {
       updateChatProgress('', 0);
-      if (box) {
-        box.innerHTML += `<div class="wb-chat-msg assistant">${escapeHtml(res.reply || '')}</div>`;
-        box.scrollTop = box.scrollHeight;
-      }
       if (res.action && res.action.type) {
+        finalizeChatStreamBubble(res.reply || '');
         handleChatAction(res);
-      } else if (res.work && Array.isArray(res.work) && res.work.length > 0) {
-        switchWorkbenchPanel('storyboard');
-        storyboards = normalizeStoryboards(res.work);
-        renderStoryboards();
-        updateVideoTracksFromStoryboards();
-        toast('已解析 ' + storyboards.length + ' 个分镜', 'success');
+      } else {
+        finalizeChatStreamBubble(res.reply || '');
       }
       return res;
     }).catch(err => {
       updateChatProgress('', 0);
+      finalizeChatStreamBubble('⚠️ 请求失败: ' + (err.message || err));
       throw err;
     });
   }
 
   function handleChatAction(res) {
+    if (!res.action || !res.action.type) return;
     const t = res.action.type;
+    if (t === 'generate_shot_image') {
+      const shot = res.action && res.action.result && res.action.result.shot_number;
+      if (shot) {
+        switchWorkbenchPanel('storyboard');
+        generateShotImage(shot);
+      }
+      return;
+    }
     if (t === 'analyze_events' || t === 'split_episodes') {
       loadSourceTexts();
       loadEpisodes();
     }
     if (t === 'generate_skeleton' || t === 'generate_strategy' || t === 'generate_script') {
-      loadPlanningContent();
+      if (res.action && res.action.error) {
+        toast('生成失败: ' + res.action.error, 'error');
+        loadPlanningContent();
+        return;
+      }
+      const planMap = {
+        generate_skeleton: 'skeleton',
+        generate_strategy: 'strategy',
+        generate_script: 'script',
+      };
+      setPlanningTab(planMap[t]);
+      switchWorkbenchPanel('planning');
+      if (typeof res.work === 'string' && res.work.trim()) {
+        showPlanningContent(res.work);
+      } else {
+        loadPlanningContent();
+      }
       loadEpisodes();
+      toast((planningTypeLabels[planMap[t]] || '内容') + '已生成', 'success');
+      return;
     }
     if (t === 'generate_storyboard') {
       switchWorkbenchPanel('storyboard');
@@ -661,15 +923,23 @@
         storyboards = items;
         renderStoryboards();
         updateVideoTracksFromStoryboards();
-        toast('已生成 ' + items.length + ' 个分镜', 'success');
+        toast('已生成 ' + items.length + ' 个分镜，请先从剧本提取资产再生图', 'success');
       } else if (currentProject) {
         loadProjectStoryboards(currentProject.id, currentEpisode?.id);
       }
       return;
     }
     if (t === 'extract_assets') {
-      loadProjectAssets(currentProject.id);
-      switchWorkbenchPanel('assets');
+      if (res.action && res.action.error) {
+        toast('资产提取失败: ' + res.action.error, 'error');
+        return;
+      }
+      const n = res.action && res.action.result && res.action.result.assets;
+      loadProjectAssets(currentProject.id).then(() => {
+        switchWorkbenchPanel('assets');
+        toast(typeof n === 'number' ? ('已提取 ' + n + ' 项资产') : '资产已刷新', 'success');
+      });
+      return;
     }
     toast('已执行: ' + t, 'success');
   }
@@ -752,7 +1022,11 @@
   function generateShotVideo(shotNumber) {
     if (!currentProject || !currentEpisode) { toast('请先选择项目与集', 'warning'); return Promise.resolve(); }
     const sb = storyboards.find(s => s.shot_number === shotNumber);
-    if (sb && sb.image_url && !sb.image_remote_url) {
+    if (!sb || !sb.image_url) {
+      toast('请先生成该分镜图片', 'warning');
+      return Promise.resolve();
+    }
+    if (sb.image_url && !sb.image_remote_url) {
       toast('该分镜图片缺少 Agnes 远程链接，请先重新生成图片再生成视频', 'warning');
       return Promise.resolve();
     }
@@ -804,6 +1078,14 @@
     }
     if (!currentProject || !currentEpisode) {
       toast('请先选择项目与集', 'warning');
+      return;
+    }
+    const missingImage = shots.filter(n => {
+      const sb = storyboards.find(s => s.shot_number === n);
+      return !sb || !sb.image_url;
+    });
+    if (missingImage.length) {
+      toast('请先生成图片：第 ' + missingImage.join('、') + ' 镜', 'warning');
       return;
     }
     toast('开始为 ' + shots.length + ' 个分镜生成视频', 'info');
@@ -1166,6 +1448,11 @@
       toast('请先生成分镜', 'warning');
       return;
     }
+    if (mode === 'images' && assets.length === 0) {
+      toast('请先从剧本提取资产后再生图', 'warning');
+      switchWorkbenchPanel('assets');
+      return;
+    }
     const selectedShots = Array.isArray(shotNumbers) && shotNumbers.length
       ? shotNumbers
       : getSelectedShotNumbers();
@@ -1214,23 +1501,78 @@
 
   // ======================== 资产 CRUD ========================
   function loadProjectAssets(projectId) {
-    apiFetch('/api/assets?project_id=' + projectId).then(r => r.json()).then(list => {
-      assets = list || [];
-      renderAssets();
-    }).catch(() => {});
+    if (!projectId) return Promise.resolve([]);
+    const primary = '/api/projects/' + encodeURIComponent(projectId) + '/assets';
+    const fallback = '/api/assets?project_id=' + encodeURIComponent(projectId);
+    function fetchList(url) {
+      return apiFetch(url).then(r => {
+        if (r.status === 404 && url === primary) return fetchList(fallback);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      });
+    }
+    return fetchList(primary)
+      .then(list => {
+        assets = normalizeAssetList(list);
+        renderAssets();
+        return assets;
+      })
+      .catch(err => {
+        console.error('loadProjectAssets failed', err);
+        assets = [];
+        renderAssets();
+        toast('加载资产失败，请重启服务后刷新页面', 'error');
+        return [];
+      });
+  }
+
+  function filteredAssets() {
+    if (assetFilter === 'all') return assets;
+    return assets.filter(a => a.type === assetFilter);
+  }
+
+  function setAssetFilter(filter) {
+    assetFilter = filter || 'all';
+    document.querySelectorAll('.asset-filter-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.filter === assetFilter);
+    });
+    renderAssets();
   }
 
   function renderAssets() {
+    const listEl = document.getElementById('asset-list');
+    const countEl = document.getElementById('asset-count-label');
+    const shown = filteredAssets();
+    if (countEl) {
+      if (assets.length === 0) {
+        countEl.textContent = '';
+      } else if (assetFilter === 'all') {
+        countEl.textContent = '共 ' + assets.length + ' 项';
+      } else {
+        countEl.textContent = '显示 ' + shown.length + ' / ' + assets.length + ' 项';
+      }
+    }
+    if (!listEl) return;
+    if (!assets.length) {
+      listEl.innerHTML = '<div class="empty-state-sm"><p>暂无资产，点击「从剧本提取资产」或上方 ＋ 按钮添加</p></div>';
+      return;
+    }
+    if (!shown.length) {
+      const labels = { role: '角色', scene: '场景', prop: '道具' };
+      listEl.innerHTML = '<div class="empty-state-sm"><p>当前分类「' + (labels[assetFilter] || assetFilter) + '」下暂无资产</p></div>';
+      return;
+    }
     const icons = { role: '👤', scene: '🏞️', prop: '📦' };
-    els.assetList.innerHTML = assets.map(a => `
-      <div class="asset-item" data-id="${a.id}">
-        <div class="asset-thumb">${icons[a.type] || '📋'}</div>
+    listEl.innerHTML = shown.map(a => `
+      <div class="asset-item" data-id="${a.id}" onclick="window._app.editAsset(${a.id})">
+        <div class="asset-thumb">${a.file_url ? '<img src="' + escapeHtml(a.file_url) + '" alt="">' : (icons[a.type] || '📋')}</div>
         <div class="asset-info">
           <div class="asset-name">${escapeHtml(a.name)}</div>
-          <div class="asset-type-label">${a.type} ${escapeHtml(a.desc ? '— ' + a.desc.substring(0, 30) : '')}</div>
+          <div class="asset-type-label">${a.type} ${escapeHtml(a.desc ? '— ' + a.desc.substring(0, 30) : '')}${a.file_url ? ' · 有参考图' : ''}</div>
         </div>
         <div class="asset-actions">
-          <button class="btn btn-sm btn-outline" onclick="window._app.deleteAsset(${a.id})">×</button>
+          <button class="btn btn-sm btn-outline" title="编辑" onclick="event.stopPropagation(); window._app.editAsset(${a.id})">✎</button>
+          <button class="btn btn-sm btn-outline" title="删除" onclick="event.stopPropagation(); window._app.deleteAsset(${a.id})">×</button>
         </div>
       </div>
     `).join('');
@@ -1249,6 +1591,11 @@
         renderAssets();
         toast('资产已删除', 'info');
       }).catch(() => toast('删除失败', 'error'));
+    },
+    editAsset: function(id) {
+      const a = assets.find(x => x.id === id);
+      if (!a) return;
+      openAssetModal(a.type, a);
     },
     deleteVendor: function(id) {
       apiFetch('/api/vendors/' + id, { method: 'DELETE' }).then(() => {
@@ -1718,16 +2065,28 @@
   document.getElementById('btn-add-scene').addEventListener('click', () => openAssetModal('scene'));
   document.getElementById('btn-add-prop').addEventListener('click', () => openAssetModal('prop'));
 
-  function openAssetModal(type) {
-    document.getElementById('asset-modal-title').textContent = '添加' + (type === 'role' ? '角色' : type === 'scene' ? '场景' : '道具');
+  document.querySelectorAll('.asset-filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => setAssetFilter(btn.dataset.filter));
+  });
+
+  function openAssetModal(type, asset) {
+    editingAssetId = asset ? asset.id : null;
+    const typeLabel = type === 'role' ? '角色' : type === 'scene' ? '场景' : '道具';
+    document.getElementById('asset-modal-title').textContent = (asset ? '编辑' : '添加') + typeLabel;
     document.getElementById('asset-type').value = type;
-    document.getElementById('asset-name').value = '';
-    document.getElementById('asset-desc').value = '';
+    document.getElementById('asset-name').value = asset ? (asset.name || '') : '';
+    document.getElementById('asset-desc').value = asset ? (asset.desc || '') : '';
+    document.getElementById('asset-file-url').value = asset ? (asset.file_url || '') : '';
     els.modalAsset.style.display = 'flex';
   }
 
-  document.getElementById('btn-close-asset-modal').addEventListener('click', () => els.modalAsset.style.display = 'none');
-  document.getElementById('btn-cancel-asset').addEventListener('click', () => els.modalAsset.style.display = 'none');
+  function closeAssetModal() {
+    editingAssetId = null;
+    els.modalAsset.style.display = 'none';
+  }
+
+  document.getElementById('btn-close-asset-modal').addEventListener('click', closeAssetModal);
+  document.getElementById('btn-cancel-asset').addEventListener('click', closeAssetModal);
 
   document.getElementById('btn-save-asset').addEventListener('click', () => {
     const data = {
@@ -1735,17 +2094,20 @@
       name: document.getElementById('asset-name').value.trim(),
       desc: document.getElementById('asset-desc').value,
       type: document.getElementById('asset-type').value,
+      file_url: document.getElementById('asset-file-url').value.trim(),
     };
     if (!data.name) { toast('请输入名称', 'warning'); return; }
 
-    apiFetch('/api/assets', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }).then(() => {
-      els.modalAsset.style.display = 'none';
+    const isEdit = editingAssetId != null;
+    const req = isEdit
+      ? apiFetch('/api/assets/' + editingAssetId, { method: 'PUT', body: JSON.stringify(data) })
+      : apiFetch('/api/assets', { method: 'POST', body: JSON.stringify(data) });
+
+    req.then(() => {
+      closeAssetModal();
       if (currentProject) loadProjectAssets(currentProject.id);
-      toast('资产已添加', 'success');
-    }).catch(() => toast('添加失败', 'error'));
+      toast(isEdit ? '资产已更新' : '资产已添加', 'success');
+    }).catch(() => toast(isEdit ? '更新失败' : '添加失败', 'error'));
   });
 
   // 工作台事件
@@ -1883,25 +2245,31 @@
   document.querySelectorAll('[data-quick]').forEach(btn => {
     btn.addEventListener('click', () => {
       const action = btn.dataset.quick;
-      const labels = {
-        generate_skeleton: '请为当前集生成故事骨架',
-        generate_strategy: '请为当前集生成改编策略',
-        generate_script: '请为当前集生成完整剧本',
-      };
       if (!currentEpisode) { toast('请先选择一集', 'warning'); return; }
-      sendChat(labels[action] || action).catch(() => toast('执行失败', 'error'));
+      if (action === 'generate_skeleton' || action === 'generate_strategy' || action === 'generate_script') {
+        const typeMap = {
+          generate_skeleton: 'skeleton',
+          generate_strategy: 'strategy',
+          generate_script: 'script',
+        };
+        generatePlanningWork(typeMap[action]).catch(() => {});
+        return;
+      }
+      runWorkflowAction(action).catch(() => {});
     });
   });
 
   document.getElementById('btn-extract-assets').addEventListener('click', () => {
-    if (!currentEpisode) { toast('请先选择一集', 'warning'); return; }
-    sendChat('请从当前集剧本提取角色、场景和道具资产').catch(() => toast('提取失败', 'error'));
+    const btn = document.getElementById('btn-extract-assets');
+    btn.disabled = true;
+    extractAssetsDirect({ showProgress: false })
+      .finally(() => { btn.disabled = false; });
   });
 
   // AI 生成分镜
   document.getElementById('btn-gen-storyboard').addEventListener('click', () => {
     if (!currentEpisode) { toast('请先选择一集', 'warning'); return; }
-    sendChat('请为当前集剧本生成分镜').catch(() => toast('生成分镜失败', 'error'));
+    runWorkflowAction('generate_storyboard').catch(() => {});
   });
 
   // 批量生成图片

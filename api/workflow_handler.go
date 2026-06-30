@@ -304,7 +304,39 @@ func (r *Router) agentWorkHandler(c *gin.Context) {
 		c.AbortWithError(http.StatusInternalServerError, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"content": content})
+	c.JSON(http.StatusOK, gin.H{"content": service.SanitizeWorkContent(content)})
+}
+
+func (r *Router) agentWorkGenerateHandler(c *gin.Context) {
+	projectID, ok := r.requireProject(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		EpisodeID string `json:"episode_id" binding:"required"`
+		Type      string `json:"type" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	switch req.Type {
+	case "skeleton", "strategy", "script":
+	default:
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "type must be skeleton, strategy, or script"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Minute)
+	defer cancel()
+
+	agent := &service.AgentChat{DB: r.db.DB, Vendor: r.resolveVendor(), SkillMgr: r.skillMgr}
+	content, err := agent.GenerateWork(ctx, projectID, req.EpisodeID, req.Type)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"content": content, "type": req.Type})
 }
 
 // ======================== AI Chat ========================
@@ -379,10 +411,80 @@ func (r *Router) chatSendHandler(c *gin.Context) {
 			})
 		}
 	}
+	streamFn := func(delta string) {
+		if r.wsBroadcaster == nil || delta == "" {
+			return
+		}
+		r.wsBroadcaster.Broadcast(ws.WSResponse{
+			Code: 0,
+			Step: "chat_stream",
+			Data: ws.MustMarshalJSON(map[string]interface{}{
+				"log_id":     logID,
+				"project_id": projectID,
+				"delta":      delta,
+			}),
+		})
+	}
+	streamEndFn := func() {
+		if r.wsBroadcaster == nil {
+			return
+		}
+		r.wsBroadcaster.Broadcast(ws.WSResponse{
+			Code: 0,
+			Step: "chat_stream_end",
+			Data: ws.MustMarshalJSON(map[string]interface{}{
+				"log_id":     logID,
+				"project_id": projectID,
+			}),
+		})
+	}
+	ctx = service.WithProgress(ctx, progressFn)
+	ctx = service.WithStreamDelta(ctx, streamFn)
+	ctx = service.WithStreamEnd(ctx, streamEndFn)
+
+	agent := &service.AgentChat{DB: r.db.DB, Vendor: r.resolveVendor(), SkillMgr: r.skillMgr}
+	resp, err := agent.HandleMessage(ctx, currentUserID(c), projectID, req.EpisodeID, req.Stage, req.Message)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func (r *Router) chatActionHandler(c *gin.Context) {
+	projectID, ok := r.requireProject(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Action    string            `json:"action" binding:"required"`
+		EpisodeID string            `json:"episode_id"`
+		Params    map[string]string `json:"params"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Minute)
+	defer cancel()
+
+	logID := LogID(c)
+	progressFn := func(step string, progress float32, message string) {
+		if r.wsBroadcaster != nil {
+			r.wsBroadcaster.Broadcast(ws.WSResponse{
+				Code: 0, Msg: message, Step: "chat_progress", Progress: progress,
+				Data: ws.MustMarshalJSON(map[string]interface{}{
+					"log_id": logID, "project_id": projectID, "action": step,
+				}),
+			})
+		}
+	}
 	ctx = service.WithProgress(ctx, progressFn)
 
 	agent := &service.AgentChat{DB: r.db.DB, Vendor: r.resolveVendor(), SkillMgr: r.skillMgr}
-	resp, err := agent.HandleMessage(ctx, projectID, req.EpisodeID, req.Stage, req.Message)
+	intent := &service.ChatActionIntent{Type: req.Action, Params: req.Params}
+	resp, err := agent.RunAction(ctx, currentUserID(c), projectID, req.EpisodeID, "general", intent)
 	if err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

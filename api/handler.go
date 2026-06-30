@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"toonflow/adapter"
@@ -111,11 +112,17 @@ func (r *Router) Setup() *gin.Engine {
 		protected.PATCH("/projects/:id/episodes/:epId", r.episodeUpdateHandler)
 
 		protected.GET("/projects/:id/agent-work", r.agentWorkHandler)
+		protected.POST("/projects/:id/agent-work/generate", r.agentWorkGenerateHandler)
 		protected.GET("/projects/:id/chat", r.chatListHandler)
 		protected.POST("/projects/:id/chat", r.chatSendHandler)
+		protected.POST("/projects/:id/chat/action", r.chatActionHandler)
+
+		protected.GET("/projects/:id/assets", r.projectAssetsListHandler)
+		protected.POST("/projects/:id/assets/extract", r.assetsExtractHandler)
 
 		protected.GET("/assets", r.assetsListHandler)
 		protected.POST("/assets", r.assetsCreateHandler)
+		protected.PUT("/assets/:id", r.assetUpdateHandler)
 		protected.DELETE("/assets/:id", r.assetDeleteHandler)
 
 		protected.GET("/storyboards", r.storyboardsListHandler)
@@ -495,6 +502,7 @@ func (r *Router) projectDetailHandler(c *gin.Context) {
 		"mode":          mode,
 		"status":        status,
 		"create_time":   createTime,
+		"assets":        r.queryAssetsForProject(id),
 	})
 }
 
@@ -592,13 +600,15 @@ func (r *Router) assetsListHandler(c *gin.Context) {
 		return
 	}
 
-	query := "SELECT id, name, desc, type, file_url FROM o_assets WHERE user_id = ?"
-	args := []interface{}{userID}
+	var query string
+	var args []interface{}
 	if projectID != "" {
-		query += " AND project_id = ?"
-		args = append(args, projectID)
+		query = "SELECT id, name, desc, type, file_url FROM o_assets WHERE project_id = ? ORDER BY id"
+		args = []interface{}{projectID}
+	} else {
+		query = "SELECT id, name, desc, type, file_url FROM o_assets WHERE user_id = ? ORDER BY id"
+		args = []interface{}{userID}
 	}
-	query += " ORDER BY id"
 
 	rows, err := r.db.Query(query, args...)
 	if err != nil {
@@ -636,6 +646,7 @@ func (r *Router) assetsCreateHandler(c *gin.Context) {
 		Name      string `json:"name" binding:"required"`
 		Desc      string `json:"desc"`
 		Type      string `json:"type"`
+		FileURL   string `json:"file_url"`
 	}
 	if err := c.ShouldBindJSON(&a); err != nil {
 		c.AbortWithError(http.StatusBadRequest, err)
@@ -651,8 +662,8 @@ func (r *Router) assetsCreateHandler(c *gin.Context) {
 	}
 
 	_, err := r.db.Exec(
-		"INSERT INTO o_assets (project_id, user_id, name, desc, type) VALUES (?, ?, ?, ?, ?)",
-		a.ProjectID, userID, a.Name, a.Desc, a.Type,
+		"INSERT INTO o_assets (project_id, user_id, name, desc, type, file_url) VALUES (?, ?, ?, ?, ?, ?)",
+		a.ProjectID, userID, a.Name, a.Desc, a.Type, strings.TrimSpace(a.FileURL),
 	)
 	if err != nil {
 		c.AbortWithError(http.StatusInternalServerError, err)
@@ -662,10 +673,74 @@ func (r *Router) assetsCreateHandler(c *gin.Context) {
 	c.Status(http.StatusCreated)
 }
 
+func (r *Router) assetUpdateHandler(c *gin.Context) {
+	id := c.Param("id")
+	userID := currentUserID(c)
+
+	var projectID string
+	err := r.db.QueryRow("SELECT project_id FROM o_assets WHERE id = ?", id).Scan(&projectID)
+	if err == sql.ErrNoRows {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		c.AbortWithError(http.StatusInternalServerError, err)
+		return
+	}
+	if !r.ownsProject(userID, projectID) {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+
+	var a struct {
+		Name    string `json:"name" binding:"required"`
+		Desc    string `json:"desc"`
+		Type    string `json:"type"`
+		FileURL string `json:"file_url"`
+	}
+	if err := c.ShouldBindJSON(&a); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if a.Type == "" {
+		a.Type = "role"
+	}
+
+	res, err := r.db.Exec(
+		"UPDATE o_assets SET name = ?, desc = ?, type = ?, file_url = ? WHERE id = ?",
+		a.Name, a.Desc, a.Type, strings.TrimSpace(a.FileURL), id,
+	)
+	if err != nil {
+		c.AbortWithError(http.StatusInternalServerError, err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
 func (r *Router) assetDeleteHandler(c *gin.Context) {
 	id := c.Param("id")
 	userID := currentUserID(c)
-	res, err := r.db.Exec("DELETE FROM o_assets WHERE id = ? AND user_id = ?", id, userID)
+
+	var projectID string
+	err := r.db.QueryRow("SELECT project_id FROM o_assets WHERE id = ?", id).Scan(&projectID)
+	if err == sql.ErrNoRows {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		c.AbortWithError(http.StatusInternalServerError, err)
+		return
+	}
+	if !r.ownsProject(userID, projectID) {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+
+	res, err := r.db.Exec("DELETE FROM o_assets WHERE id = ?", id)
 	if err != nil {
 		c.AbortWithError(http.StatusInternalServerError, err)
 		return
@@ -675,6 +750,85 @@ func (r *Router) assetDeleteHandler(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusOK)
+}
+
+func (r *Router) projectAssetsListHandler(c *gin.Context) {
+	projectID := c.Param("id")
+	userID := currentUserID(c)
+	if !r.ownsProject(userID, projectID) {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	r.writeAssetsJSON(c, projectID)
+}
+
+func (r *Router) queryAssetsForProject(projectID string) []map[string]interface{} {
+	rows, err := r.db.Query(
+		"SELECT id, name, desc, type, file_url FROM o_assets WHERE project_id = ? ORDER BY id",
+		projectID,
+	)
+	if err != nil {
+		return []map[string]interface{}{}
+	}
+	defer rows.Close()
+
+	var assets []map[string]interface{}
+	for rows.Next() {
+		var id int
+		var name, fileType string
+		var desc, fileURL sql.NullString
+		if err := rows.Scan(&id, &name, &desc, &fileType, &fileURL); err != nil {
+			continue
+		}
+		assets = append(assets, gin.H{
+			"id":       id,
+			"name":     name,
+			"desc":     desc.String,
+			"type":     fileType,
+			"file_url": fileURL.String,
+		})
+	}
+	if assets == nil {
+		return []map[string]interface{}{}
+	}
+	return assets
+}
+
+func (r *Router) writeAssetsJSON(c *gin.Context, projectID string) {
+	assets := r.queryAssetsForProject(projectID)
+	if len(assets) == 0 {
+		c.JSON(http.StatusOK, []interface{}{})
+		return
+	}
+	c.JSON(http.StatusOK, assets)
+}
+
+func (r *Router) assetsExtractHandler(c *gin.Context) {
+	projectID := c.Param("id")
+	userID := currentUserID(c)
+	if !r.ownsProject(userID, projectID) {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+
+	var req struct {
+		EpisodeID string `json:"episode_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "episode_id required"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Minute)
+	defer cancel()
+
+	v := r.resolveVendor()
+	n, err := service.ExtractAssetsFromEpisode(ctx, r.db.DB, v, userID, projectID, req.EpisodeID)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"count": n})
 }
 
 // ======================== Storyboards ========================
@@ -821,5 +975,6 @@ func (r *Router) downloadHandler(c *gin.Context) {
 }
 
 func (r *Router) indexHandler(c *gin.Context) {
+	c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
 	c.File(filepath.Join(r.staticDir, "index.html"))
 }

@@ -32,9 +32,9 @@ type ChatAction struct {
 
 // ChatResponse is returned from the AI chat endpoint.
 type ChatResponse struct {
-	Reply   string      `json:"reply"`
-	Action  *ChatAction `json:"action,omitempty"`
-	Work    interface{} `json:"work,omitempty"`
+	Reply  string      `json:"reply"`
+	Action *ChatAction `json:"action,omitempty"`
+	Work   interface{} `json:"work,omitempty"`
 }
 
 // AgentChat orchestrates conversational workflow for a project.
@@ -44,8 +44,8 @@ type AgentChat struct {
 	SkillMgr *skill.Manager
 }
 
-// HandleMessage processes user chat and may auto-execute workflow steps.
-func (a *AgentChat) HandleMessage(ctx context.Context, projectID, episodeID, stage, userMsg string) (*ChatResponse, error) {
+// HandleMessage processes user chat. Workflow runs only when AI outputs a whitelisted ACTION.
+func (a *AgentChat) HandleMessage(ctx context.Context, userID, projectID, episodeID, stage, userMsg string) (*ChatResponse, error) {
 	if a.Vendor == nil {
 		return nil, fmt.Errorf("AI vendor not configured")
 	}
@@ -54,7 +54,6 @@ func (a *AgentChat) HandleMessage(ctx context.Context, projectID, episodeID, sta
 
 	history, _ := a.loadRecentMessages(projectID, episodeID, 20)
 	projectCtx := a.buildProjectContext(projectID, episodeID, stage)
-
 	systemPrompt := a.buildSystemPrompt(stage, projectCtx)
 	messages := []adapter.TextMessage{{Role: "system", Content: systemPrompt}}
 	for _, m := range history {
@@ -66,73 +65,149 @@ func (a *AgentChat) HandleMessage(ctx context.Context, projectID, episodeID, sta
 		Messages:    messages,
 		Temperature: 0.7,
 		MaxTokens:   8000,
+		OnDelta:     TextStreamDelta(ctx),
 	})
 	if err != nil {
 		ReportProgress(ctx, "chat", 0, "AI 请求失败")
 		return nil, err
 	}
-
+	ReportStreamEnd(ctx)
 	ReportProgress(ctx, "chat", 25, "AI 回复完成")
 
-	reply, actionType := parseActionFromReply(resp.Content)
-	out := &ChatResponse{Reply: reply}
-
-	if actionType != "" {
-		ReportProgress(ctx, actionType, 30, "开始执行: "+actionLabel(actionType))
-		action, work, err := a.executeAction(ctx, projectID, episodeID, stage, actionType, userMsg)
-		if err != nil {
-			ReportProgress(ctx, actionType, 0, "执行失败: "+err.Error())
-			out.Action = &ChatAction{Type: actionType, Error: err.Error()}
-			out.Reply += "\n\n⚠️ 执行失败: " + err.Error()
-		} else {
-			if actionType == "generate_storyboard" {
-				work = a.refineStoryboardWork(ctx, projectID, episodeID, resp.Content, work)
-			}
-			ReportProgress(ctx, actionType, 100, "执行完成: "+actionLabel(actionType))
-			out.Action = action
-			out.Work = work
+	reply, intent := parseActionFromReply(resp.Content)
+	if intent != nil && ShouldBlockChatAction(userMsg) {
+		intent = nil
+		if strings.TrimSpace(reply) == "" {
+			reply = SanitizeWorkContent(resp.Content)
 		}
-	} else {
-		ReportProgress(ctx, "chat", 100, "完成")
+	}
+	if intent != nil {
+		EnrichIntentFromUserMessage(intent, userMsg)
+		if err := intent.Validate(episodeID); err != nil {
+			out := &ChatResponse{Reply: strings.TrimSpace(reply + "\n\n⚠️ " + err.Error())}
+			a.saveMessage(projectID, episodeID, "user", userMsg, "")
+			a.saveMessage(projectID, episodeID, "assistant", out.Reply, "")
+			ReportProgress(ctx, "chat", 100, "完成")
+			return out, nil
+		}
+		return a.handleWorkflowAction(ctx, userID, projectID, episodeID, stage, userMsg, intent, reply, resp.Content)
 	}
 
-		if out.Work == nil && episodeID != "" && LooksLikeStoryboardTable(reply) {
-			if items, _ := parseStoryboardResponse(reply); len(items) >= 3 {
-				var script string
-				_ = a.DB.QueryRow("SELECT script_content FROM o_episode WHERE id = ?", episodeID).Scan(&script)
-				if script == "" {
-					script = a.loadWork(projectID, episodeID, "script")
-				}
-				minShots := MinShotsForScript(script)
-				if IsAdequateStoryboard(items, minShots) {
-					items = NormalizeStoryboardItems(items)
-					a.persistStoryboard(projectID, episodeID, items)
-					out.Work = items
-					logger.CtxTrace(ctx, "storyboard auto-saved from chat reply shots=%d", len(items))
-				}
-			}
+	out := &ChatResponse{Reply: reply}
+	ReportProgress(ctx, "chat", 100, "完成")
+	a.saveMessage(projectID, episodeID, "user", userMsg, "")
+	a.saveMessage(projectID, episodeID, "assistant", out.Reply, "")
+	return out, nil
+}
+
+// RunAction executes a whitelisted workflow action directly (UI buttons), without AI.
+func (a *AgentChat) RunAction(ctx context.Context, userID, projectID, episodeID, stage string, intent *ChatActionIntent) (*ChatResponse, error) {
+	if intent == nil || !intent.Allowed() {
+		return nil, fmt.Errorf("不允许的执行动作")
+	}
+	if err := intent.Validate(episodeID); err != nil {
+		return nil, err
+	}
+	return a.handleWorkflowAction(ctx, userID, projectID, episodeID, stage, actionLabel(intent.Type), intent, "", "")
+}
+
+func (a *AgentChat) handleWorkflowAction(ctx context.Context, userID, projectID, episodeID, stage, userMsg string, intent *ChatActionIntent, chatReply, aiContent string) (*ChatResponse, error) {
+	actionType := intent.Type
+	out := &ChatResponse{Reply: actionPendingReply(actionType)}
+	ReportProgress(ctx, actionType, 30, "开始执行: "+actionLabel(actionType))
+
+	var action *ChatAction
+	var work interface{}
+	var err error
+
+	if workType, ok := PlanningActionWorkType(actionType); ok && IsSubstantialWorkContent(chatReply) {
+		ReportProgress(ctx, actionType, 60, "正在保存"+actionLabel(actionType)+"...")
+		content := SanitizeWorkContent(chatReply)
+		a.persistPlanningWork(projectID, episodeID, workType, content)
+		action = &ChatAction{Type: actionType, EpisodeID: episodeID}
+		work = content
+	} else {
+		action, work, err = a.executeAction(ctx, userID, projectID, episodeID, stage, intent, userMsg)
+	}
+
+	out.Reply = actionChatReply(actionType, err)
+	if err != nil {
+		ReportProgress(ctx, actionType, 0, "执行失败: "+err.Error())
+		out.Action = &ChatAction{Type: actionType, Error: err.Error()}
+	} else {
+		if actionType == "generate_storyboard" && aiContent != "" {
+			work = a.refineStoryboardWork(ctx, projectID, episodeID, aiContent, work)
 		}
+		ReportProgress(ctx, actionType, 100, "执行完成: "+actionLabel(actionType))
+		out.Action = action
+		out.Work = work
+	}
 
 	a.saveMessage(projectID, episodeID, "user", userMsg, "")
 	a.saveMessage(projectID, episodeID, "assistant", out.Reply, actionType)
-
 	return out, nil
 }
 
 func actionLabel(actionType string) string {
 	labels := map[string]string{
-		"analyze_events":      "事件分析",
-		"split_episodes":      "AI 分集",
-		"generate_skeleton":   "生成故事骨架",
-		"generate_strategy":   "生成改编策略",
-		"generate_script":     "生成剧本",
-		"generate_storyboard": "生成分镜",
-		"extract_assets":      "提取资产",
+		"analyze_events":       "事件分析",
+		"split_episodes":       "AI 分集",
+		"generate_skeleton":    "生成故事骨架",
+		"generate_strategy":    "生成改编策略",
+		"generate_script":      "生成剧本",
+		"generate_storyboard":  "生成分镜",
+		"extract_assets":       "提取资产",
+		"generate_shot_image":  "生成分镜图片",
 	}
 	if l, ok := labels[actionType]; ok {
 		return l
 	}
 	return actionType
+}
+
+func actionPendingReply(actionType string) string {
+	switch actionType {
+	case "generate_skeleton":
+		return "好的，正在生成故事骨架…"
+	case "generate_strategy":
+		return "好的，正在生成改编策略…"
+	case "generate_script":
+		return "好的，正在生成剧本…"
+	case "generate_storyboard":
+		return "好的，正在生成分镜…"
+	case "extract_assets":
+		return "好的，正在从剧本提取资产…"
+	case "generate_shot_image":
+		return "好的，正在生成分镜图片…"
+	default:
+		return "好的，正在执行「" + actionLabel(actionType) + "」…"
+	}
+}
+
+func actionChatReply(actionType string, err error) string {
+	if err != nil {
+		return fmt.Sprintf("⚠️ %s失败：%s", actionLabel(actionType), err.Error())
+	}
+	switch actionType {
+	case "generate_skeleton":
+		return "✅ 故事骨架已生成，请在右侧「故事骨架」标签查看。"
+	case "generate_strategy":
+		return "✅ 改编策略已生成，请在右侧「改编策略」标签查看。"
+	case "generate_script":
+		return "✅ 剧本已生成，请在右侧「剧本」标签查看。"
+	case "generate_storyboard":
+		return "✅ 分镜已生成，请在「分镜」面板查看。"
+	case "extract_assets":
+		return "✅ 资产已提取，请在「资产」面板查看。"
+	case "generate_shot_image":
+		return "✅ 分镜图片任务已提交，请在分镜面板查看进度。"
+	case "analyze_events":
+		return "✅ 事件分析完成，请在「原文」面板查看各章事件。"
+	case "split_episodes":
+		return "✅ 分集完成，请在「剧本列表」查看各集。"
+	default:
+		return "✅ " + actionLabel(actionType) + "已完成。"
+	}
 }
 
 func (a *AgentChat) buildSystemPrompt(stage, projectCtx string) string {
@@ -141,21 +216,19 @@ func (a *AgentChat) buildSystemPrompt(stage, projectCtx string) string {
 
 %s
 
-可用自动执行动作（在回复末尾单独一行输出 ACTION:动作名）：
-- ACTION:analyze_events — 分析已导入原文，提取章节事件
-- ACTION:split_episodes — 根据原文和事件 AI 自动分集并设置每集参数
-- ACTION:generate_skeleton — 为当前集生成故事骨架
-- ACTION:generate_strategy — 为当前集生成改编策略
-- ACTION:generate_script — 为当前集生成完整剧本
-- ACTION:generate_storyboard — 将当前集剧本解析为分镜
-- ACTION:extract_assets — 从剧本提取角色/场景/道具资产
+%s`, stage, projectCtx, ChatActionRulesText())
+}
 
-规则：
-1. 用中文回复，简洁专业，说明下一步建议
-2. 当用户明确要求执行某步骤，或上下文已满足条件时，在回复最后一行输出 ACTION:xxx
-	3. 分集前需先导入原文；生成剧本前需先分集；生成分镜前需先有剧本
-	4. 生成分镜时必须覆盖剧本全部场次，不得只输出 1 镜
-	5. 不要输出虚假结果，执行动作由系统自动完成`, stage, projectCtx)
+func (a *AgentChat) buildWorkGenerationSystemPrompt(projectID, episodeID string) string {
+	return fmt.Sprintf(`你是专业的短剧策划编剧。根据项目资料生成高质量 Markdown 正文。
+
+项目背景:
+%s
+
+要求：
+- 只输出正文（骨架/策略/剧本内容），使用 Markdown 格式
+- 禁止输出 ACTION、SHOT 等控制指令
+- 禁止输出「请在右侧面板查看」等元提示`, a.buildProjectContext(projectID, episodeID, "planning"))
 }
 
 func (a *AgentChat) buildProjectContext(projectID, episodeID, stage string) string {
@@ -182,26 +255,41 @@ func (a *AgentChat) buildProjectContext(projectID, episodeID, stage string) stri
 			projectID, episodeID, wt,
 		).Scan(&content)
 		if err == nil && content != "" {
-			fmt.Fprintf(&b, "已有%s\n", wt)
+			fmt.Fprintf(&b, "已保存%s（用户可随时重新生成并覆盖）\n", workTypeLabel(wt))
 		}
 	}
 	return b.String()
 }
 
-func parseActionFromReply(text string) (reply, action string) {
-	lines := strings.Split(strings.TrimSpace(text), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(strings.ToUpper(line), "ACTION:") {
-			action = strings.TrimSpace(line[7:])
-			lines = append(lines[:i], lines[i+1:]...)
-			break
-		}
+func workTypeLabel(workType string) string {
+	switch workType {
+	case "skeleton":
+		return "故事骨架"
+	case "strategy":
+		return "改编策略"
+	case "script":
+		return "剧本"
+	default:
+		return workType
 	}
-	return strings.TrimSpace(strings.Join(lines, "\n")), strings.ToLower(strings.TrimSpace(action))
 }
 
-func (a *AgentChat) executeAction(ctx context.Context, projectID, episodeID, stage, actionType, userMsg string) (*ChatAction, interface{}, error) {
+// GenerateWork runs a planning work generation step directly (skeleton/strategy/script).
+func (a *AgentChat) GenerateWork(ctx context.Context, projectID, episodeID, workType string) (string, error) {
+	switch workType {
+	case "skeleton":
+		return a.generateWork(ctx, projectID, episodeID, "skeleton", skeletonPrompt())
+	case "strategy":
+		return a.generateWork(ctx, projectID, episodeID, "strategy", strategyPrompt())
+	case "script":
+		return a.generateScript(ctx, projectID, episodeID)
+	default:
+		return "", fmt.Errorf("unsupported work type: %s", workType)
+	}
+}
+
+func (a *AgentChat) executeAction(ctx context.Context, userID, projectID, episodeID, stage string, intent *ChatActionIntent, userMsg string) (*ChatAction, interface{}, error) {
+	actionType := intent.Type
 	switch actionType {
 	case "analyze_events":
 		n, err := AnalyzeSourceEvents(ctx, a.DB, a.Vendor, projectID)
@@ -227,8 +315,18 @@ func (a *AgentChat) executeAction(ctx context.Context, projectID, episodeID, sta
 		return &ChatAction{Type: actionType, EpisodeID: episodeID, Result: map[string]interface{}{"shots": len(items)}}, items, err
 	case "extract_assets":
 		ReportProgress(ctx, "extract_assets", 40, "正在提取资产...")
-		n, err := ExtractAssetsFromEpisode(ctx, a.DB, a.Vendor, projectID, episodeID)
+		n, err := ExtractAssetsFromEpisode(ctx, a.DB, a.Vendor, userID, projectID, episodeID)
 		return &ChatAction{Type: actionType, EpisodeID: episodeID, Result: map[string]interface{}{"assets": n}}, nil, err
+	case "generate_shot_image":
+		shot, err := intent.ShotNumber()
+		if err != nil {
+			return nil, nil, err
+		}
+		return &ChatAction{
+			Type:      actionType,
+			EpisodeID: episodeID,
+			Result:    map[string]interface{}{"shot_number": shot},
+		}, nil, nil
 	default:
 		return nil, nil, fmt.Errorf("unknown action: %s", actionType)
 	}
@@ -251,7 +349,7 @@ func (a *AgentChat) generateWork(ctx context.Context, projectID, episodeID, work
 
 	resp, err := a.Vendor.TextRequest(ctx, adapter.DefaultTextModel, adapter.TextParams{
 		Messages: []adapter.TextMessage{
-			{Role: "system", Content: a.buildSystemPrompt("planning", a.buildProjectContext(projectID, episodeID, "planning"))},
+			{Role: "system", Content: a.buildWorkGenerationSystemPrompt(projectID, episodeID)},
 			{Role: "user", Content: prompt},
 		},
 		MaxTokens: 8000,
@@ -259,7 +357,7 @@ func (a *AgentChat) generateWork(ctx context.Context, projectID, episodeID, work
 	if err != nil {
 		return "", err
 	}
-	content := strings.TrimSpace(resp.Content)
+	content := SanitizeWorkContent(strings.TrimSpace(resp.Content))
 	a.saveAgentWork(projectID, episodeID, workType, content)
 	return content, nil
 }
@@ -301,7 +399,7 @@ func (a *AgentChat) generateScript(ctx context.Context, projectID, episodeID str
 	if err != nil {
 		return "", err
 	}
-	content := strings.TrimSpace(resp.Content)
+	content := SanitizeWorkContent(strings.TrimSpace(resp.Content))
 	a.saveAgentWork(projectID, episodeID, "script", content)
 	_, _ = a.DB.Exec("UPDATE o_episode SET script_content = ?, status = 'script_ready', updated_at = CURRENT_TIMESTAMP WHERE id = ?", content, episodeID)
 	return content, nil
@@ -321,14 +419,15 @@ func (a *AgentChat) generateStoryboard(ctx context.Context, projectID, episodeID
 	minShots := MinShotsForScript(script)
 	logger.CtxTrace(ctx, "storyboard parse from script min_shots=%d script_len=%d", minShots, len([]rune(script)))
 
-	var artStyle string
-	_ = a.DB.QueryRow("SELECT art_style FROM o_project WHERE id = ?", projectID).Scan(&artStyle)
+	var artStyle, videoRatio string
+	_ = a.DB.QueryRow("SELECT art_style, video_ratio FROM o_project WHERE id = ?", projectID).Scan(&artStyle, &videoRatio)
 
-	items, err := ParseScript(ctx, script, artStyle, a.SkillMgr, a.Vendor)
+	assets, _ := LoadProjectAssets(a.DB, projectID)
+	items, err := ParseScript(ctx, script, artStyle, assets, a.SkillMgr, a.Vendor)
 	if err != nil {
 		return nil, err
 	}
-	items = NormalizeStoryboardItems(items)
+	items = applyStoryboardStyleAnchors(items, videoRatio, artStyle)
 	a.persistStoryboard(projectID, episodeID, items)
 	logger.CtxTrace(ctx, "storyboard parsed from script shots=%d", len(items))
 	return items, nil
@@ -442,6 +541,14 @@ func (a *AgentChat) saveAgentWork(projectID, episodeID, workType, content string
 		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(id) DO UPDATE SET content = excluded.content, updated_at = CURRENT_TIMESTAMP
 	`, id, projectID, episodeID, workType, content)
+}
+
+func (a *AgentChat) persistPlanningWork(projectID, episodeID, workType, content string) {
+	content = SanitizeWorkContent(content)
+	a.saveAgentWork(projectID, episodeID, workType, content)
+	if workType == "script" {
+		_, _ = a.DB.Exec("UPDATE o_episode SET script_content = ?, status = 'script_ready', updated_at = CURRENT_TIMESTAMP WHERE id = ?", content, episodeID)
+	}
 }
 
 type chatMsg struct {

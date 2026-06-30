@@ -42,6 +42,7 @@ type TextParams struct {
 	Temperature    float32       `json:"temperature,omitempty"`
 	MaxTokens      int           `json:"max_tokens,omitempty"`
 	ResponseFormat string        `json:"response_format,omitempty"`
+	OnDelta        func(delta string) error `json:"-"`
 }
 
 // TextResponse is the result of a text generation request.
@@ -52,13 +53,14 @@ type TextResponse struct {
 
 // ImageParams holds parameters for image generation requests.
 type ImageParams struct {
-	Prompt         string `json:"prompt"`
-	NegativePrompt string `json:"negative_prompt,omitempty"`
-	Model          string `json:"model"`
-	Width          int    `json:"width,omitempty"`
-	Height         int    `json:"height,omitempty"`
-	Seed           *int64 `json:"seed,omitempty"`
-	AspectRatio    string `json:"aspect_ratio,omitempty"`
+	Prompt            string `json:"prompt"`
+	NegativePrompt    string `json:"negative_prompt,omitempty"`
+	Model             string `json:"model"`
+	Width             int    `json:"width,omitempty"`
+	Height            int    `json:"height,omitempty"`
+	Seed              *int64 `json:"seed,omitempty"`
+	AspectRatio       string `json:"aspect_ratio,omitempty"`
+	ReferenceImageURL string `json:"reference_image_url,omitempty"`
 }
 
 // ImageResponse is the result of an image generation request.

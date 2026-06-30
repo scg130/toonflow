@@ -68,7 +68,7 @@ func main() {
 		OutputDir:   cfg.OutputDir,
 		TaskTimeout: cfg.TaskTimeout,
 	}
-	pipeline := engine.New(v, skillMgr, pipelineCfg, broadcaster)
+	pipeline := engine.New(v, skillMgr, pipelineCfg, broadcaster, db.DB)
 
 	// Wire WebSocket generation handler
 	genSvc := ws.NewGenerationService(pipeline, queue, db.DB, cfg.OutputDir, cfg.TaskTimeout)

@@ -101,9 +101,9 @@
               <div class="empty-state-sm"><p>在左侧对话中让 AI 生成，或点击快捷指令</p></div>
             </div>
             <div class="planning-actions">
-              <button class="btn btn-sm btn-outline" data-quick="generate_skeleton">生成故事骨架</button>
-              <button class="btn btn-sm btn-outline" data-quick="generate_strategy">生成改编策略</button>
-              <button class="btn btn-sm btn-primary" data-quick="generate_script">生成剧本</button>
+              <button class="btn btn-sm btn-outline" data-quick="generate_skeleton">生成/重新生成 故事骨架</button>
+              <button class="btn btn-sm btn-outline" data-quick="generate_strategy">生成/重新生成 改编策略</button>
+              <button class="btn btn-sm btn-primary" data-quick="generate_script">生成/重新生成 剧本</button>
             </div>
           </div>
 
@@ -144,6 +144,13 @@
               <button class="btn btn-sm btn-outline" id="btn-add-scene">＋ 场景</button>
               <button class="btn btn-sm btn-outline" id="btn-add-prop">＋ 道具</button>
               <button class="btn btn-sm btn-outline" id="btn-extract-assets">从剧本提取资产</button>
+              <span id="asset-count-label" class="asset-count-label"></span>
+            </div>
+            <div class="asset-filter-tabs" id="asset-filter-tabs">
+              <button type="button" class="asset-filter-btn active" data-filter="all">全部</button>
+              <button type="button" class="asset-filter-btn" data-filter="role">👤 角色</button>
+              <button type="button" class="asset-filter-btn" data-filter="scene">🏞️ 场景</button>
+              <button type="button" class="asset-filter-btn" data-filter="prop">📦 道具</button>
             </div>
             <div id="asset-list" class="asset-list"></div>
           </div>
@@ -474,6 +481,10 @@
         <textarea id="asset-desc" rows="3" placeholder="角色的外貌特征、性格等"></textarea>
       </div>
       <div class="form-group">
+        <label>参考图 URL（可选）</label>
+        <input type="url" id="asset-file-url" placeholder="https://example.com/ref.png">
+      </div>
+      <div class="form-group">
         <label>类型</label>
         <select id="asset-type">
           <option value="role">角色</option>
@@ -504,6 +515,6 @@
   </div>
 </div>
 
-<script src="/static/js/app.js?v=20260630o"></script>
+<script src="/static/js/app.js?v=20260630ac"></script>
 </body>
 </html>

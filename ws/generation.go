@@ -90,6 +90,20 @@ func (gs *GenerationService) handleStartGenerate(cm *ConnManager, userID string,
 			return
 		}
 	}
+	if mode == "images" {
+		if err := service.RequireProjectAssets(gs.DB, req.ProjectID); err != nil {
+			cm.Broadcast(WSResponse{Code: 1, Msg: err.Error(), Step: "error"})
+			return
+		}
+	}
+	if mode == "video" {
+		for _, item := range t.Storyboard {
+			if item.ImageURL == "" {
+				cm.Broadcast(WSResponse{Code: 1, Msg: fmt.Sprintf("请先生成第 %d 镜图片后再生成视频", item.ShotNumber), Step: "error"})
+				return
+			}
+		}
+	}
 
 	cm.Broadcast(WSResponse{
 		Code: 0, Msg: "任务已接收", Step: "waiting", Progress: 0,

@@ -114,12 +114,14 @@ func (v *AgnesAIVendor) TextRequest(ctx interface{}, model string, params TextPa
 		Messages    []TextMessage `json:"messages"`
 		Temperature *float32      `json:"temperature,omitempty"`
 		MaxTokens   int           `json:"max_tokens,omitempty"`
+		Stream      bool          `json:"stream,omitempty"`
 	}
 
 	body := reqBody{
 		Model:     model,
 		Messages:  params.Messages,
 		MaxTokens: params.MaxTokens,
+		Stream:    params.OnDelta != nil,
 	}
 	if params.Temperature != 0 {
 		t := params.Temperature
@@ -137,6 +139,9 @@ func (v *AgnesAIVendor) TextRequest(ctx interface{}, model string, params TextPa
 	}
 	req.Header.Set("Authorization", "Bearer "+v.apiKey)
 	req.Header.Set("Content-Type", "application/json")
+	if body.Stream {
+		req.Header.Set("Accept", "text/event-stream")
+	}
 
 	resp, err := v.client.Do(req)
 	if err != nil {
@@ -147,6 +152,17 @@ func (v *AgnesAIVendor) TextRequest(ctx interface{}, model string, params TextPa
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("agnes chat error %d: %s", resp.StatusCode, string(raw))
+	}
+
+	if body.Stream {
+		content, err := ConsumeChatSSE(resp.Body, params.OnDelta)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(content) == "" {
+			return nil, fmt.Errorf("agnes chat empty stream content")
+		}
+		return &TextResponse{Content: content, Model: model}, nil
 	}
 
 	type chatResp struct {
@@ -201,6 +217,7 @@ func (v *AgnesAIVendor) ImageRequest(ctx interface{}, model string, params Image
 		Model  string `json:"model"`
 		Prompt string `json:"prompt"`
 		Size   string `json:"size"`
+		Image  string `json:"image,omitempty"`
 		ExtraBody struct {
 			ResponseFormat string `json:"response_format,omitempty"`
 		} `json:"extra_body,omitempty"`
@@ -211,6 +228,9 @@ func (v *AgnesAIVendor) ImageRequest(ctx interface{}, model string, params Image
 		Prompt:       params.Prompt,
 		Size:         size,
 		ReturnBase64: false,
+	}
+	if params.ReferenceImageURL != "" {
+		body.Image = params.ReferenceImageURL
 	}
 	body.ExtraBody.ResponseFormat = "url"
 

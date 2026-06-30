@@ -13,6 +13,7 @@ import (
 
 	"toonflow/adapter"
 	"toonflow/logger"
+	"toonflow/task"
 )
 
 // ShotClip is one generated video version for a storyboard shot.
@@ -381,8 +382,16 @@ func buildShotVideoPrompt(shot *storyboardShot, artStyle, stylePrompt string) (s
 	} else if artStyle != "" {
 		parts = append(parts, artStyle+" style")
 	}
+	parts = append(parts, StylePromptAnchors("", artStyle)...)
 	if cam := mapCameraToVideoMotion(shot.Camera); cam != "" {
 		parts = append(parts, cam)
+	}
+	if tags := motionBlurTags(task.StoryboardItem{
+		Description: shot.Description,
+		Camera:      shot.Camera,
+		Prompt:      shot.Prompt,
+	}); len(tags) > 0 {
+		parts = append(parts, tags...)
 	}
 	parts = append(parts, cinematicVideoEnhancers(artStyle)...)
 
@@ -403,16 +412,17 @@ func cinematicVideoEnhancers(artStyle string) []string {
 	core := []string{
 		"3D cinematic blockbuster film quality",
 		"Pixar Disney DreamWorks level animation movie",
-		"physically based rendering PBR materials",
-		"volumetric god rays and atmospheric depth",
+		"physically based rendering PBR materials ambient occlusion",
+		"volumetric god rays atmospheric scattering light shafts",
 		"cinematic color grading teal and orange",
-		"shallow depth of field bokeh",
+		"shallow depth of field bokeh rack focus capable",
+		"subsurface scattering skin translucency realistic flesh",
+		"metallic PBR specular reflectivity on hard surfaces",
 		"subtle film grain anamorphic lens",
 		"smooth motivated camera movement",
 		"natural fluid character animation",
 		"realistic hair cloth and particle physics",
-		"high fidelity textures subsurface scattering",
-		"epic dramatic lighting rim light",
+		"epic dramatic lighting rim light global illumination",
 		"immersive movie scene ultra detailed 8K",
 	}
 	if strings.Contains(style, "2d") || strings.Contains(style, "flat") || strings.Contains(style, "pixel") {
@@ -433,9 +443,15 @@ func mapCameraToVideoMotion(camera string) string {
 	}
 	lower := strings.ToLower(c)
 	switch {
-	case strings.Contains(lower, "推近") || strings.Contains(lower, "push"):
+	case strings.Contains(lower, "dolly zoom") || strings.Contains(lower, "希区库克") || strings.Contains(lower, "vertigo"):
+		return "dolly zoom vertigo effect, background compression while subject scales"
+	case strings.Contains(lower, "rack focus") || strings.Contains(lower, "跟焦") || strings.Contains(lower, "移焦"):
+		return "rack focus pull between foreground and background planes"
+	case strings.Contains(lower, "slow motion") || strings.Contains(lower, "慢镜头") || strings.Contains(lower, "升格"):
+		return "slow motion high frame rate capture, smooth temporal detail"
+	case strings.Contains(lower, "推近") || strings.Contains(lower, "push") || strings.Contains(lower, "dolly in"):
 		return "slow cinematic dolly push-in toward subject"
-	case strings.Contains(lower, "拉远") || strings.Contains(lower, "pull"):
+	case strings.Contains(lower, "拉远") || strings.Contains(lower, "pull") || strings.Contains(lower, "dolly out"):
 		return "smooth dolly pull-back revealing environment"
 	case strings.Contains(lower, "环绕") || strings.Contains(lower, "orbit"):
 		return "orbital camera circling around subject"
@@ -447,6 +463,10 @@ func mapCameraToVideoMotion(camera string) string {
 		return "tracking shot following subject movement"
 	case strings.Contains(lower, "摇") || strings.Contains(lower, "pan"):
 		return "smooth horizontal pan camera movement"
+	case strings.Contains(lower, "tilt") || strings.Contains(lower, "俯仰"):
+		return "cinematic tilt camera movement"
+	case strings.Contains(lower, "crane") || strings.Contains(lower, "升降"):
+		return "crane shot vertical camera movement"
 	case strings.Contains(lower, "固定") || strings.Contains(lower, "静止") || strings.Contains(lower, "static"):
 		return "locked-off tripod shot with living scene motion"
 	case strings.Contains(lower, "手持") || strings.Contains(lower, "handheld"):
