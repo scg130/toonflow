@@ -96,14 +96,22 @@ func (a *AgentChat) HandleMessage(ctx context.Context, projectID, episodeID, sta
 		ReportProgress(ctx, "chat", 100, "完成")
 	}
 
-	if out.Work == nil && episodeID != "" && LooksLikeStoryboardTable(reply) {
-		if items, _ := parseStoryboardResponse(reply); StoryboardScore(items) > 1 {
-			items = NormalizeStoryboardItems(items)
-			a.persistStoryboard(projectID, episodeID, items)
-			out.Work = items
-			logger.CtxInfo(ctx, "storyboard auto-saved from chat reply shots=%d", len(items))
+		if out.Work == nil && episodeID != "" && LooksLikeStoryboardTable(reply) {
+			if items, _ := parseStoryboardResponse(reply); len(items) >= 3 {
+				var script string
+				_ = a.DB.QueryRow("SELECT script_content FROM o_episode WHERE id = ?", episodeID).Scan(&script)
+				if script == "" {
+					script = a.loadWork(projectID, episodeID, "script")
+				}
+				minShots := MinShotsForScript(script)
+				if IsAdequateStoryboard(items, minShots) {
+					items = NormalizeStoryboardItems(items)
+					a.persistStoryboard(projectID, episodeID, items)
+					out.Work = items
+					logger.CtxTrace(ctx, "storyboard auto-saved from chat reply shots=%d", len(items))
+				}
+			}
 		}
-	}
 
 	a.saveMessage(projectID, episodeID, "user", userMsg, "")
 	a.saveMessage(projectID, episodeID, "assistant", out.Reply, actionType)
@@ -145,8 +153,9 @@ func (a *AgentChat) buildSystemPrompt(stage, projectCtx string) string {
 规则：
 1. 用中文回复，简洁专业，说明下一步建议
 2. 当用户明确要求执行某步骤，或上下文已满足条件时，在回复最后一行输出 ACTION:xxx
-3. 分集前需先导入原文；生成剧本前需先分集；生成分镜前需先有剧本
-4. 不要输出虚假结果，执行动作由系统自动完成`, stage, projectCtx)
+	3. 分集前需先导入原文；生成剧本前需先分集；生成分镜前需先有剧本
+	4. 生成分镜时必须覆盖剧本全部场次，不得只输出 1 镜
+	5. 不要输出虚假结果，执行动作由系统自动完成`, stage, projectCtx)
 }
 
 func (a *AgentChat) buildProjectContext(projectID, episodeID, stage string) string {
@@ -299,13 +308,6 @@ func (a *AgentChat) generateScript(ctx context.Context, projectID, episodeID str
 }
 
 func (a *AgentChat) generateStoryboard(ctx context.Context, projectID, episodeID string) ([]task.StoryboardItem, error) {
-	if fromChat := a.storyboardFromRecentChat(projectID, episodeID, 10); StoryboardScore(fromChat) > 1 {
-		fromChat = NormalizeStoryboardItems(fromChat)
-		a.persistStoryboard(projectID, episodeID, fromChat)
-		logger.CtxInfo(ctx, "storyboard loaded from chat history shots=%d", len(fromChat))
-		return fromChat, nil
-	}
-
 	script := a.loadWork(projectID, episodeID, "script")
 	if script == "" {
 		var s string
@@ -316,6 +318,9 @@ func (a *AgentChat) generateStoryboard(ctx context.Context, projectID, episodeID
 		return nil, fmt.Errorf("请先生成剧本")
 	}
 
+	minShots := MinShotsForScript(script)
+	logger.CtxTrace(ctx, "storyboard parse from script min_shots=%d script_len=%d", minShots, len([]rune(script)))
+
 	var artStyle string
 	_ = a.DB.QueryRow("SELECT art_style FROM o_project WHERE id = ?", projectID).Scan(&artStyle)
 
@@ -325,18 +330,25 @@ func (a *AgentChat) generateStoryboard(ctx context.Context, projectID, episodeID
 	}
 	items = NormalizeStoryboardItems(items)
 	a.persistStoryboard(projectID, episodeID, items)
+	logger.CtxTrace(ctx, "storyboard parsed from script shots=%d", len(items))
 	return items, nil
 }
 
 func (a *AgentChat) refineStoryboardWork(ctx context.Context, projectID, episodeID, aiContent string, work interface{}) interface{} {
 	items, _ := work.([]task.StoryboardItem)
-	fromAI, _ := parseStoryboardResponse(strings.TrimSpace(aiContent))
-	fromChat := a.storyboardFromRecentChat(projectID, episodeID, 10)
+	script := a.loadWork(projectID, episodeID, "script")
+	if script == "" {
+		var s string
+		_ = a.DB.QueryRow("SELECT script_content FROM o_episode WHERE id = ?", episodeID).Scan(&s)
+		script = s
+	}
+	minShots := MinShotsForScript(script)
 
-	best := PickBestStoryboard(items, fromAI, fromChat)
-	if StoryboardScore(best) > StoryboardScore(items) {
+	fromAI, _ := parseStoryboardResponse(strings.TrimSpace(aiContent))
+	best := PickBestStoryboard(items, fromAI)
+	if IsAdequateStoryboard(best, minShots) && StoryboardScore(best) > StoryboardScore(items) {
 		best = NormalizeStoryboardItems(best)
-		logger.CtxInfo(ctx, "storyboard refined shots=%d", len(best))
+		logger.CtxTrace(ctx, "storyboard refined shots=%d", len(best))
 		a.persistStoryboard(projectID, episodeID, best)
 		return best
 	}

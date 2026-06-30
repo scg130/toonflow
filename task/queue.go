@@ -37,6 +37,7 @@ func (q *Queue) Submit(t *Task, fn func(context.Context, *Task) error) {
 
 	if active > q.maxConc {
 		t.SetError("max concurrent tasks reached")
+		q.mu.Lock()
 		delete(q.tasks, t.ID)
 		q.addHistoryLocked(t)
 		q.mu.Unlock()
@@ -81,6 +82,38 @@ func (q *Queue) GetTask(id string) (*Task, bool) {
 	defer q.mu.Unlock()
 	t, ok := q.tasks[id]
 	return t, ok
+}
+
+// AllTasksForUser returns active and recent tasks belonging to userID, newest first.
+func (q *Queue) AllTasksForUser(userID string) []*Task {
+	if userID == "" {
+		return nil
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	result := make([]*Task, 0, len(q.tasks)+len(q.history))
+	for _, t := range q.history {
+		if t.UserID == userID {
+			result = append(result, t.Clone())
+		}
+	}
+	for _, t := range q.tasks {
+		if t.UserID == userID {
+			result = append(result, t.Clone())
+		}
+	}
+	sortTasksByTime(result)
+	return result
+}
+
+func sortTasksByTime(tasks []*Task) {
+	for i := 0; i < len(tasks); i++ {
+		for j := i + 1; j < len(tasks); j++ {
+			if tasks[j].CreatedAt.After(tasks[i].CreatedAt) {
+				tasks[i], tasks[j] = tasks[j], tasks[i]
+			}
+		}
+	}
 }
 
 // AllTasks returns copies of active and recent completed tasks.

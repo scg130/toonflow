@@ -15,6 +15,7 @@ const (
 	StateParsing    State = "parsing"
 	StateStoryboard State = "storyboarding"
 	StateDrawing    State = "drawing"
+	StateVideoGen   State = "video_gen"
 	StateMerging    State = "merging"
 	StateDone       State = "done"
 	StateError      State = "error"
@@ -25,7 +26,11 @@ type Task struct {
 	ID            string           `json:"id"`
 	ProjectID     string           `json:"project_id,omitempty"`
 	UserID        string           `json:"user_id"`
-	Script        string           `json:"script"`
+	Title         string           `json:"title,omitempty"`
+	ProjectName   string           `json:"project_name,omitempty"`
+	EpisodeTitle  string           `json:"episode_title,omitempty"`
+	EpisodeNum    int              `json:"episode_num,omitempty"`
+	Script        string           `json:"-"`
 	Style         string           `json:"style"`
 	Mode          string           `json:"mode,omitempty"` // full, parse, images, video
 	EpisodeID     string           `json:"episode_id,omitempty"`

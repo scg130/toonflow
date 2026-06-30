@@ -67,7 +67,7 @@ func AnalyzeSourceEvents(ctx context.Context, db *sql.DB, v adapter.Vendor, proj
 	for i, ch := range chapters {
 		pct := 10 + float32(i)*80/float32(total)
 		ReportProgress(ctx, "analyze_events", pct, fmt.Sprintf("分析章节 %d/%d: %s", i+1, total, ch.name))
-		logger.CtxInfo(ctx, "analyze chapter start name=%s id=%s", ch.name, ch.id)
+		logger.CtxTrace(ctx, "analyze chapter start name=%s id=%s", ch.name, ch.id)
 		preview := ch.content
 		if len([]rune(preview)) > 6000 {
 			preview = string([]rune(preview)[:6000])
@@ -90,7 +90,7 @@ func AnalyzeSourceEvents(ctx context.Context, db *sql.DB, v adapter.Vendor, proj
 			logger.CtxError(ctx, err, "analyze chapter save failed name=%s", ch.name)
 			return count, err
 		}
-		logger.CtxInfo(ctx, "analyze chapter done name=%s", ch.name)
+		logger.CtxTrace(ctx, "analyze chapter done name=%s", ch.name)
 		count++
 	}
 	ReportProgress(ctx, "analyze_events", 100, fmt.Sprintf("事件分析完成，共 %d 章", count))

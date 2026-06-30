@@ -1,10 +1,8 @@
 package api
 
 import (
-	"context"
 	"net/http"
 	"strconv"
-	"time"
 
 	"toonflow/service"
 
@@ -34,6 +32,7 @@ func (r *Router) shotClipGenerateHandler(c *gin.Context) {
 	if !ok {
 		return
 	}
+	userID := currentUserID(c)
 	episodeID := c.Param("epId")
 	shotNum, err := strconv.Atoi(c.Param("shotNum"))
 	if err != nil || shotNum <= 0 {
@@ -41,15 +40,20 @@ func (r *Router) shotClipGenerateHandler(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Minute)
-	defer cancel()
-
-	clip, err := service.GenerateShotClip(ctx, r.db.DB, r.resolveVendor(), r.outputDir, projectID, episodeID, shotNum)
+	t, err := r.submitShotVideoTask(userID, projectID, episodeID, shotNum)
 	if err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, clip)
+	c.JSON(http.StatusAccepted, gin.H{
+		"task_id":        t.ID,
+		"title":          t.Title,
+		"state":          t.State,
+		"project_id":     t.ProjectID,
+		"episode_id":     t.EpisodeID,
+		"shot_number":    shotNum,
+		"generate_shots": t.GenerateShots,
+	})
 }
 
 func (r *Router) shotClipSelectHandler(c *gin.Context) {
@@ -116,7 +120,7 @@ func (r *Router) timelineExportHandler(c *gin.Context) {
 		return
 	}
 	var req struct {
-		EpisodeID string              `json:"episode_id" binding:"required"`
+		EpisodeID string                `json:"episode_id" binding:"required"`
 		Timeline  *service.TimelineEdit `json:"timeline"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {

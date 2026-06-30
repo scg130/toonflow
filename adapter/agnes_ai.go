@@ -218,7 +218,7 @@ func (v *AgnesAIVendor) ImageRequest(ctx interface{}, model string, params Image
 	if err != nil {
 		return nil, fmt.Errorf("marshal image request: %w", err)
 	}
-	logger.CtxInfo(c, "agnes image api request model=%s size=%s body=%s", model, size, string(payload))
+	logger.CtxTrace(c, "agnes image api request model=%s size=%s body=%s", model, size, string(payload))
 
 	req, err := http.NewRequestWithContext(c, "POST", v.baseURL+"/images/generations", bytes.NewReader(payload))
 	if err != nil {
@@ -235,7 +235,7 @@ func (v *AgnesAIVendor) ImageRequest(ctx interface{}, model string, params Image
 
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(resp.Body)
-		logger.CtxInfo(c, "agnes image api response status=%d body=%s", resp.StatusCode, sanitizeImageJSONForLog(raw))
+		logger.CtxTrace(c, "agnes image api response status=%d body=%s", resp.StatusCode, sanitizeImageJSONForLog(raw))
 		return nil, fmt.Errorf("agnes image error %d: %s", resp.StatusCode, string(raw))
 	}
 
@@ -243,7 +243,7 @@ func (v *AgnesAIVendor) ImageRequest(ctx interface{}, model string, params Image
 	if err != nil {
 		return nil, fmt.Errorf("read image resp: %w", err)
 	}
-	logger.CtxInfo(c, "agnes image api response status=%d body=%s", resp.StatusCode, sanitizeImageJSONForLog(raw))
+	logger.CtxTrace(c, "agnes image api response status=%d body=%s", resp.StatusCode, sanitizeImageJSONForLog(raw))
 
 	var respData map[string]interface{}
 	if err := json.Unmarshal(raw, &respData); err != nil {
@@ -255,14 +255,14 @@ func (v *AgnesAIVendor) ImageRequest(ctx interface{}, model string, params Image
 		return nil, err
 	}
 	if imgURL != "" {
-		logger.CtxInfo(c, "agnes image parsed remote_url=%s", imgURL)
+		logger.CtxTrace(c, "agnes image parsed remote_url=%s", imgURL)
 		return &ImageResponse{DataURL: imgURL, RemoteURL: imgURL, Model: model}, nil
 	}
 	if b64 == "" {
 		return nil, fmt.Errorf("agnes image empty data: %s", truncateForError(string(raw), 400))
 	}
 
-	logger.CtxInfo(c, "agnes image parsed base64 len=%d (no remote url)", len(b64))
+	logger.CtxTrace(c, "agnes image parsed base64 len=%d (no remote url)", len(b64))
 
 	// 校验base64合法性
 	_, err = base64.StdEncoding.DecodeString(b64)
@@ -467,7 +467,7 @@ func (v *AgnesAIVendor) VideoRequest(ctx interface{}, model string, params Video
 		NumInferenceSteps: 30,
 	}
 	if body.NegativePrompt == "" {
-		body.NegativePrompt = "static image, frozen, no motion, blurry, distorted"
+		body.NegativePrompt = "static image, frozen frame, no motion, blurry, low quality, distorted, watermark"
 	}
 
 	payload, err := json.Marshal(body)
@@ -541,7 +541,7 @@ func (v *AgnesAIVendor) pollVideoResult(ctx context.Context, videoID, model stri
 		resp.Body.Close()
 
 		if resp.StatusCode == http.StatusTooManyRequests {
-			logger.CtxInfo(ctx, "agnes video poll 429, backoff %s video_id=%s", backoff, videoID)
+			logger.CtxTrace(ctx, "agnes video poll 429, backoff %s video_id=%s", backoff, videoID)
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()

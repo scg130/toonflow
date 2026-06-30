@@ -52,6 +52,42 @@ func TestStoryboardScorePenalizesFallback(t *testing.T) {
 	}
 }
 
+func TestStoryboardScorePenalizesSingleShot(t *testing.T) {
+	single := []task.StoryboardItem{{Description: "one shot only"}}
+	multi := []task.StoryboardItem{{Description: "a"}, {Description: "b"}}
+	if StoryboardScore(single) >= StoryboardScore(multi) {
+		t.Fatal("single shot should score lower than multi")
+	}
+}
+
+func TestMinShotsForScript(t *testing.T) {
+	short := MinShotsForScript("简短剧本")
+	if short < 4 {
+		t.Fatalf("expected min 4 for short script, got %d", short)
+	}
+	long := strings.Repeat("这是一段较长的剧本内容，包含对白和动作描述。", 100)
+	if MinShotsForScript(long) < 8 {
+		t.Fatalf("expected more shots for long script, got %d", MinShotsForScript(long))
+	}
+	scenes := "【第一场 柳树下】\n对白\n【第二场 战场】\n动作\n【第三场 回忆】\n结尾"
+	if MinShotsForScript(scenes) < 3 {
+		t.Fatalf("expected at least scene count")
+	}
+}
+
+func TestIsAdequateStoryboard(t *testing.T) {
+	if IsAdequateStoryboard([]task.StoryboardItem{{Description: "x"}}, 4) {
+		t.Fatal("single shot should not be adequate when min is 4")
+	}
+	items := make([]task.StoryboardItem, 5)
+	for i := range items {
+		items[i] = task.StoryboardItem{Description: "shot"}
+	}
+	if !IsAdequateStoryboard(items, 4) {
+		t.Fatal("5 shots should be adequate for min 4")
+	}
+}
+
 func TestParseRealVCScript(t *testing.T) {
 	data, err := os.ReadFile("/tmp/sb.txt")
 	if err != nil {

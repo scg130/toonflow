@@ -1,12 +1,27 @@
 /**
- * ToonFlow — 短剧 AI 创作平台
- * 对标 ToonFlow 产品逻辑：项目制工作流、资产管理、分镜编辑、视频轨道
+ * AI-VIDEO — 短剧 AI 创作平台
+ * AI-VIDEO 产品逻辑：项目制工作流、资产管理、分镜编辑、视频轨道
  */
 (function () {
   'use strict';
 
+  const AUTH_TOKEN_KEY = 'ai_video_token';
+  const LEGACY_AUTH_TOKEN_KEY = 'toonflow_token';
+  const GENERAL_SETTINGS_KEY = 'ai_video_general_settings';
+  const LEGACY_GENERAL_SETTINGS_KEY = 'toonflow_general_settings';
+
+  function migrateStorageKey(newKey, legacyKey) {
+    const legacy = localStorage.getItem(legacyKey);
+    if (legacy && !localStorage.getItem(newKey)) {
+      localStorage.setItem(newKey, legacy);
+    }
+    if (legacy) localStorage.removeItem(legacyKey);
+  }
+  migrateStorageKey(AUTH_TOKEN_KEY, LEGACY_AUTH_TOKEN_KEY);
+  migrateStorageKey(GENERAL_SETTINGS_KEY, LEGACY_GENERAL_SETTINGS_KEY);
+
   // ======================== 状态 ========================
-  let authToken = localStorage.getItem('toonflow_token') || '';
+  let authToken = localStorage.getItem(AUTH_TOKEN_KEY) || '';
   let currentUser = null;
   let editingProjectId = null;
   let ws = null;
@@ -59,6 +74,12 @@
     modalNewProject: document.getElementById('modal-new-project'),
     modalAsset: document.getElementById('modal-asset'),
     modalVendor: document.getElementById('modal-vendor'),
+    modalMediaPreview: document.getElementById('modal-media-preview'),
+    mediaPreviewTitle: document.getElementById('media-preview-title'),
+    mediaPreviewImage: document.getElementById('media-preview-image'),
+    mediaPreviewVideo: document.getElementById('media-preview-video'),
+    mediaPreviewPanel: document.getElementById('media-preview-panel'),
+    mediaPreviewResizeGrip: document.getElementById('media-preview-resize-grip'),
     loginOverlay: document.getElementById('login-overlay'),
     userBadge: document.getElementById('user-badge'),
     btnLogout: document.getElementById('btn-logout'),
@@ -119,7 +140,7 @@
   function handleLogout(clearMsg) {
     authToken = '';
     currentUser = null;
-    localStorage.removeItem('toonflow_token');
+    localStorage.removeItem(AUTH_TOKEN_KEY);
     if (ws) { ws.close(); ws = null; }
     updateUserUI();
     showLogin();
@@ -137,7 +158,7 @@
     }).then(data => {
       authToken = data.token;
       currentUser = { id: data.user_id, username: data.username };
-      localStorage.setItem('toonflow_token', authToken);
+      localStorage.setItem(AUTH_TOKEN_KEY, authToken);
       hideLogin();
       updateUserUI();
       bootApp();
@@ -259,6 +280,9 @@
 
   // ======================== WS 消息处理 ========================
   function onWSMessage(msg) {
+    if (msg.data && msg.data.task_update) {
+      loadTasks();
+    }
     if (msg.step === 'chat_progress') {
       if (msg.data && msg.data.project_id && currentProject && msg.data.project_id !== currentProject.id) {
         return;
@@ -308,6 +332,7 @@
         setStatus('🎉 生成完成！');
         updateProgress(100);
         isGenerating = false;
+        loadTasks();
         if (msg.data && msg.data.storyboard) {
           storyboards = normalizeStoryboards(msg.data.storyboard);
           renderStoryboards();
@@ -322,10 +347,12 @@
       case 'error':
         setStatus('❌ ' + (msg.msg || '生成失败'));
         isGenerating = false;
+        loadTasks();
         toast('错误: ' + (msg.msg || '未知错误'), 'error');
         break;
       default:
         if (msg.progress > 0) updateProgress(msg.progress);
+        if (msg.data && msg.data.task_id) loadTasks();
     }
   }
 
@@ -552,7 +579,7 @@
         const box = document.getElementById('wb-chat-messages');
         if (!box) return;
         if (!msgs.length) {
-          box.innerHTML = '<div class="wb-chat-msg assistant">你好！我是 ToonFlow 创作助手。\n\n建议流程：\n1. 导入原文\n2. 事件分析 + AI 分集\n3. 选择一集，生成故事骨架 → 改编策略 → 剧本\n4. 生成分镜 → 图片 → 视频\n\n直接告诉我你想做什么即可。</div>';
+          box.innerHTML = '<div class="wb-chat-msg assistant">你好！我是 AI-VIDEO 创作助手。\n\n建议流程：\n1. 导入原文\n2. 事件分析 + AI 分集\n3. 选择一集，生成故事骨架 → 改编策略 → 剧本\n4. 生成分镜 → 图片 → 视频\n\n直接告诉我你想做什么即可。</div>';
           return;
         }
         box.innerHTML = msgs.map(m =>
@@ -728,19 +755,44 @@
       toast('该分镜图片缺少 Agnes 远程链接，请先重新生成图片再生成视频', 'warning');
       return Promise.resolve();
     }
-    toast('正在生成第 ' + shotNumber + ' 镜视频…', 'info');
+    toast('正在提交第 ' + shotNumber + ' 镜视频任务…', 'info');
     return apiFetch('/api/projects/' + currentProject.id + '/episodes/' + currentEpisode.id +
       '/shots/' + shotNumber + '/generate-video', {
       method: 'POST',
-      signal: AbortSignal.timeout(15 * 60 * 1000),
     }).then(r => {
+      if (r.status === 202) return r.json();
       if (!r.ok) return r.json().then(j => { throw new Error(j.error || '生成失败'); });
       return r.json();
     }).then(res => {
+      if (res.task_id) {
+        toast('任务已提交: ' + (res.title || res.task_id), 'info');
+        loadTasks();
+        return waitForTask(res.task_id).then(() => {
+          loadShotClips();
+          toast('第 ' + shotNumber + ' 镜视频生成完成', 'success');
+        });
+      }
       const srcLabel = res.source === 'ai' ? 'AI 图生视频' : '图片动态化(兜底)';
       toast('第 ' + shotNumber + ' 镜视频 v' + res.version + ' 已生成 · ' + srcLabel, res.source === 'ai' ? 'success' : 'info');
       loadShotClips();
-    }).catch(err => { toast('生成失败: ' + (err.message || err), 'error'); });
+    }).catch(err => { toast('生成失败: ' + (err.message || err), 'error'); loadTasks(); });
+  }
+
+  function waitForTask(taskId, timeoutMs) {
+    timeoutMs = timeoutMs || 15 * 60 * 1000;
+    const start = Date.now();
+    return new Promise((resolve, reject) => {
+      function poll() {
+        apiFetch('/api/tasks').then(r => r.json()).then(list => {
+          const t = (list || []).find(x => x.id === taskId);
+          if (t && t.state === 'done') { resolve(t); return; }
+          if (t && t.state === 'error') { reject(new Error(t.error_message || '任务失败')); return; }
+          if (Date.now() - start > timeoutMs) { reject(new Error('任务超时')); return; }
+          setTimeout(poll, 2000);
+        }).catch(reject);
+      }
+      poll();
+    });
   }
 
   async function batchGenerateShotVideos() {
@@ -949,20 +1001,108 @@
     renderTimelineEditor();
   }
 
-  function renderShotClipVersions(shotNumber) {
-    const versions = clipsForShot(shotNumber);
-    if (!versions.length) {
-      return '<div class="shot-clip-versions"><div class="shot-clip-versions-title">视频版本：暂无</div></div>';
+  function primaryClipForShot(shotNumber) {
+    const clips = clipsForShot(shotNumber);
+    if (!clips.length) return null;
+    const selected = clips.find(c => c.is_selected);
+    if (selected) return selected;
+    return clips.slice().sort((a, b) => (b.version || 0) - (a.version || 0))[0];
+  }
+
+  function openMediaPreview(type, url, title) {
+    if (!url || !els.modalMediaPreview) return;
+    if (els.mediaPreviewTitle) els.mediaPreviewTitle.textContent = title || '预览';
+    if (els.mediaPreviewImage) els.mediaPreviewImage.style.display = 'none';
+    if (els.mediaPreviewVideo) {
+      els.mediaPreviewVideo.pause();
+      els.mediaPreviewVideo.style.display = 'none';
+      els.mediaPreviewVideo.removeAttribute('src');
     }
-    return `<div class="shot-clip-versions">
-      <div class="shot-clip-versions-title">视频版本 (${versions.length})</div>
-      <div class="shot-clip-version-list">${versions.map(v => `
-        <div class="shot-clip-version ${v.is_selected ? 'selected' : ''}" title="v${v.version}">
-          <button type="button" class="shot-clip-version-del" data-clip-id="${escapeHtml(v.id)}">×</button>
-          <video src="${escapeHtml(v.file_url)}" muted data-clip-id="${escapeHtml(v.id)}"></video>
-          <div class="shot-clip-version-meta">v${v.version}${v.is_selected ? ' ✓' : ''}${v.source === 'fallback' ? ' ·兜底' : ''}</div>
-        </div>
-      `).join('')}</div>
+    if (type === 'image' && els.mediaPreviewImage) {
+      els.mediaPreviewImage.src = url;
+      els.mediaPreviewImage.style.display = 'block';
+    } else if (els.mediaPreviewVideo) {
+      els.mediaPreviewVideo.src = url;
+      els.mediaPreviewVideo.style.display = 'block';
+      els.mediaPreviewVideo.play().catch(() => {});
+    }
+    els.modalMediaPreview.style.display = 'flex';
+  }
+
+  function closeMediaPreview() {
+    if (!els.modalMediaPreview) return;
+    if (els.mediaPreviewVideo) {
+      els.mediaPreviewVideo.pause();
+      els.mediaPreviewVideo.removeAttribute('src');
+      els.mediaPreviewVideo.load();
+    }
+    if (els.mediaPreviewImage) els.mediaPreviewImage.removeAttribute('src');
+    els.modalMediaPreview.style.display = 'none';
+  }
+
+  function renderStoryboardPreviewButtons(sb, i) {
+    const shotNum = sb.shot_number || i + 1;
+    const clip = primaryClipForShot(shotNum);
+    const imageTitle = `第 ${shotNum} 镜 — 图片`;
+    const imageBtn = sb.image_url
+      ? `<button type="button" class="btn btn-sm btn-outline sb-media-preview-btn" data-preview-type="image" data-url="${escapeHtml(sb.image_url)}" data-title="${escapeHtml(imageTitle)}">🖼 预览图片</button>`
+      : '<button type="button" class="btn btn-sm btn-outline" disabled title="暂无图片">🖼 预览图片</button>';
+
+    let videoBtn;
+    if (clip && clip.file_url) {
+      const videoTitle = `第 ${shotNum} 镜 — 视频 v${clip.version}`;
+      videoBtn = `<button type="button" class="btn btn-sm btn-outline sb-media-preview-btn" data-preview-type="video" data-url="${escapeHtml(clip.file_url)}" data-title="${escapeHtml(videoTitle)}">▶ 预览视频</button>`;
+    } else {
+      videoBtn = '<button type="button" class="btn btn-sm btn-outline" disabled title="暂无视频">▶ 预览视频</button>';
+    }
+    return imageBtn + videoBtn;
+  }
+
+  function renderStoryboardMediaThumb(sb, i) {
+    const shotNum = sb.shot_number || i + 1;
+    const versions = clipsForShot(shotNum);
+    const clip = primaryClipForShot(shotNum);
+    const imageTitle = `第 ${shotNum} 镜 — 图片`;
+
+    const imageBlock = sb.image_url
+      ? `<div class="sb-thumb sb-thumb-image">
+           <img src="${escapeHtml(sb.image_url)}" alt="${escapeHtml(imageTitle)}" loading="lazy" decoding="async">
+           <button type="button" class="sb-thumb-hit sb-media-preview-btn" data-preview-type="image" data-url="${escapeHtml(sb.image_url)}" data-title="${escapeHtml(imageTitle)}" title="点击放大预览" aria-label="预览图片"></button>
+         </div>`
+      : '<div class="sb-thumb sb-thumb-empty">暂无图片</div>';
+
+    let videoBlock = '<div class="sb-thumb sb-thumb-empty">暂无视频</div>';
+    let videoMeta = '';
+    if (clip && clip.file_url) {
+      const videoTitle = `第 ${shotNum} 镜 — 视频 v${clip.version}`;
+      const poster = sb.image_url ? ` poster="${escapeHtml(sb.image_url)}"` : '';
+      videoBlock = `<div class="sb-thumb sb-thumb-video">
+          <video src="${escapeHtml(clip.file_url)}" muted playsinline preload="metadata"${poster}></video>
+          <span class="sb-thumb-play" aria-hidden="true">▶</span>
+          <button type="button" class="sb-thumb-hit sb-media-preview-btn" data-preview-type="video" data-url="${escapeHtml(clip.file_url)}" data-title="${escapeHtml(videoTitle)}" title="点击放大预览" aria-label="预览视频"></button>
+        </div>`;
+      videoMeta = `<div class="sb-media-video-meta">v${clip.version}${clip.is_selected ? ' ✓' : ''}${clip.source === 'fallback' ? ' ·兜底' : ''}</div>`;
+    }
+
+    const versionStrip = versions.length > 1
+      ? `<div class="sb-version-strip" title="切换版本">${versions.map(v => `
+          <button type="button" class="sb-version-chip ${v.is_selected ? 'selected' : ''}" data-clip-id="${escapeHtml(v.id)}" title="v${v.version}${v.source === 'fallback' ? ' 兜底' : ''}">
+            v${v.version}${v.is_selected ? '✓' : ''}
+            <span class="sb-version-del" data-clip-id="${escapeHtml(v.id)}" title="删除">×</span>
+          </button>`).join('')}</div>`
+      : '';
+
+    return `<div class="storyboard-card-media">
+      <div class="sb-media-block">
+        <div class="sb-media-label">图片</div>
+        ${imageBlock}
+      </div>
+      <div class="sb-media-block">
+        <div class="sb-media-label">视频</div>
+        ${videoBlock}
+        ${videoMeta}
+        ${versionStrip}
+      </div>
     </div>`;
   }
 
@@ -1012,6 +1152,7 @@
         : '开始为 ' + selectedShots.length + ' 个分镜生成图片', 'info');
     }
     setStatus('发送生成任务...');
+    setTimeout(loadTasks, 500);
   }
 
   function generateShotImage(shotNumber) {
@@ -1020,6 +1161,7 @@
       return;
     }
     startGeneration('images', [shotNumber]);
+    loadTasks();
   }
 
   // ======================== 资产 CRUD ========================
@@ -1130,6 +1272,7 @@
           </label>
           <div class="storyboard-card-header-right">
             <span class="storyboard-card-duration">${sb.duration || 3}s</span>
+            ${renderStoryboardPreviewButtons(sb, i)}
             <button class="btn btn-sm btn-outline sb-gen-image-btn" type="button" data-shot="${sb.shot_number || i + 1}">🎨 生成图片</button>
             <button class="btn btn-sm btn-primary sb-gen-video-btn" type="button" data-shot="${sb.shot_number || i + 1}">🎬 生成视频</button>
           </div>
@@ -1153,14 +1296,8 @@
               </div>
             </div>
           </div>
-          <div class="storyboard-card-preview">
-            ${sb.image_url ?
-              `<img src="${escapeHtml(sb.image_url)}" alt="Shot ${sb.shot_number}">` :
-              `<div class="storyboard-card-placeholder">等待生成</div>`
-            }
-          </div>
+          ${renderStoryboardMediaThumb(sb, i)}
         </div>
-        ${renderShotClipVersions(sb.shot_number || i + 1)}
         ${sb.image_url && !sb.image_remote_url ?
           '<div class="shot-remote-url-hint">⚠️ 图片需重新生成才能走 Agnes 图生视频</div>' : ''}
       </div>
@@ -1177,17 +1314,18 @@
         generateShotVideo(parseInt(btn.dataset.shot, 10));
       });
     });
-    els.storyboardList.querySelectorAll('.shot-clip-version-del').forEach(btn => {
+    els.storyboardList.querySelectorAll('.sb-version-del').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         e.preventDefault();
         deleteShotClip(btn.dataset.clipId);
       });
     });
-    els.storyboardList.querySelectorAll('.shot-clip-version video').forEach(v => {
-      v.addEventListener('click', (e) => {
+    els.storyboardList.querySelectorAll('.sb-version-chip').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        if (e.target.classList.contains('sb-version-del')) return;
         e.stopPropagation();
-        selectShotClip(v.dataset.clipId);
+        selectShotClip(btn.dataset.clipId);
       });
     });
     updateStoryboardSelectionUI();
@@ -1197,7 +1335,7 @@
   function showVideoResult(url) {
     if (els.videoExportArea) els.videoExportArea.style.display = 'block';
     if (els.outputVideo) els.outputVideo.src = url;
-    if (els.downloadLink) { els.downloadLink.href = url; els.downloadLink.download = 'toonflow_export.mp4'; }
+    if (els.downloadLink) { els.downloadLink.href = url; els.downloadLink.download = 'ai-video_export.mp4'; }
   }
 
   // ======================== 任务列表 ========================
@@ -1207,34 +1345,61 @@
     }).catch(() => {});
   }
 
+  function taskModeLabel(mode) {
+    const map = { images: '生成图片', video: '生成视频', full: '一键出片', parse: '解析剧本' };
+    return map[mode] || mode || '';
+  }
+
+  function formatShotsLabel(shots) {
+    if (!shots || !shots.length) return '全部分镜';
+    if (shots.length === 1) return '第' + shots[0] + '镜';
+    return shots.map(n => '第' + n + '镜').join('、');
+  }
+
   function renderTasks(tasks) {
     if (!tasks || tasks.length === 0) {
       els.taskList.innerHTML = '<div class="empty-state"><div class="empty-icon">📋</div><p>暂无任务</p></div>';
       els.taskStats.textContent = '';
+      if (els.activeTasks) els.activeTasks.textContent = '';
       return;
     }
 
-    const counts = { waiting: 0, parsing: 0, drawing: 0, merging: 0, done: 0, error: 0 };
+    const counts = { waiting: 0, parsing: 0, storyboarding: 0, drawing: 0, video_gen: 0, merging: 0, done: 0, error: 0 };
     tasks.forEach(t => { if (counts[t.state] !== undefined) counts[t.state]++; });
-    els.taskStats.textContent = `等待:${counts.waiting} 解析:${counts.parsing} 绘图:${counts.drawing} 合成:${counts.merging} 完成:${counts.done} 失败:${counts.error}`;
+    els.taskStats.textContent = `等待:${counts.waiting} 绘图:${counts.drawing} 视频:${counts.video_gen} 完成:${counts.done} 失败:${counts.error}`;
 
-    els.taskList.innerHTML = tasks.map(t => `
+    const active = tasks.filter(t => t.state !== 'done' && t.state !== 'error');
+    if (els.activeTasks) {
+      els.activeTasks.textContent = active.length ? `${active.length} 个进行中` : '';
+    }
+
+    els.taskList.innerHTML = tasks.map(t => {
+      const title = t.title || taskModeLabel(t.mode) || t.step || t.id;
+      const epNote = t.episode_title
+        ? `第${t.episode_num || '?'}集 ${t.episode_title}`
+        : (t.episode_num ? `第${t.episode_num}集` : '');
+      const note = [t.project_name, epNote, formatShotsLabel(t.generate_shots)].filter(Boolean).join(' · ');
+      return `
       <div class="task-item">
         <span class="task-state-badge task-state-${t.state}">${stateLabel(t.state)}</span>
         <div class="task-info">
-          <div class="task-title">${escapeHtml(t.step || t.id)}</div>
-          <div class="task-step">${escapeHtml(t.error_message || '')}</div>
+          <div class="task-title">${escapeHtml(title)}</div>
+          <div class="task-step">${escapeHtml(note)}${t.error_message ? ' · ' + escapeHtml(t.error_message) : ''}</div>
         </div>
         <div class="task-progress-bar">
           <div class="task-progress-fill" style="width:${(t.progress || 0)}%"></div>
         </div>
         <span class="task-time">${t.created_at ? new Date(t.created_at).toLocaleTimeString() : ''}</span>
-      </div>
-    `).join('');
+      </div>`;
+    }).join('');
   }
 
   function stateLabel(s) {
-    const map = { waiting: '等待中', parsing: '解析中', storyboarding: '分镜中', drawing: '绘图中', merging: '合成中', done: '已完成', error: '失败' };
+    const map = {
+      waiting: '等待中', parsing: '解析中', storyboarding: '分镜中',
+      drawing: '绘图中', video_gen: '生成视频', merging: '合成中',
+      done: '已完成', error: '失败',
+    };
     return map[s] || s;
   }
 
@@ -1727,7 +1892,60 @@
       if (card) card.classList.toggle('is-selected', e.target.checked);
       updateStoryboardSelectionUI();
     });
+    els.storyboardList.addEventListener('click', (e) => {
+      const btn = e.target.closest('.sb-media-preview-btn');
+      if (!btn) return;
+      e.stopPropagation();
+      openMediaPreview(btn.dataset.previewType, btn.dataset.url, btn.dataset.title);
+    });
   }
+
+  document.getElementById('btn-close-media-preview')?.addEventListener('click', closeMediaPreview);
+  els.modalMediaPreview?.addEventListener('click', (e) => {
+    if (e.target === els.modalMediaPreview) closeMediaPreview();
+  });
+  els.mediaPreviewPanel?.addEventListener('click', (e) => e.stopPropagation());
+
+  (function initMediaPreviewResize() {
+    const panel = els.mediaPreviewPanel;
+    const grip = els.mediaPreviewResizeGrip;
+    if (!panel || !grip) return;
+
+    let startX = 0;
+    let startY = 0;
+    let startW = 0;
+    let startH = 0;
+
+    grip.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      startX = e.clientX;
+      startY = e.clientY;
+      startW = panel.offsetWidth;
+      startH = panel.offsetHeight;
+      document.body.style.userSelect = 'none';
+      document.body.style.cursor = 'nwse-resize';
+
+      function onMove(ev) {
+        const maxW = window.innerWidth * 0.96;
+        const maxH = window.innerHeight * 0.92;
+        const w = Math.min(maxW, Math.max(320, startW + ev.clientX - startX));
+        const h = Math.min(maxH, Math.max(220, startH + ev.clientY - startY));
+        panel.style.width = w + 'px';
+        panel.style.height = h + 'px';
+      }
+
+      function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.body.style.userSelect = '';
+        document.body.style.cursor = '';
+      }
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  })();
 
   document.getElementById('btn-batch-gen-video')?.addEventListener('click', () => {
     batchGenerateShotVideos();
@@ -1739,8 +1957,6 @@
   document.getElementById('btn-timeline-add-audio')?.addEventListener('click', addTimelineAudio);
 
   // 设置加载与保存（浏览器 localStorage 优先，服务端为备份）
-  const GENERAL_SETTINGS_KEY = 'toonflow_general_settings';
-
   function readGeneralSettings() {
     try {
       return JSON.parse(localStorage.getItem(GENERAL_SETTINGS_KEY) || '{}');
@@ -1910,12 +2126,10 @@
   function init() {
     checkSession();
 
-    // 定时刷新任务列表
+    // 定时刷新任务列表（当前用户）
     setInterval(() => {
-      if (document.getElementById('page-tasks').classList.contains('active')) {
-        loadTasks();
-      }
-    }, 5000);
+      if (authToken) loadTasks();
+    }, 4000);
 
     // 定时刷新项目列表
     setInterval(() => {

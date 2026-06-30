@@ -321,6 +321,61 @@ func LooksLikeStoryboardTable(text string) bool {
 	return strings.Contains(text, "|") && (reVCInText.MatchString(text) || strings.Contains(text, "镜头号"))
 }
 
+// MinShotsForScript estimates how many shots a script should yield.
+func MinShotsForScript(script string) int {
+	script = strings.TrimSpace(script)
+	if script == "" {
+		return 3
+	}
+	runeCount := len([]rune(script))
+	byLength := runeCount / 180
+	if byLength < 4 {
+		byLength = 4
+	}
+	if byLength > 30 {
+		byLength = 30
+	}
+
+	sceneCount := 0
+	for _, line := range strings.Split(script, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if reSceneLine.MatchString(line) {
+			sceneCount++
+			continue
+		}
+		if strings.HasPrefix(line, "【") && (strings.Contains(line, "场") || strings.Contains(line, "幕")) {
+			sceneCount++
+		}
+	}
+	if sceneCount >= byLength {
+		return sceneCount
+	}
+	if sceneCount >= 3 {
+		return sceneCount
+	}
+	return byLength
+}
+
+// IsAdequateStoryboard reports whether items meet the minimum shot count for a script.
+func IsAdequateStoryboard(items []task.StoryboardItem, minShots int) bool {
+	if minShots <= 0 {
+		minShots = 3
+	}
+	if len(items) < minShots {
+		return false
+	}
+	if len(items) == 1 {
+		d := strings.ToLower(items[0].Description)
+		if strings.Contains(d, "storyboard breakdown") || strings.Contains(d, "shot # | scene") {
+			return false
+		}
+	}
+	return true
+}
+
 // StoryboardScore ranks parse quality; higher is better.
 func StoryboardScore(items []task.StoryboardItem) int {
 	if len(items) == 0 {
@@ -331,6 +386,7 @@ func StoryboardScore(items []task.StoryboardItem) int {
 		if strings.Contains(d, "storyboard breakdown") || strings.Contains(d, "shot # | scene") {
 			return 1
 		}
+		return 2
 	}
 	return len(items) * 10
 }

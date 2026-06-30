@@ -146,7 +146,7 @@ func (r *Router) sourceTextsAnalyzeHandler(c *gin.Context) {
 		}
 	})
 
-	logger.CtxInfo(ctx, "source text analyze start project=%s chapters=%d", projectID, chapterCount)
+	logger.CtxTrace(ctx, "source text analyze start project=%s chapters=%d", projectID, chapterCount)
 
 	v := r.resolveVendor()
 	n, err := service.AnalyzeSourceEvents(ctx, r.db.DB, v, projectID)
@@ -156,7 +156,7 @@ func (r *Router) sourceTextsAnalyzeHandler(c *gin.Context) {
 		return
 	}
 
-	logger.CtxInfo(ctx, "source text analyze done analyzed=%d", n)
+	logger.CtxTrace(ctx, "source text analyze done analyzed=%d", n)
 
 	items, _ := r.listSourceTextSummaries(projectID)
 	c.JSON(http.StatusOK, gin.H{"analyzed": n, "items": items})

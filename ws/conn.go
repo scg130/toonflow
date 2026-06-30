@@ -52,6 +52,7 @@ func MustMarshalJSON(v interface{}) json.RawMessage {
 // ConnManager manages WebSocket connections and message broadcasting.
 type ConnManager struct {
 	clients    map[*websocket.Conn]bool
+	userIDs    map[*websocket.Conn]string
 	mu         sync.RWMutex
 	broadcast  chan WSResponse
 	pongWait   time.Duration
@@ -67,16 +68,18 @@ func (cm *ConnManager) SetGenerationService(gs *GenerationService) {
 func NewConnManager() *ConnManager {
 	return &ConnManager{
 		clients:   make(map[*websocket.Conn]bool),
+		userIDs:   make(map[*websocket.Conn]string),
 		broadcast: make(chan WSResponse, 100),
 		pongWait:  60 * time.Second,
 	}
 }
 
-// Register adds a new WebSocket connection.
-func (cm *ConnManager) Register(conn *websocket.Conn) {
+// Register adds a new WebSocket connection for a user.
+func (cm *ConnManager) Register(conn *websocket.Conn, userID string) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 	cm.clients[conn] = true
+	cm.userIDs[conn] = userID
 }
 
 // Unregister removes a WebSocket connection.
@@ -85,8 +88,16 @@ func (cm *ConnManager) Unregister(conn *websocket.Conn) {
 	defer cm.mu.Unlock()
 	if _, ok := cm.clients[conn]; ok {
 		delete(cm.clients, conn)
+		delete(cm.userIDs, conn)
 		conn.Close()
 	}
+}
+
+// UserID returns the authenticated user for a connection.
+func (cm *ConnManager) UserID(conn *websocket.Conn) string {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	return cm.userIDs[conn]
 }
 
 // Broadcast sends a message to all connected clients.
@@ -139,14 +150,14 @@ func (cm *ConnManager) Run() {
 }
 
 // ServeHTTP upgrades the HTTP connection to WebSocket.
-func (cm *ConnManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (cm *ConnManager) ServeHTTP(w http.ResponseWriter, r *http.Request, userID string) {
 	conn, err := Upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		http.Error(w, "upgrade failed", http.StatusBadRequest)
 		return
 	}
 
-	cm.Register(conn)
+	cm.Register(conn, userID)
 	defer cm.Unregister(conn)
 
 	conn.SetReadLimit(4096)
@@ -168,17 +179,18 @@ func (cm *ConnManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		handleAction(cm, &req)
+		handleAction(cm, conn, &req)
 	}
 }
 
-func handleAction(cm *ConnManager, req *WSRequest) {
+func handleAction(cm *ConnManager, conn *websocket.Conn, req *WSRequest) {
+	userID := cm.UserID(conn)
 	switch req.Action {
 	case "ping":
 		cm.Broadcast(WSResponse{Code: 0, Msg: "pong"})
 	case "start_generate":
 		if cm.generation != nil {
-			cm.generation.handleStartGenerate(cm, req)
+			cm.generation.handleStartGenerate(cm, userID, req)
 		} else {
 			cm.Broadcast(WSResponse{Code: 1, Msg: "generation service unavailable", Step: "error"})
 		}

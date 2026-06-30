@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"toonflow/logger"
+	"toonflow/service"
 	"toonflow/task"
 )
 
@@ -34,9 +37,17 @@ func NewGenerationService(p PipelineRunner, q *task.Queue, db *sql.DB, outputDir
 	}
 }
 
-func (gs *GenerationService) handleStartGenerate(cm *ConnManager, req *WSRequest) {
+func (gs *GenerationService) handleStartGenerate(cm *ConnManager, userID string, req *WSRequest) {
 	if gs == nil || gs.Pipeline == nil || gs.Queue == nil {
 		cm.Broadcast(WSResponse{Code: 1, Msg: "generation service unavailable", Step: "error"})
+		return
+	}
+	if userID == "" {
+		cm.Broadcast(WSResponse{Code: 1, Msg: "unauthorized", Step: "error"})
+		return
+	}
+	if req.ProjectID != "" && !gs.ownsProject(userID, req.ProjectID) {
+		cm.Broadcast(WSResponse{Code: 1, Msg: "project not found", Step: "error"})
 		return
 	}
 	if req.Script == "" && req.Mode != "images" && req.Mode != "video" {
@@ -64,9 +75,14 @@ func (gs *GenerationService) handleStartGenerate(cm *ConnManager, req *WSRequest
 
 	id := fmt.Sprintf("task_%d", time.Now().UnixNano())
 	t := task.NewTask(id, req.ProjectID, req.Script, req.Style, frameDuration, resolution, fps, gs.Timeout)
+	t.UserID = userID
 	t.Mode = mode
 	t.EpisodeID = req.EpisodeID
 	t.GenerateShots = req.ShotNumbers
+	service.EnrichTaskMeta(gs.DB, t)
+
+	logger.Default.Trace(id, fmt.Sprintf("ws generate start mode=%s project=%s episode=%s shots=%v",
+		mode, req.ProjectID, req.EpisodeID, req.ShotNumbers))
 
 	if mode == "images" || mode == "video" {
 		if err := gs.loadStoryboardFromDB(t); err != nil {
@@ -77,12 +93,19 @@ func (gs *GenerationService) handleStartGenerate(cm *ConnManager, req *WSRequest
 
 	cm.Broadcast(WSResponse{
 		Code: 0, Msg: "任务已接收", Step: "waiting", Progress: 0,
-		Data: MustMarshalJSON(map[string]string{"task_id": id, "action": "started"}),
+		Data: MustMarshalJSON(map[string]interface{}{
+			"task_id": id,
+			"action":  "started",
+			"title":   t.Title,
+			"task_update": true,
+		}),
 	})
 
 	gs.Queue.Submit(t, func(ctx context.Context, tk *task.Task) error {
+		ctx = logger.WithID(ctx, tk.ID)
 		err := gs.Pipeline.Execute(ctx, tk)
 		if err != nil {
+			logger.CtxError(ctx, err, "ws generate failed task=%s mode=%s", tk.ID, tk.Mode)
 			cm.Broadcast(WSResponse{
 				Code: 1, Msg: err.Error(), Step: "error", Progress: tk.Progress,
 				Data: MustMarshalJSON(map[string]string{"task_id": tk.ID}),
@@ -92,6 +115,7 @@ func (gs *GenerationService) handleStartGenerate(cm *ConnManager, req *WSRequest
 		if tk.ProjectID != "" && len(tk.Storyboard) > 0 {
 			gs.saveStoryboardToDB(tk)
 		}
+		logger.CtxTrace(ctx, "ws generate done task=%s mode=%s progress=%.0f", tk.ID, tk.Mode, tk.Progress)
 		return nil
 	})
 }
@@ -142,4 +166,10 @@ func (gs *GenerationService) saveStoryboardToDB(t *task.Task) {
 		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(id) DO UPDATE SET shots = excluded.shots, updated_at = CURRENT_TIMESTAMP
 	`, sbID, t.ProjectID, "episode", string(shotsJSON))
+}
+
+func (gs *GenerationService) ownsProject(userID, projectID string) bool {
+	var owner string
+	err := gs.DB.QueryRow("SELECT user_id FROM o_project WHERE id = ?", projectID).Scan(&owner)
+	return err == nil && owner == userID
 }

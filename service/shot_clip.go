@@ -63,6 +63,8 @@ func ListShotClips(db *sql.DB, projectID, episodeID string) ([]ShotClip, error) 
 
 // GenerateShotClip creates a new video version for one storyboard shot.
 func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputDir, projectID, episodeID string, shotNumber int) (*ShotClip, error) {
+	logger.CtxTrace(ctx, "shot video generate start project=%s episode=%s shot=%d", projectID, episodeID, shotNumber)
+
 	shot, err := loadStoryboardShot(db, projectID, episodeID, shotNumber)
 	if err != nil {
 		return nil, err
@@ -75,17 +77,9 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 		videoModel = adapter.DefaultVideoModel
 	}
 
-	prompt := shot.Prompt
-	if prompt == "" {
-		prompt = shot.Description
-	}
-	if artStyle != "" {
-		prompt += ", " + artStyle + " style"
-	}
-	if shot.Camera != "" {
-		prompt += ", camera: " + shot.Camera
-	}
-	prompt += ", cinematic motion, natural character movement, dynamic scene"
+	stylePrompt := lookupArtStylePrompt(db, artStyle)
+	prompt, negativePrompt := buildShotVideoPrompt(shot, artStyle, stylePrompt)
+	logger.CtxTrace(ctx, "shot video prompt shot=%d prompt=%s", shotNumber, prompt)
 
 	width, height := videoSizeForRatio(videoRatio)
 	imageInput := imageURLForVideo(shot)
@@ -117,22 +111,23 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 			Duration: float32(duration),
 			Width:    width,
 			Height:   height,
+			Negative: negativePrompt,
 		})
 		if err == nil && resp != nil && resp.VideoURL != "" {
 			if dlErr := downloadFile(ctx, resp.VideoURL, localFile); dlErr != nil {
 				apiErr = dlErr
-				logger.CtxInfo(ctx, "agnes video download failed: %v", dlErr)
+			logger.CtxError(ctx, dlErr, "agnes video download failed shot=%d", shotNumber)
 			} else {
 				fileURL = clipPublicURL(projectID, episodeID, shotNumber, version)
 				source = "ai"
 			}
 		} else if err != nil {
 			apiErr = err
-			logger.CtxInfo(ctx, "agnes video request failed: %v", err)
+			logger.CtxError(ctx, err, "agnes video request failed shot=%d", shotNumber)
 		}
 	} else if imageInput == "" && shot.ImageURL != "" {
 		apiErr = fmt.Errorf("缺少 Agnes 图片远程地址（24h URL），请重新生成该分镜图片后再生成视频")
-		logger.CtxInfo(ctx, "shot video missing remote image url shot=%d", shotNumber)
+		logger.CtxTrace(ctx, "shot video missing remote image url shot=%d", shotNumber)
 	}
 	if fileURL == "" {
 		if shot.ImageURL == "" && imageInput == "" {
@@ -161,7 +156,7 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 		}
 		fileURL = clipPublicURL(projectID, episodeID, shotNumber, version)
 		source = "fallback"
-		logger.CtxInfo(ctx, "shot video fallback ken-burns shot=%d api_err=%v", shotNumber, apiErr)
+		logger.CtxTrace(ctx, "shot video fallback ken-burns shot=%d api_err=%v", shotNumber, apiErr)
 	}
 
 	_, _ = db.Exec(`UPDATE o_shot_clip SET is_selected = 0 WHERE project_id = ? AND episode_id = ? AND shot_number = ?`,
@@ -356,5 +351,109 @@ func videoSizeForRatio(ratio string) (int, int) {
 		return 768, 768
 	default:
 		return 1280, 720
+	}
+}
+
+func lookupArtStylePrompt(db *sql.DB, artStyle string) string {
+	if artStyle == "" {
+		return ""
+	}
+	var prompt string
+	err := db.QueryRow(`SELECT prompt FROM o_artStyle WHERE name = ?`, artStyle).Scan(&prompt)
+	if err != nil || strings.TrimSpace(prompt) == "" {
+		return ""
+	}
+	return strings.TrimSpace(prompt)
+}
+
+func buildShotVideoPrompt(shot *storyboardShot, artStyle, stylePrompt string) (string, string) {
+	base := strings.TrimSpace(shot.Prompt)
+	if base == "" {
+		base = strings.TrimSpace(shot.Description)
+	}
+
+	parts := make([]string, 0, 12)
+	if base != "" {
+		parts = append(parts, base)
+	}
+	if stylePrompt != "" {
+		parts = append(parts, stylePrompt)
+	} else if artStyle != "" {
+		parts = append(parts, artStyle+" style")
+	}
+	if cam := mapCameraToVideoMotion(shot.Camera); cam != "" {
+		parts = append(parts, cam)
+	}
+	parts = append(parts, cinematicVideoEnhancers(artStyle)...)
+
+	negative := strings.Join([]string{
+		"static image", "frozen frame", "slideshow", "still photo", "no motion",
+		"morphing", "flickering", "jitter", "stuttering", "low fps",
+		"blurry", "out of focus", "low quality", "low resolution", "compression artifacts",
+		"distorted face", "deformed body", "bad anatomy", "extra limbs",
+		"watermark", "text overlay", "logo", "ugly", "cartoon flat 2D",
+		"plastic skin", "uncanny valley", "overexposed", "underexposed",
+	}, ", ")
+
+	return strings.Join(parts, ", "), negative
+}
+
+func cinematicVideoEnhancers(artStyle string) []string {
+	style := strings.ToLower(artStyle)
+	core := []string{
+		"3D cinematic blockbuster film quality",
+		"Pixar Disney DreamWorks level animation movie",
+		"physically based rendering PBR materials",
+		"volumetric god rays and atmospheric depth",
+		"cinematic color grading teal and orange",
+		"shallow depth of field bokeh",
+		"subtle film grain anamorphic lens",
+		"smooth motivated camera movement",
+		"natural fluid character animation",
+		"realistic hair cloth and particle physics",
+		"high fidelity textures subsurface scattering",
+		"epic dramatic lighting rim light",
+		"immersive movie scene ultra detailed 8K",
+	}
+	if strings.Contains(style, "2d") || strings.Contains(style, "flat") || strings.Contains(style, "pixel") {
+		core[0] = "premium animated film quality cinematic motion"
+		core[1] = "studio animation movie production quality"
+	}
+	if strings.Contains(style, "real") || strings.Contains(style, "真人") {
+		core[0] = "Hollywood blockbuster live-action cinematic quality"
+		core[1] = "ARRI camera film production IMAX quality"
+	}
+	return core
+}
+
+func mapCameraToVideoMotion(camera string) string {
+	c := strings.TrimSpace(camera)
+	if c == "" {
+		return "cinematic camera with subtle motivated movement"
+	}
+	lower := strings.ToLower(c)
+	switch {
+	case strings.Contains(lower, "推近") || strings.Contains(lower, "push"):
+		return "slow cinematic dolly push-in toward subject"
+	case strings.Contains(lower, "拉远") || strings.Contains(lower, "pull"):
+		return "smooth dolly pull-back revealing environment"
+	case strings.Contains(lower, "环绕") || strings.Contains(lower, "orbit"):
+		return "orbital camera circling around subject"
+	case strings.Contains(lower, "仰拍") || strings.Contains(lower, "low angle"):
+		return "low angle heroic camera looking up at subject"
+	case strings.Contains(lower, "俯拍") || strings.Contains(lower, "high angle"):
+		return "high angle overhead establishing shot"
+	case strings.Contains(lower, "跟拍") || strings.Contains(lower, "tracking"):
+		return "tracking shot following subject movement"
+	case strings.Contains(lower, "摇") || strings.Contains(lower, "pan"):
+		return "smooth horizontal pan camera movement"
+	case strings.Contains(lower, "固定") || strings.Contains(lower, "静止") || strings.Contains(lower, "static"):
+		return "locked-off tripod shot with living scene motion"
+	case strings.Contains(lower, "手持") || strings.Contains(lower, "handheld"):
+		return "subtle handheld documentary camera energy"
+	case strings.Contains(lower, "航拍") || strings.Contains(lower, "drone"):
+		return "aerial drone flyover cinematic movement"
+	default:
+		return "camera motion: " + c
 	}
 }

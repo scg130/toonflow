@@ -147,11 +147,12 @@ func (r *Router) Setup() *gin.Engine {
 
 func (r *Router) wsHandler(c *gin.Context) {
 	token := authToken(c)
-	if _, ok := r.sessions.Get(token); !ok {
+	sess, ok := r.sessions.Get(token)
+	if !ok {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
-	r.wsBroadcaster.ServeHTTP(c.Writer, c.Request)
+	r.wsBroadcaster.ServeHTTP(c.Writer, c.Request, sess.UserID)
 }
 
 // ======================== Health ========================
@@ -360,7 +361,26 @@ func (r *Router) vendorsDeleteHandler(c *gin.Context) {
 // ======================== Tasks ========================
 
 func (r *Router) tasksHandler(c *gin.Context) {
-	c.JSON(http.StatusOK, r.queue.AllTasks())
+	userID := currentUserID(c)
+	c.JSON(http.StatusOK, r.queue.AllTasksForUser(userID))
+}
+
+func (r *Router) broadcastTaskUpdate(t *task.Task, msg string) {
+	if r.wsBroadcaster == nil || t == nil {
+		return
+	}
+	r.wsBroadcaster.Broadcast(ws.WSResponse{
+		Code:     0,
+		Msg:      msg,
+		Step:     string(t.State),
+		Progress: t.Progress,
+		Data: ws.MustMarshalJSON(map[string]interface{}{
+			"task_id":     t.ID,
+			"task_update": true,
+			"title":       t.Title,
+			"state":       t.State,
+		}),
+	})
 }
 
 // ======================== Projects ========================
@@ -697,8 +717,8 @@ func (r *Router) storyboardsListHandler(c *gin.Context) {
 		return
 	}
 	shots = service.NormalizeStoryboardItems(shots)
-	if episodeID != "" && service.StoryboardScore(shots) <= 1 {
-		if refreshed := service.StoryboardFromRecentChat(r.db.DB, projectID, episodeID, 10); service.StoryboardScore(refreshed) > service.StoryboardScore(shots) {
+	if episodeID != "" && len(shots) <= 1 {
+		if refreshed := service.StoryboardFromRecentChat(r.db.DB, projectID, episodeID, 10); len(refreshed) > len(shots) {
 			refreshed = service.MergeStoryboardMedia(shots, refreshed)
 			refreshed = service.NormalizeStoryboardItems(refreshed)
 			shotsJSON, _ := json.Marshal(refreshed)

@@ -3,15 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ToonFlow — 短剧 AI 创作平台</title>
-<link rel="stylesheet" href="/static/css/style.css">
+<title>AI-VIDEO · 短剧 AI 创作平台</title>
+<link rel="stylesheet" href="/static/css/style.css?v=20260630e">
 </head>
 <body>
 <div id="app">
   <!-- 顶部导航栏 -->
   <header class="header">
     <div class="header-left">
-      <div class="logo">🎬 ToonFlow</div>
+      <div class="logo">🎬 AI-VIDEO</div>
       <nav class="main-nav">
         <button class="nav-btn active" data-page="projects">📁 项目列表</button>
         <button class="nav-btn" data-page="production">🎬 创作工作台</button>
@@ -292,7 +292,7 @@
 <!-- 登录页 -->
 <div id="login-overlay" class="login-overlay">
   <div class="login-card">
-    <div class="login-logo">🎬 ToonFlow</div>
+    <div class="login-logo">🎬 AI-VIDEO</div>
     <p class="login-subtitle">短剧 AI 创作平台</p>
     <form id="login-form">
       <div class="form-group">
@@ -489,6 +489,21 @@
   </div>
 </div>
 
-<script src="/static/js/app.js?v=20260629c"></script>
+<div id="modal-media-preview" class="modal-overlay media-preview-overlay" style="display:none;">
+  <div class="modal modal-media modal-media-resizable" id="media-preview-panel">
+    <div class="modal-header modal-media-header">
+      <h3 id="media-preview-title">预览</h3>
+      <span class="modal-media-hint">拖拽右下角调节大小</span>
+      <button type="button" class="modal-close" id="btn-close-media-preview">&times;</button>
+    </div>
+    <div class="modal-body media-preview-body">
+      <img id="media-preview-image" alt="分镜图片预览" style="display:none;">
+      <video id="media-preview-video" controls playsinline style="display:none;"></video>
+    </div>
+    <div class="media-preview-resize-grip" id="media-preview-resize-grip" title="拖拽调节大小"></div>
+  </div>
+</div>
+
+<script src="/static/js/app.js?v=20260630h"></script>
 </body>
 </html>

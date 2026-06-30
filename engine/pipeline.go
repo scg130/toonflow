@@ -54,6 +54,8 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 	if mode == "" {
 		mode = "full"
 	}
+	logger.CtxTrace(ctx, "pipeline start task=%s mode=%s project=%s episode=%s storyboard=%d",
+		t.ID, mode, t.ProjectID, t.EpisodeID, len(t.Storyboard))
 
 	taskDir := filepath.Join(p.cfg.OutputDir, t.ID)
 	if mode != "parse" {
@@ -150,6 +152,7 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 			p.broadcast(t, "图片生成完成", 100, map[string]interface{}{
 				"storyboard": t.Storyboard,
 			})
+			logger.CtxTrace(ctx, "pipeline done task=%s mode=%s", t.ID, mode)
 			return nil
 		}
 	}
@@ -214,7 +217,10 @@ func (p *Pipeline) broadcast(t *task.Task, msg string, progress float32, extra m
 		return
 	}
 	data := map[string]interface{}{
-		"task_id": t.ID,
+		"task_id":     t.ID,
+		"task_update": true,
+		"title":       t.Title,
+		"state":       t.State,
 	}
 	for k, v := range extra {
 		data[k] = v
@@ -270,10 +276,10 @@ func (p *Pipeline) genImage(ctx context.Context, t *task.Task, item task.Storybo
 		AspectRatio: resToAspect(t.Resolution),
 	})
 	if err != nil {
-		logger.CtxInfo(ctx, "genImage shot=%d failed: %v", item.ShotNumber, err)
+		logger.CtxError(ctx, err, "genImage shot=%d failed", item.ShotNumber)
 		return "", err
 	}
-	logger.CtxInfo(ctx, "genImage shot=%d adapter resp model=%s data_url=%q remote_url=%q",
+	logger.CtxTrace(ctx, "genImage shot=%d adapter resp model=%s data_url=%q remote_url=%q",
 		item.ShotNumber, resp.Model, summarizeDataURL(resp.DataURL), resp.RemoteURL)
 	if err := saveGeneratedImage(localPath, resp); err != nil {
 		return "", err
@@ -283,9 +289,9 @@ func (p *Pipeline) genImage(ctx context.Context, t *task.Task, item task.Storybo
 		remoteURL = resp.DataURL
 	}
 	if remoteURL != "" {
-		logger.CtxInfo(ctx, "genImage shot=%d saved local=%s image_remote_url=%s", item.ShotNumber, localPath, remoteURL)
+		logger.CtxTrace(ctx, "genImage shot=%d saved local=%s image_remote_url=%s", item.ShotNumber, localPath, remoteURL)
 	} else {
-		logger.CtxInfo(ctx, "genImage shot=%d saved local=%s (no image_remote_url, base64 only)", item.ShotNumber, localPath)
+		logger.CtxTrace(ctx, "genImage shot=%d saved local=%s (no image_remote_url, base64 only)", item.ShotNumber, localPath)
 	}
 	return remoteURL, nil
 }
