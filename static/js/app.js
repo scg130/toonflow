@@ -37,6 +37,7 @@
   let timeline = null;       // 时间线编辑状态
   let assets = [];           // 当前项目的资产列表
   let isGenerating = false;
+  let clipVersionModalShot = null;
 
   // ======================== DOM 引用 ========================
   const els = {
@@ -80,6 +81,9 @@
     mediaPreviewVideo: document.getElementById('media-preview-video'),
     mediaPreviewPanel: document.getElementById('media-preview-panel'),
     mediaPreviewResizeGrip: document.getElementById('media-preview-resize-grip'),
+    modalClipVersions: document.getElementById('modal-clip-versions'),
+    clipVersionsTitle: document.getElementById('clip-versions-title'),
+    clipVersionsList: document.getElementById('clip-versions-list'),
     loginOverlay: document.getElementById('login-overlay'),
     userBadge: document.getElementById('user-badge'),
     btnLogout: document.getElementById('btn-logout'),
@@ -812,21 +816,79 @@
   }
 
   function selectShotClip(clipId) {
-    apiFetch('/api/shot-clips/' + clipId + '/select', { method: 'PUT' })
+    return apiFetch('/api/shot-clips/' + clipId + '/select', { method: 'PUT' })
       .then(r => r.json())
       .then(() => loadShotClips())
+      .then(() => refreshClipVersionModalIfOpen())
       .catch(() => toast('选版失败', 'error'));
   }
 
   function deleteShotClip(clipId) {
-    if (!confirm('确定删除此视频版本？')) return;
-    apiFetch('/api/shot-clips/' + clipId, { method: 'DELETE' })
+    if (!confirm('确定删除此视频版本？')) return Promise.resolve();
+    return apiFetch('/api/shot-clips/' + clipId, { method: 'DELETE' })
       .then(r => {
         if (!r.ok) return r.json().then(j => { throw new Error(j.error || '删除失败'); });
         toast('已删除', 'info');
-        loadShotClips();
+        return loadShotClips();
       })
+      .then(() => refreshClipVersionModalIfOpen())
       .catch(err => toast('删除失败: ' + (err.message || err), 'error'));
+  }
+
+  function refreshClipVersionModalIfOpen() {
+    if (clipVersionModalShot == null) return;
+    renderClipVersionModalContent(clipVersionModalShot);
+  }
+
+  function openClipVersionModal(shotNum) {
+    clipVersionModalShot = shotNum;
+    if (els.modalClipVersions) els.modalClipVersions.style.display = 'flex';
+    renderClipVersionModalContent(shotNum);
+  }
+
+  function closeClipVersionModal() {
+    clipVersionModalShot = null;
+    if (els.modalClipVersions) els.modalClipVersions.style.display = 'none';
+  }
+
+  function renderClipVersionModalContent(shotNum) {
+    if (!els.clipVersionsList || !els.clipVersionsTitle) return;
+    const versions = clipsForShot(shotNum).slice().sort((a, b) => (a.version || 0) - (b.version || 0));
+    els.clipVersionsTitle.textContent = '第 ' + shotNum + ' 镜 — 视频版本';
+    if (!versions.length) {
+      els.clipVersionsList.innerHTML = '<div class="clip-versions-empty">暂无视频版本</div>';
+      return;
+    }
+    els.clipVersionsList.innerHTML = versions.map(v => {
+      const title = '第 ' + shotNum + ' 镜 — 视频 v' + v.version;
+      return `<div class="clip-version-row">
+        <button type="button" class="clip-version-chip ${v.is_selected ? 'selected' : ''}" data-clip-id="${escapeHtml(v.id)}" title="切换到此版本">
+          v${v.version}${v.is_selected ? ' ✓ 当前' : ''}${v.source === 'fallback' ? ' ·兜底' : ''}
+        </button>
+        <div class="clip-version-row-actions">
+          ${v.file_url
+            ? `<button type="button" class="btn btn-sm btn-outline clip-version-preview-btn" data-url="${escapeHtml(v.file_url)}" data-title="${escapeHtml(title)}">预览</button>`
+            : ''}
+          <button type="button" class="btn btn-sm btn-outline clip-version-del-btn" data-clip-id="${escapeHtml(v.id)}">删除</button>
+        </div>
+      </div>`;
+    }).join('');
+
+    els.clipVersionsList.querySelectorAll('.clip-version-chip').forEach(btn => {
+      btn.addEventListener('click', () => selectShotClip(btn.dataset.clipId));
+    });
+    els.clipVersionsList.querySelectorAll('.clip-version-del-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteShotClip(btn.dataset.clipId);
+      });
+    });
+    els.clipVersionsList.querySelectorAll('.clip-version-preview-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openMediaPreview('video', btn.dataset.url, btn.dataset.title);
+      });
+    });
   }
 
   function loadTimeline() {
@@ -1040,41 +1102,41 @@
     els.modalMediaPreview.style.display = 'none';
   }
 
-  function renderStoryboardPreviewButtons(sb, i) {
+  function renderStoryboardImageColumn(sb, i) {
     const shotNum = sb.shot_number || i + 1;
-    const clip = primaryClipForShot(shotNum);
     const imageTitle = `第 ${shotNum} 镜 — 图片`;
-    const imageBtn = sb.image_url
-      ? `<button type="button" class="btn btn-sm btn-outline sb-media-preview-btn" data-preview-type="image" data-url="${escapeHtml(sb.image_url)}" data-title="${escapeHtml(imageTitle)}">🖼 预览图片</button>`
-      : '<button type="button" class="btn btn-sm btn-outline" disabled title="暂无图片">🖼 预览图片</button>';
-
-    let videoBtn;
-    if (clip && clip.file_url) {
-      const videoTitle = `第 ${shotNum} 镜 — 视频 v${clip.version}`;
-      videoBtn = `<button type="button" class="btn btn-sm btn-outline sb-media-preview-btn" data-preview-type="video" data-url="${escapeHtml(clip.file_url)}" data-title="${escapeHtml(videoTitle)}">▶ 预览视频</button>`;
-    } else {
-      videoBtn = '<button type="button" class="btn btn-sm btn-outline" disabled title="暂无视频">▶ 预览视频</button>';
-    }
-    return imageBtn + videoBtn;
-  }
-
-  function renderStoryboardMediaThumb(sb, i) {
-    const shotNum = sb.shot_number || i + 1;
-    const versions = clipsForShot(shotNum);
-    const clip = primaryClipForShot(shotNum);
-    const imageTitle = `第 ${shotNum} 镜 — 图片`;
-
+    const previewBtn = sb.image_url
+      ? `<button type="button" class="btn btn-sm btn-outline sb-media-preview-btn sb-col-btn" data-preview-type="image" data-url="${escapeHtml(sb.image_url)}" data-title="${escapeHtml(imageTitle)}">🖼 预览图片</button>`
+      : '<button type="button" class="btn btn-sm btn-outline sb-col-btn" disabled title="暂无图片">🖼 预览图片</button>';
     const imageBlock = sb.image_url
       ? `<div class="sb-thumb sb-thumb-image">
            <img src="${escapeHtml(sb.image_url)}" alt="${escapeHtml(imageTitle)}" loading="lazy" decoding="async">
            <button type="button" class="sb-thumb-hit sb-media-preview-btn" data-preview-type="image" data-url="${escapeHtml(sb.image_url)}" data-title="${escapeHtml(imageTitle)}" title="点击放大预览" aria-label="预览图片"></button>
          </div>`
       : '<div class="sb-thumb sb-thumb-empty">暂无图片</div>';
+    return `<div class="sb-media-col sb-media-col-image">
+      <div class="sb-media-col-toolbar">
+        ${previewBtn}
+        <span class="sb-media-col-title">图片</span>
+        <button class="btn btn-sm btn-outline sb-gen-image-btn sb-col-btn" type="button" data-shot="${shotNum}">🎨 生成图片</button>
+      </div>
+      ${imageBlock}
+    </div>`;
+  }
+
+  function renderStoryboardVideoColumn(sb, i) {
+    const shotNum = sb.shot_number || i + 1;
+    const versions = clipsForShot(shotNum);
+    const sortedVersions = versions.slice().sort((a, b) => (a.version || 0) - (b.version || 0));
+    const clip = primaryClipForShot(shotNum);
+    const videoTitle = clip && clip.file_url ? `第 ${shotNum} 镜 — 视频 v${clip.version}` : '';
+    const previewBtn = clip && clip.file_url
+      ? `<button type="button" class="btn btn-sm btn-outline sb-media-preview-btn sb-col-btn" data-preview-type="video" data-url="${escapeHtml(clip.file_url)}" data-title="${escapeHtml(videoTitle)}">▶ 预览视频</button>`
+      : '<button type="button" class="btn btn-sm btn-outline sb-col-btn" disabled title="暂无视频">▶ 预览视频</button>';
 
     let videoBlock = '<div class="sb-thumb sb-thumb-empty">暂无视频</div>';
     let videoMeta = '';
     if (clip && clip.file_url) {
-      const videoTitle = `第 ${shotNum} 镜 — 视频 v${clip.version}`;
       const poster = sb.image_url ? ` poster="${escapeHtml(sb.image_url)}"` : '';
       videoBlock = `<div class="sb-thumb sb-thumb-video">
           <video src="${escapeHtml(clip.file_url)}" muted playsinline preload="metadata"${poster}></video>
@@ -1084,25 +1146,22 @@
       videoMeta = `<div class="sb-media-video-meta">v${clip.version}${clip.is_selected ? ' ✓' : ''}${clip.source === 'fallback' ? ' ·兜底' : ''}</div>`;
     }
 
-    const versionStrip = versions.length > 1
-      ? `<div class="sb-version-strip" title="切换版本">${versions.map(v => `
-          <button type="button" class="sb-version-chip ${v.is_selected ? 'selected' : ''}" data-clip-id="${escapeHtml(v.id)}" title="v${v.version}${v.source === 'fallback' ? ' 兜底' : ''}">
-            v${v.version}${v.is_selected ? '✓' : ''}
-            <span class="sb-version-del" data-clip-id="${escapeHtml(v.id)}" title="删除">×</span>
-          </button>`).join('')}</div>`
-      : '';
+    const versionBtnLabel = sortedVersions.length
+      ? ('版本 · v' + (clip ? clip.version : sortedVersions[sortedVersions.length - 1].version)
+        + (sortedVersions.length > 1 ? '（共' + sortedVersions.length + '版）' : ''))
+      : '版本';
 
-    return `<div class="storyboard-card-media">
-      <div class="sb-media-block">
-        <div class="sb-media-label">图片</div>
-        ${imageBlock}
+    return `<div class="sb-media-col sb-media-col-video">
+      <div class="sb-media-col-version-bar">
+        <button type="button" class="btn btn-sm btn-outline sb-version-open-btn sb-col-btn" data-shot="${shotNum}"${sortedVersions.length ? '' : ' disabled title="暂无视频版本"'}>${versionBtnLabel}</button>
       </div>
-      <div class="sb-media-block">
-        <div class="sb-media-label">视频</div>
-        ${videoBlock}
-        ${videoMeta}
-        ${versionStrip}
+      <div class="sb-media-col-toolbar">
+        ${previewBtn}
+        <span class="sb-media-col-title">视频</span>
+        <button class="btn btn-sm btn-primary sb-gen-video-btn sb-col-btn" type="button" data-shot="${shotNum}">🎬 生成视频</button>
       </div>
+      ${videoBlock}
+      ${videoMeta}
     </div>`;
   }
 
@@ -1270,12 +1329,7 @@
             <input type="checkbox" class="sb-select-cb" data-index="${i}" ${sb.selected === true ? 'checked' : ''}>
             <span class="storyboard-card-title">🎬 第 ${sb.shot_number || i + 1} 镜 — ${escapeHtml(sb.scene || '未命名场景')}</span>
           </label>
-          <div class="storyboard-card-header-right">
-            <span class="storyboard-card-duration">${sb.duration || 3}s</span>
-            ${renderStoryboardPreviewButtons(sb, i)}
-            <button class="btn btn-sm btn-outline sb-gen-image-btn" type="button" data-shot="${sb.shot_number || i + 1}">🎨 生成图片</button>
-            <button class="btn btn-sm btn-primary sb-gen-video-btn" type="button" data-shot="${sb.shot_number || i + 1}">🎬 生成视频</button>
-          </div>
+          <span class="storyboard-card-duration">${sb.duration || 3}s</span>
         </div>
         <div class="storyboard-card-body">
           <div class="storyboard-card-content">
@@ -1296,7 +1350,8 @@
               </div>
             </div>
           </div>
-          ${renderStoryboardMediaThumb(sb, i)}
+          ${renderStoryboardImageColumn(sb, i)}
+          ${renderStoryboardVideoColumn(sb, i)}
         </div>
         ${sb.image_url && !sb.image_remote_url ?
           '<div class="shot-remote-url-hint">⚠️ 图片需重新生成才能走 Agnes 图生视频</div>' : ''}
@@ -1314,18 +1369,11 @@
         generateShotVideo(parseInt(btn.dataset.shot, 10));
       });
     });
-    els.storyboardList.querySelectorAll('.sb-version-del').forEach(btn => {
+    els.storyboardList.querySelectorAll('.sb-version-open-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        e.preventDefault();
-        deleteShotClip(btn.dataset.clipId);
-      });
-    });
-    els.storyboardList.querySelectorAll('.sb-version-chip').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        if (e.target.classList.contains('sb-version-del')) return;
-        e.stopPropagation();
-        selectShotClip(btn.dataset.clipId);
+        if (btn.disabled) return;
+        openClipVersionModal(parseInt(btn.dataset.shot, 10));
       });
     });
     updateStoryboardSelectionUI();
@@ -1904,6 +1952,11 @@
   els.modalMediaPreview?.addEventListener('click', (e) => {
     if (e.target === els.modalMediaPreview) closeMediaPreview();
   });
+  document.getElementById('btn-close-clip-versions')?.addEventListener('click', closeClipVersionModal);
+  els.modalClipVersions?.addEventListener('click', (e) => {
+    if (e.target === els.modalClipVersions) closeClipVersionModal();
+  });
+  els.modalClipVersions?.querySelector('.modal')?.addEventListener('click', (e) => e.stopPropagation());
   els.mediaPreviewPanel?.addEventListener('click', (e) => e.stopPropagation());
 
   (function initMediaPreviewResize() {
