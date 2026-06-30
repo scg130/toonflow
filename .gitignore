@@ -1,3 +1,4 @@
 .codegraph/
 output/
 logs/
+.vscode/
