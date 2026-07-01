@@ -32,6 +32,38 @@
   let sourceTexts = [];
   let wbStage = 'source';
   let planningType = 'skeleton';
+  const planningTypeLabels = { skeleton: '故事骨架', strategy: '改编策略', script: '剧本' };
+  const planningActionMap = {
+    generate_skeleton: 'skeleton',
+    generate_strategy: 'strategy',
+    generate_script: 'script',
+  };
+  const workflowUserLabels = {
+    analyze_events: '事件分析',
+    split_episodes: 'AI 分集',
+    generate_skeleton: '生成故事骨架',
+    generate_strategy: '生成改编策略',
+    generate_script: '生成剧本',
+    generate_storyboard: '生成分镜',
+    extract_assets: '从剧本提取资产',
+    batch_generate_shot_images: '批量生成图片',
+    batch_generate_shot_videos: '批量生成视频',
+    generate_shot_video: '生成视频',
+    delete_shot_clip: '删除视频版本',
+  };
+  const workflowLoadingLabels = {
+    analyze_events: '分析中',
+    split_episodes: '分集中',
+    generate_skeleton: '生成中',
+    generate_strategy: '生成中',
+    generate_script: '生成中',
+    generate_storyboard: '生成中',
+    extract_assets: '提取中',
+    batch_generate_shot_images: '生成中',
+    batch_generate_shot_videos: '生成中',
+    generate_shot_video: '生成中',
+    delete_shot_clip: '删除中',
+  };
   let storyboards = [];
   let shotClips = [];        // 分镜视频版本
   let timeline = null;       // 时间线编辑状态
@@ -41,6 +73,7 @@
   let isGenerating = false;
   let clipVersionDropdownShot = null;
   let chatStreamSession = null;
+  let pendingWorkflowUI = null;
 
   // ======================== DOM 引用 ========================
   const els = {
@@ -291,12 +324,40 @@
     if (msg.data && msg.data.task_update) {
       loadTasks();
     }
+    if (msg.step === 'workflow_error') {
+      if (msg.data && msg.data.project_id && currentProject && msg.data.project_id !== currentProject.id) {
+        return;
+      }
+      updateChatProgress('', 0);
+      finishPendingWorkflowUI();
+      appendChatMessage('assistant', '⚠️ ' + (msg.msg || '操作失败'));
+      toast(msg.msg || '操作失败', 'error');
+      setStatus('就绪');
+      return;
+    }
+    if (msg.step === 'workflow_done') {
+      if (msg.data && msg.data.project_id && currentProject && msg.data.project_id !== currentProject.id) {
+        return;
+      }
+      updateChatProgress('', 0);
+      finishPendingWorkflowUI();
+      if (msg.data && msg.data.reply) {
+        appendChatMessage('assistant', msg.data.reply);
+      }
+      applyWorkflowResult(msg.data && msg.data.action, msg.data || {});
+      setStatus('就绪');
+      return;
+    }
     if (msg.step === 'chat_progress') {
       if (msg.data && msg.data.project_id && currentProject && msg.data.project_id !== currentProject.id) {
         return;
       }
       updateChatProgress(msg.msg || '处理中...', msg.progress);
       setStatus(msg.msg || '处理中...');
+      const progressAction = msg.data && msg.data.action;
+      if (progressAction && planningActionMap[progressAction] && msg.progress > 0 && msg.progress < 100) {
+        showPlanningWorkInProgress(progressAction, msg.msg);
+      }
       if (msg.progress >= 100 && msg.data && msg.data.action === 'extract_assets' && currentProject) {
         loadProjectAssets(currentProject.id);
         switchWorkbenchPanel('assets');
@@ -631,38 +692,6 @@
       });
   }
 
-  const planningTypeLabels = { skeleton: '故事骨架', strategy: '改编策略', script: '剧本' };
-
-  function generatePlanningWork(type) {
-    if (!currentProject || !currentEpisode) {
-      toast('请先选择一集', 'warning');
-      return Promise.reject(new Error('no episode'));
-    }
-    setPlanningTab(type);
-    switchWorkbenchPanel('planning');
-    showPlanningContent('正在生成' + (planningTypeLabels[type] || '') + '，请稍候...');
-    updateChatProgress('正在生成' + (planningTypeLabels[type] || '') + '...', 40);
-    return apiFetch('/api/projects/' + currentProject.id + '/agent-work/generate', {
-      method: 'POST',
-      body: JSON.stringify({ episode_id: currentEpisode.id, type: type }),
-      signal: AbortSignal.timeout(10 * 60 * 1000),
-    }).then(r => {
-      if (!r.ok) return r.json().then(j => { throw new Error(j.error || '生成失败'); });
-      return r.json();
-    }).then(data => {
-      updateChatProgress('', 0);
-      showPlanningContent(data.content || '');
-      if (type === 'script') loadEpisodes();
-      toast((planningTypeLabels[type] || '内容') + '已生成', 'success');
-      return data;
-    }).catch(err => {
-      updateChatProgress('', 0);
-      toast('生成失败: ' + (err.message || err), 'error');
-      loadPlanningContent();
-      throw err;
-    });
-  }
-
   function loadChatMessages() {
     if (!currentProject) return;
     const epId = currentEpisode ? currentEpisode.id : '';
@@ -698,37 +727,229 @@
     text.textContent = message;
   }
 
-  function extractAssetsDirect(opts) {
-    opts = opts || {};
-    if (!currentProject) { toast('请先选择项目', 'warning'); return Promise.reject(); }
-    if (!currentEpisode) { toast('请先选择一集', 'warning'); return Promise.reject(); }
-    if (opts.showProgress !== false) updateChatProgress('正在从剧本提取资产...', 30);
-    return apiFetch('/api/projects/' + currentProject.id + '/assets/extract', {
-      method: 'POST',
-      body: JSON.stringify({ episode_id: currentEpisode.id }),
-      signal: AbortSignal.timeout(10 * 60 * 1000),
-    })
-      .then(r => r.json().then(body => ({ ok: r.ok, body: unwrapApiBody(body) })))
-      .then(({ ok, body }) => {
-        if (!ok) throw new Error((body && body.error) || '提取失败');
-        const n = body && body.count != null ? body.count : assets.length;
-        return loadProjectAssets(currentProject.id).then(() => {
-          switchWorkbenchPanel('assets');
-          if (opts.showProgress !== false) updateChatProgress('', 0);
-          toast('已提取 ' + n + ' 项资产', 'success');
-          return n;
-        });
-      })
-      .catch(err => {
-        if (opts.showProgress !== false) updateChatProgress('', 0);
-        toast(err.message || '提取失败', 'error');
-        throw err;
-      });
-  }
-
   function scrollChatToBottom() {
     const box = document.getElementById('wb-chat-messages');
     if (box) box.scrollTop = box.scrollHeight;
+  }
+
+  function appendChatMessage(role, content) {
+    const box = document.getElementById('wb-chat-messages');
+    if (!box || !content) return;
+    box.innerHTML += `<div class="wb-chat-msg ${role}">${escapeHtml(content)}</div>`;
+    scrollChatToBottom();
+  }
+
+  function finishPendingWorkflowUI() {
+    if (pendingWorkflowUI && pendingWorkflowUI.btn) {
+      pendingWorkflowUI.btn.disabled = false;
+      pendingWorkflowUI.btn.textContent = pendingWorkflowUI.origLabel;
+    }
+    pendingWorkflowUI = null;
+  }
+
+  function applyPlanningWorkResult(action, data) {
+    const type = planningActionMap[action];
+    if (!type) return;
+    if (data && data.action_result && data.action_result.error) {
+      toast('生成失败: ' + data.action_result.error, 'error');
+      loadPlanningContent();
+      return;
+    }
+    setPlanningTab(type);
+    switchWorkbenchPanel('planning');
+    const work = data && data.work;
+    if (typeof work === 'string' && work.trim()) {
+      showPlanningContent(work);
+    } else {
+      loadPlanningContent();
+    }
+    if (type === 'script') loadEpisodes();
+    toast((planningTypeLabels[type] || '内容') + '已生成', 'success');
+  }
+
+  function showPlanningWorkInProgress(action, message) {
+    const type = planningActionMap[action];
+    if (!type) return;
+    setPlanningTab(type);
+    switchWorkbenchPanel('planning');
+    const label = planningTypeLabels[type] || '';
+    showPlanningContent(message || ('正在生成' + label + '，请稍候...'));
+  }
+
+  function applyStoryboardResult(data) {
+    switchWorkbenchPanel('storyboard');
+    const items = normalizeStoryboards(data && data.work);
+    if (items.length > 0) {
+      storyboards = items;
+      renderStoryboards();
+      updateVideoTracksFromStoryboards();
+      toast('已生成 ' + items.length + ' 个分镜，请先从剧本提取资产再生图', 'success');
+    } else if (currentProject) {
+      loadProjectStoryboards(currentProject.id, currentEpisode?.id);
+    }
+  }
+
+  function applyExtractAssetsResult(data) {
+    const n = data && data.action_result && data.action_result.result && data.action_result.result.assets;
+    loadProjectAssets(currentProject.id).then(() => {
+      switchWorkbenchPanel('assets');
+      toast(typeof n === 'number' ? ('已提取 ' + n + ' 项资产') : '资产已刷新', 'success');
+    });
+  }
+
+  function applyWorkflowResult(action, data) {
+    if (!action) return;
+    if (action === 'analyze_events') {
+      loadSourceTexts();
+      const result = data && data.action_result && data.action_result.result;
+      const n = result && result.analyzed;
+      toast(n != null ? ('事件分析完成，共 ' + n + ' 章') : '事件分析完成', 'success');
+      return;
+    }
+    if (action === 'split_episodes') {
+      loadSourceTexts();
+      const eps = data && data.work;
+      if (Array.isArray(eps) && eps.length) {
+        episodes = eps;
+        currentEpisode = eps[0];
+        loadEpisodes();
+        switchWorkbenchPanel('script');
+        toast('已分 ' + eps.length + ' 集', 'success');
+      } else {
+        loadEpisodes();
+        switchWorkbenchPanel('script');
+        toast('分集完成', 'success');
+      }
+      return;
+    }
+    if (planningActionMap[action]) {
+      applyPlanningWorkResult(action, data);
+      return;
+    }
+    if (action === 'generate_storyboard') {
+      applyStoryboardResult(data);
+      return;
+    }
+    if (action === 'extract_assets') {
+      if (data && data.action_result && data.action_result.error) {
+        toast('资产提取失败: ' + data.action_result.error, 'error');
+        return;
+      }
+      applyExtractAssetsResult(data);
+      return;
+    }
+    if (action === 'generate_shot_image') {
+      const shot = data && data.action_result && data.action_result.result && data.action_result.result.shot_number;
+      if (shot) {
+        submitShotImagesViaWS([shot], '为第 ' + shot + ' 镜生成图片');
+      }
+      return;
+    }
+    if (action === 'batch_generate_shot_images') {
+      isGenerating = true;
+      loadTasks();
+      if (currentProject) {
+        loadProjectStoryboards(currentProject.id, currentEpisode?.id);
+      }
+      return;
+    }
+    if (action === 'generate_shot_video' || action === 'batch_generate_shot_videos') {
+      loadTasks();
+      loadShotClips();
+      return;
+    }
+    if (action === 'delete_shot_clip') {
+      loadShotClips();
+      toast('视频版本已删除', 'info');
+    }
+  }
+
+  function submitShotImagesViaWS(shotNumbers, userLabel) {
+    if (!currentProject || !currentEpisode) {
+      toast('请先选择项目与集', 'warning');
+      return Promise.resolve();
+    }
+    if (!shotNumbers || !shotNumbers.length) {
+      toast('请勾选分镜，或点击卡片上的「🎨 生成图片」', 'warning');
+      return Promise.resolve();
+    }
+    if (isGenerating) {
+      toast('已有生成任务进行中，请稍候', 'warning');
+      return Promise.resolve();
+    }
+    return loadProjectAssets(currentProject.id).then(list => {
+      if (!list || list.length === 0) {
+        toast('请先从剧本提取资产后再生图', 'warning');
+        switchWorkbenchPanel('assets');
+        return;
+      }
+      runWorkflowViaWS(
+        'batch_generate_shot_images',
+        userLabel || ('为 ' + shotNumbers.length + ' 个分镜生成图片'),
+        null,
+        '生成中',
+        { shotNumbers: shotNumbers }
+      );
+    });
+  }
+
+  function runWorkflowViaWS(action, userLabel, btn, loadingLabel, opts) {
+    if (!currentProject) {
+      toast('请先选择项目', 'warning');
+      return;
+    }
+    opts = opts || {};
+    const needsEpisode = {
+      generate_skeleton: 1,
+      generate_strategy: 1,
+      generate_script: 1,
+      generate_storyboard: 1,
+      extract_assets: 1,
+      generate_shot_image: 1,
+      batch_generate_shot_images: 1,
+      generate_shot_video: 1,
+      batch_generate_shot_videos: 1,
+    };
+    if (needsEpisode[action] && !currentEpisode) {
+      toast('请先选择一集', 'warning');
+      return;
+    }
+    if (action === 'batch_generate_shot_videos' || action === 'generate_shot_video') {
+      const shots = opts.shotNumbers || [];
+      if (!shots.length) {
+        toast('请至少选择一个分镜', 'warning');
+        return;
+      }
+      const missingImage = shots.filter(n => {
+        const sb = storyboards.find(s => s.shot_number === n);
+        return !sb || !sb.image_url;
+      });
+      if (missingImage.length) {
+        toast('请先生成图片：第 ' + missingImage.join('、') + ' 镜', 'warning');
+        return;
+      }
+    }
+    if (planningActionMap[action]) {
+      showPlanningWorkInProgress(action);
+    }
+    const sent = sendWS('run_workflow', {
+      action: 'run_workflow',
+      workflow_action: action,
+      project_id: currentProject.id,
+      episode_id: currentEpisode ? currentEpisode.id : '',
+      shot_numbers: opts.shotNumbers || [],
+      workflow_params: opts.params || {},
+      clip_id: opts.clipId || '',
+    });
+    if (!sent) return;
+    appendChatMessage('user', userLabel);
+    updateChatProgress((loadingLabel || userLabel) + '...', 5);
+    setStatus((loadingLabel || userLabel) + '...');
+    if (btn) {
+      pendingWorkflowUI = { btn: btn, origLabel: btn.textContent };
+      btn.disabled = true;
+      btn.textContent = loadingLabel || '处理中';
+    }
   }
 
   function beginChatStreamBubble(hint) {
@@ -806,46 +1027,6 @@
     scrollChatToBottom();
   }
 
-  function runWorkflowAction(action, params) {
-    if (!currentProject) {
-      toast('请先选择项目', 'warning');
-      return Promise.reject(new Error('no project'));
-    }
-    const needsEpisode = {
-      generate_skeleton: 1, generate_strategy: 1, generate_script: 1,
-      generate_storyboard: 1, extract_assets: 1, generate_shot_image: 1,
-    };
-    if (needsEpisode[action] && !currentEpisode) {
-      toast('请先选择一集', 'warning');
-      return Promise.reject(new Error('no episode'));
-    }
-    updateChatProgress('正在执行...', 30);
-    return apiFetch('/api/projects/' + currentProject.id + '/chat/action', {
-      method: 'POST',
-      body: JSON.stringify({
-        action: action,
-        episode_id: currentEpisode ? currentEpisode.id : '',
-        params: params || {},
-      }),
-      signal: AbortSignal.timeout(10 * 60 * 1000),
-    }).then(r => {
-      if (!r.ok) return r.json().then(j => { throw new Error((j && j.error) || '执行失败'); });
-      return r.json();
-    }).then(res => {
-      updateChatProgress('', 0);
-      if (res.action && res.action.type) {
-        handleChatAction(res);
-      } else if (res.reply) {
-        toast(res.reply, 'info');
-      }
-      return res;
-    }).catch(err => {
-      updateChatProgress('', 0);
-      toast(err.message || '执行失败', 'error');
-      throw err;
-    });
-  }
-
   function sendChat(message, silent) {
     if (!currentProject) { toast('请先选择项目', 'warning'); return Promise.reject(); }
     const box = document.getElementById('wb-chat-messages');
@@ -883,62 +1064,19 @@
     if (!res.action || !res.action.type) return;
     const t = res.action.type;
     if (t === 'generate_shot_image') {
-      const shot = res.action && res.action.result && res.action.result.shot_number;
-      if (shot) {
-        switchWorkbenchPanel('storyboard');
-        generateShotImage(shot);
-      }
+      applyWorkflowResult(t, { action_result: res.action, work: res.work });
       return;
     }
     if (t === 'analyze_events' || t === 'split_episodes') {
-      loadSourceTexts();
-      loadEpisodes();
+      applyWorkflowResult(t, { work: res.work, action_result: res.action });
+      return;
     }
     if (t === 'generate_skeleton' || t === 'generate_strategy' || t === 'generate_script') {
-      if (res.action && res.action.error) {
-        toast('生成失败: ' + res.action.error, 'error');
-        loadPlanningContent();
-        return;
-      }
-      const planMap = {
-        generate_skeleton: 'skeleton',
-        generate_strategy: 'strategy',
-        generate_script: 'script',
-      };
-      setPlanningTab(planMap[t]);
-      switchWorkbenchPanel('planning');
-      if (typeof res.work === 'string' && res.work.trim()) {
-        showPlanningContent(res.work);
-      } else {
-        loadPlanningContent();
-      }
-      loadEpisodes();
-      toast((planningTypeLabels[planMap[t]] || '内容') + '已生成', 'success');
+      applyPlanningWorkResult(t, { work: res.work, action_result: res.action });
       return;
     }
-    if (t === 'generate_storyboard') {
-      switchWorkbenchPanel('storyboard');
-      const items = normalizeStoryboards(res.work);
-      if (items.length > 0) {
-        storyboards = items;
-        renderStoryboards();
-        updateVideoTracksFromStoryboards();
-        toast('已生成 ' + items.length + ' 个分镜，请先从剧本提取资产再生图', 'success');
-      } else if (currentProject) {
-        loadProjectStoryboards(currentProject.id, currentEpisode?.id);
-      }
-      return;
-    }
-    if (t === 'extract_assets') {
-      if (res.action && res.action.error) {
-        toast('资产提取失败: ' + res.action.error, 'error');
-        return;
-      }
-      const n = res.action && res.action.result && res.action.result.assets;
-      loadProjectAssets(currentProject.id).then(() => {
-        switchWorkbenchPanel('assets');
-        toast(typeof n === 'number' ? ('已提取 ' + n + ' 项资产') : '资产已刷新', 'success');
-      });
+    if (t === 'generate_storyboard' || t === 'extract_assets') {
+      applyWorkflowResult(t, { work: res.work, action_result: res.action });
       return;
     }
     toast('已执行: ' + t, 'success');
@@ -1026,48 +1164,14 @@
       toast('请先生成该分镜图片', 'warning');
       return Promise.resolve();
     }
-    if (sb.image_url && !sb.image_remote_url) {
-      toast('该分镜图片缺少 Agnes 远程链接，请先重新生成图片再生成视频', 'warning');
-      return Promise.resolve();
-    }
-    toast('正在提交第 ' + shotNumber + ' 镜视频任务…', 'info');
-    return apiFetch('/api/projects/' + currentProject.id + '/episodes/' + currentEpisode.id +
-      '/shots/' + shotNumber + '/generate-video', {
-      method: 'POST',
-    }).then(r => {
-      if (r.status === 202) return r.json();
-      if (!r.ok) return r.json().then(j => { throw new Error(j.error || '生成失败'); });
-      return r.json();
-    }).then(res => {
-      if (res.task_id) {
-        toast('任务已提交: ' + (res.title || res.task_id), 'info');
-        loadTasks();
-        return waitForTask(res.task_id).then(() => {
-          loadShotClips();
-          toast('第 ' + shotNumber + ' 镜视频生成完成', 'success');
-        });
-      }
-      const srcLabel = res.source === 'ai' ? 'AI 图生视频' : '图片动态化(兜底)';
-      toast('第 ' + shotNumber + ' 镜视频 v' + res.version + ' 已生成 · ' + srcLabel, res.source === 'ai' ? 'success' : 'info');
-      loadShotClips();
-    }).catch(err => { toast('生成失败: ' + (err.message || err), 'error'); loadTasks(); });
-  }
-
-  function waitForTask(taskId, timeoutMs) {
-    timeoutMs = timeoutMs || 15 * 60 * 1000;
-    const start = Date.now();
-    return new Promise((resolve, reject) => {
-      function poll() {
-        apiFetch('/api/tasks').then(r => r.json()).then(list => {
-          const t = (list || []).find(x => x.id === taskId);
-          if (t && t.state === 'done') { resolve(t); return; }
-          if (t && t.state === 'error') { reject(new Error(t.error_message || '任务失败')); return; }
-          if (Date.now() - start > timeoutMs) { reject(new Error('任务超时')); return; }
-          setTimeout(poll, 2000);
-        }).catch(reject);
-      }
-      poll();
-    });
+    runWorkflowViaWS(
+      'generate_shot_video',
+      '为第 ' + shotNumber + ' 镜生成视频',
+      null,
+      '生成中',
+      { shotNumbers: [shotNumber] }
+    );
+    return Promise.resolve();
   }
 
   async function batchGenerateShotVideos() {
@@ -1080,18 +1184,13 @@
       toast('请先选择项目与集', 'warning');
       return;
     }
-    const missingImage = shots.filter(n => {
-      const sb = storyboards.find(s => s.shot_number === n);
-      return !sb || !sb.image_url;
-    });
-    if (missingImage.length) {
-      toast('请先生成图片：第 ' + missingImage.join('、') + ' 镜', 'warning');
-      return;
-    }
-    toast('开始为 ' + shots.length + ' 个分镜生成视频', 'info');
-    for (const shotNum of shots) {
-      await generateShotVideo(shotNum);
-    }
+    runWorkflowViaWS(
+      'batch_generate_shot_videos',
+      '批量生成视频（' + shots.length + ' 镜）',
+      document.getElementById('btn-batch-gen-video'),
+      '生成中',
+      { shotNumbers: shots }
+    );
   }
 
   function selectShotClip(clipId) {
@@ -1103,18 +1202,14 @@
 
   function deleteShotClip(clipId) {
     if (!confirm('确定删除此视频版本？')) return Promise.resolve();
-    return apiFetch('/api/shot-clips/' + clipId, { method: 'DELETE' })
-      .then(r => {
-        if (!r.ok) return r.json().then(j => { throw new Error(j.error || '删除失败'); });
-        toast('已删除', 'info');
-        return loadShotClips();
-      })
-      .then(() => {
-        if (clipVersionDropdownShot != null && !clipsForShot(clipVersionDropdownShot).length) {
-          clipVersionDropdownShot = null;
-        }
-      })
-      .catch(err => toast('删除失败: ' + (err.message || err), 'error'));
+    runWorkflowViaWS(
+      'delete_shot_clip',
+      '删除视频版本',
+      null,
+      '删除中',
+      { clipId: clipId }
+    );
+    return Promise.resolve();
   }
 
   function closeClipVersionDropdown() {
@@ -1437,41 +1532,38 @@
   }
 
   function startGeneration(mode, shotNumbers) {
-    if (!currentProject) { toast('请先选择或创建项目', 'warning'); return; }
-    const script = getEpisodeScript();
-    if ((mode === 'full' || mode === 'parse') && !script) {
-      toast('请先在 AI策划 中为当前集生成剧本', 'warning');
-      switchWorkbenchPanel('planning');
-      return;
-    }
-    if (mode === 'images' && storyboards.length === 0) {
-      toast('请先生成分镜', 'warning');
-      return;
-    }
-    if (mode === 'images' && assets.length === 0) {
-      toast('请先从剧本提取资产后再生图', 'warning');
-      switchWorkbenchPanel('assets');
-      return;
-    }
-    const selectedShots = Array.isArray(shotNumbers) && shotNumbers.length
-      ? shotNumbers
-      : getSelectedShotNumbers();
-    if (mode === 'images' && selectedShots.length === 0) {
-      toast('请至少勾选一个分镜', 'warning');
-      return;
+    if (mode === 'images') {
+      const selectedShots = Array.isArray(shotNumbers) && shotNumbers.length
+        ? shotNumbers
+        : getSelectedShotNumbers();
+      if (!currentProject) { toast('请先选择或创建项目', 'warning'); return Promise.resolve(); }
+      if (!currentEpisode) { toast('请先选择一集', 'warning'); return Promise.resolve(); }
+      if (storyboards.length === 0) { toast('请先生成分镜', 'warning'); return Promise.resolve(); }
+      return submitShotImagesViaWS(
+        selectedShots,
+        selectedShots.length === 1
+          ? ('为第 ' + selectedShots[0] + ' 镜生成图片')
+          : ('批量生成图片（' + selectedShots.length + ' 镜）')
+      );
     }
     if (mode === 'video') {
       toast('请在「视频」页使用时间线手动导出成片', 'info');
       switchWorkbenchPanel('video');
-      return;
+      return Promise.resolve();
     }
-
-    sendWS('start_generate', {
+    if (!currentProject) { toast('请先选择或创建项目', 'warning'); return Promise.resolve(); }
+    const script = getEpisodeScript();
+    if ((mode === 'full' || mode === 'parse') && !script) {
+      toast('请先在 AI策划 中为当前集生成剧本', 'warning');
+      switchWorkbenchPanel('planning');
+      return Promise.resolve();
+    }
+    const sent = sendWS('start_generate', {
       action: 'start_generate',
       mode: mode,
       project_id: currentProject.id,
       episode_id: currentEpisode ? currentEpisode.id : '',
-      shot_numbers: mode === 'images' ? selectedShots : [],
+      shot_numbers: [],
       script: script,
       style: currentProject.art_style || '',
       frame_duration: 3,
@@ -1480,23 +1572,16 @@
         : (getGeneralSetting('default_resolution', '1280x720')),
       fps: parseInt(getGeneralSetting('default_fps', '24'), 10) || 24,
     });
-    isGenerating = true;
-    if (mode === 'images') {
-      toast(selectedShots.length === 1
-        ? '正在为第 ' + selectedShots[0] + ' 镜生成图片'
-        : '开始为 ' + selectedShots.length + ' 个分镜生成图片', 'info');
+    if (sent) {
+      isGenerating = true;
+      setStatus('发送生成任务...');
+      setTimeout(loadTasks, 500);
     }
-    setStatus('发送生成任务...');
-    setTimeout(loadTasks, 500);
+    return Promise.resolve();
   }
 
   function generateShotImage(shotNumber) {
-    if (isGenerating) {
-      toast('已有生成任务进行中，请稍候', 'warning');
-      return;
-    }
-    startGeneration('images', [shotNumber]);
-    loadTasks();
+    return submitShotImagesViaWS([shotNumber], '为第 ' + shotNumber + ' 镜生成图片');
   }
 
   // ======================== 资产 CRUD ========================
@@ -1689,8 +1774,6 @@
           ${renderStoryboardImageColumn(sb, i)}
           ${renderStoryboardVideoColumn(sb, i)}
         </div>
-        ${sb.image_url && !sb.image_remote_url ?
-          '<div class="shot-remote-url-hint">⚠️ 图片需重新生成才能走 Agnes 图生视频</div>' : ''}
       </div>
     `).join('');
     els.storyboardList.querySelectorAll('.sb-gen-image-btn').forEach(btn => {
@@ -2170,61 +2253,17 @@
     }).catch(() => toast('导入失败', 'error'));
   });
 
-  function runProjectAction(path, btn, loadingLabel, onSuccess) {
-    if (!currentProject) {
-      toast('请先选择项目', 'warning');
-      return;
-    }
-    const origLabel = btn ? btn.textContent : '';
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = loadingLabel;
-    }
-    setStatus(loadingLabel + '...');
-
-    apiFetch('/api/projects/' + currentProject.id + path, {
-      method: 'POST',
-      signal: AbortSignal.timeout(10 * 60 * 1000),
-    })
-      .then(async (r) => {
-        const data = await r.json().catch(() => ({}));
-        if (!r.ok) {
-          const lid = data.log_id || r.logId || '';
-          throw new Error((data.error || ('HTTP ' + r.status)) + (lid ? ' [log_id: ' + lid + ']' : ''));
-        }
-        return data;
-      })
-      .then(onSuccess)
-      .catch((e) => toast(e.message || '操作失败', 'error'))
-      .finally(() => {
-        if (btn) {
-          btn.disabled = false;
-          btn.textContent = origLabel;
-        }
-        updateChatProgress('', 0);
-        setStatus('就绪');
-      });
-  }
-
   document.getElementById('btn-analyze-events').addEventListener('click', () => {
     if (!sourceTexts.length) {
       toast('请先导入原文', 'warning');
       return;
     }
-    const btn = document.getElementById('btn-analyze-events');
-    runProjectAction('/source-texts/analyze', btn, '分析中', (res) => {
-      if (res.items && res.items.length) {
-        res.items.forEach(item => {
-          const row = sourceTexts.find(s => s.id === item.id);
-          if (row) row.events = item.events;
-        });
-        renderSourceTexts();
-      } else {
-        loadSourceTexts();
-      }
-      updateChatProgress('', 0);
-      toast('事件分析完成，共 ' + (res.analyzed || 0) + ' 章', 'success');
-    });
+    runWorkflowViaWS(
+      'analyze_events',
+      '事件分析',
+      document.getElementById('btn-analyze-events'),
+      '分析中'
+    );
   });
 
   document.getElementById('btn-split-episodes').addEventListener('click', () => {
@@ -2232,49 +2271,58 @@
       toast('请先导入原文', 'warning');
       return;
     }
-    const btn = document.getElementById('btn-split-episodes');
-    runProjectAction('/episodes/split', btn, '分集中', (res) => {
-      episodes = res.episodes || [];
-      if (episodes.length) currentEpisode = episodes[0];
-      loadEpisodes();
-      switchWorkbenchPanel('script');
-      toast('已分 ' + episodes.length + ' 集', 'success');
-    });
+    runWorkflowViaWS(
+      'split_episodes',
+      'AI 分集',
+      document.getElementById('btn-split-episodes'),
+      '分集中'
+    );
   });
 
   document.querySelectorAll('[data-quick]').forEach(btn => {
     btn.addEventListener('click', () => {
       const action = btn.dataset.quick;
       if (!currentEpisode) { toast('请先选择一集', 'warning'); return; }
-      if (action === 'generate_skeleton' || action === 'generate_strategy' || action === 'generate_script') {
-        const typeMap = {
-          generate_skeleton: 'skeleton',
-          generate_strategy: 'strategy',
-          generate_script: 'script',
-        };
-        generatePlanningWork(typeMap[action]).catch(() => {});
+      if (workflowUserLabels[action]) {
+        runWorkflowViaWS(
+          action,
+          workflowUserLabels[action],
+          btn,
+          workflowLoadingLabels[action] || '处理中'
+        );
         return;
       }
-      runWorkflowAction(action).catch(() => {});
     });
   });
 
   document.getElementById('btn-extract-assets').addEventListener('click', () => {
-    const btn = document.getElementById('btn-extract-assets');
-    btn.disabled = true;
-    extractAssetsDirect({ showProgress: false })
-      .finally(() => { btn.disabled = false; });
+    if (!currentEpisode) { toast('请先选择一集', 'warning'); return; }
+    runWorkflowViaWS(
+      'extract_assets',
+      '从剧本提取资产',
+      document.getElementById('btn-extract-assets'),
+      '提取中'
+    );
   });
 
-  // AI 生成分镜
   document.getElementById('btn-gen-storyboard').addEventListener('click', () => {
     if (!currentEpisode) { toast('请先选择一集', 'warning'); return; }
-    runWorkflowAction('generate_storyboard').catch(() => {});
+    runWorkflowViaWS(
+      'generate_storyboard',
+      '生成分镜',
+      document.getElementById('btn-gen-storyboard'),
+      '生成中'
+    );
   });
 
-  // 批量生成图片
   document.getElementById('btn-gen-images').addEventListener('click', () => {
-    startGeneration('images');
+    if (!currentEpisode) { toast('请先选择一集', 'warning'); return; }
+    const shots = getSelectedShotNumbers();
+    if (!shots.length) {
+      toast('请勾选分镜，或点击卡片上的「🎨 生成图片」', 'warning');
+      return;
+    }
+    submitShotImagesViaWS(shots, '批量生成图片（' + shots.length + ' 镜）');
   });
 
   if (els.btnSelectAllShots) {

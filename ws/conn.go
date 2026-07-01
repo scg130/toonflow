@@ -31,7 +31,10 @@ type WSRequest struct {
 	Mode          string  `json:"mode,omitempty"`       // full, parse, images, video
 	ProjectID     string  `json:"project_id,omitempty"`
 	EpisodeID     string  `json:"episode_id,omitempty"`
-	ShotNumbers   []int   `json:"shot_numbers,omitempty"` // empty = all shots
+	ShotNumbers    []int             `json:"shot_numbers,omitempty"`    // empty = all shots
+	WorkflowAction string            `json:"workflow_action,omitempty"`
+	WorkflowParams map[string]string `json:"workflow_params,omitempty"`
+	ClipID         string            `json:"clip_id,omitempty"`
 }
 
 // WSResponse represents a server-to-client message.
@@ -57,11 +60,17 @@ type ConnManager struct {
 	broadcast  chan WSResponse
 	pongWait   time.Duration
 	generation *GenerationService
+	workflow   *WorkflowService
 }
 
 // SetGenerationService attaches the generation handler.
 func (cm *ConnManager) SetGenerationService(gs *GenerationService) {
 	cm.generation = gs
+}
+
+// SetWorkflowService attaches the workflow handler.
+func (cm *ConnManager) SetWorkflowService(wfs *WorkflowService) {
+	cm.workflow = wfs
 }
 
 // NewConnManager creates a new connection manager.
@@ -196,6 +205,12 @@ func handleAction(cm *ConnManager, conn *websocket.Conn, req *WSRequest) {
 		}
 	case "cancel_generate":
 		cm.Broadcast(WSResponse{Code: 0, Msg: "已取消"})
+	case "run_workflow":
+		if cm.workflow != nil {
+			cm.workflow.handleRunWorkflow(cm, userID, req)
+		} else {
+			cm.Broadcast(WSResponse{Code: 1, Msg: "workflow service unavailable", Step: "workflow_error"})
+		}
 	default:
 		cm.Broadcast(WSResponse{
 			Code: 1, Msg: fmt.Sprintf("unknown action: %s", req.Action), Step: "error",

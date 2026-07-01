@@ -4,8 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +11,6 @@ import (
 
 	"toonflow/adapter"
 	"toonflow/logger"
-	"toonflow/task"
 )
 
 // ShotClip is one generated video version for a storyboard shot.
@@ -83,7 +80,10 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 	logger.CtxTrace(ctx, "shot video prompt shot=%d prompt=%s", shotNumber, prompt)
 
 	width, height := videoSizeForRatio(videoRatio)
-	imageInput := imageURLForVideo(shot)
+	imageInput, err := ResolveShotImageCDNURL(ctx, db, v, outputDir, projectID, episodeID, shot)
+	if err != nil {
+		return nil, err
+	}
 
 	version, err := nextClipVersion(db, projectID, episodeID, shotNumber)
 	if err != nil {
@@ -131,33 +131,13 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 		logger.CtxTrace(ctx, "shot video missing remote image url shot=%d", shotNumber)
 	}
 	if fileURL == "" {
-		if shot.ImageURL == "" && imageInput == "" {
-			if apiErr != nil {
-				return nil, apiErr
-			}
-			return nil, fmt.Errorf("请先生成该分镜图片")
+		if apiErr != nil {
+			return nil, apiErr
 		}
 		if imageInput == "" {
-			if apiErr != nil {
-				return nil, apiErr
-			}
-			return nil, fmt.Errorf("缺少 Agnes 图片远程地址，请重新批量生成图片后再生成视频（远程 URL 约 24 小时有效）")
+			return nil, fmt.Errorf("请先生成第 %d 镜图片后再生成视频", shotNumber)
 		}
-		if shot.ImageURL == "" {
-			if apiErr != nil {
-				return nil, apiErr
-			}
-			return nil, fmt.Errorf("分镜图片不可用")
-		}
-		if err := generateClipFromImage(shot.ImageURL, outputDir, localFile, duration, width, height); err != nil {
-			if apiErr != nil {
-				return nil, fmt.Errorf("AI 图生视频失败(%v)；本地动态化也失败: %w", apiErr, err)
-			}
-			return nil, err
-		}
-		fileURL = clipPublicURL(projectID, episodeID, shotNumber, version)
-		source = "fallback"
-		logger.CtxTrace(ctx, "shot video fallback ken-burns shot=%d api_err=%v", shotNumber, apiErr)
+		return nil, fmt.Errorf("AI 图生视频未返回视频结果，请稍后重试")
 	}
 
 	_, _ = db.Exec(`UPDATE o_shot_clip SET is_selected = 0 WHERE project_id = ? AND episode_id = ? AND shot_number = ?`,
@@ -294,28 +274,7 @@ func clipPublicURL(projectID, episodeID string, shotNumber, version int) string 
 }
 
 func downloadFile(ctx context.Context, url, dest string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download status %d", resp.StatusCode)
-	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
-		return err
-	}
-	f, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
-	return err
+	return adapter.DownloadHTTPURL(ctx, dest, url)
 }
 
 func publicURLToLocal(outputDir, fileURL string) (string, bool) {
@@ -335,23 +294,25 @@ func publicURLToLocal(outputDir, fileURL string) (string, bool) {
 }
 
 func imageURLForVideo(shot *storyboardShot) string {
-	if shot.ImageRemoteURL != "" && strings.HasPrefix(shot.ImageRemoteURL, "http") {
+	// 图生视频只传 Agnes CDN URL，绝不传 base64 或本地 /output/ 路径
+	if adapter.IsCDNImageURL(shot.ImageRemoteURL) {
 		return shot.ImageRemoteURL
 	}
-	if strings.HasPrefix(shot.ImageURL, "http://") || strings.HasPrefix(shot.ImageURL, "https://") {
+	if adapter.IsCDNImageURL(shot.ImageURL) {
 		return shot.ImageURL
 	}
 	return ""
 }
 
 func videoSizeForRatio(ratio string) (int, int) {
+	// Match Agnes image generation aspect ratios for better I2V consistency.
 	switch strings.TrimSpace(ratio) {
 	case "9:16", "720x1280", "1080x1920":
-		return 720, 1280
+		return 576, 1024
 	case "1:1":
 		return 768, 768
 	default:
-		return 1280, 720
+		return 1024, 576
 	}
 }
 
@@ -365,75 +326,6 @@ func lookupArtStylePrompt(db *sql.DB, artStyle string) string {
 		return ""
 	}
 	return strings.TrimSpace(prompt)
-}
-
-func buildShotVideoPrompt(shot *storyboardShot, artStyle, stylePrompt string) (string, string) {
-	base := strings.TrimSpace(shot.Prompt)
-	if base == "" {
-		base = strings.TrimSpace(shot.Description)
-	}
-
-	parts := make([]string, 0, 12)
-	if base != "" {
-		parts = append(parts, base)
-	}
-	if stylePrompt != "" {
-		parts = append(parts, stylePrompt)
-	} else if artStyle != "" {
-		parts = append(parts, artStyle+" style")
-	}
-	parts = append(parts, StylePromptAnchors("", artStyle)...)
-	if cam := mapCameraToVideoMotion(shot.Camera); cam != "" {
-		parts = append(parts, cam)
-	}
-	if tags := motionBlurTags(task.StoryboardItem{
-		Description: shot.Description,
-		Camera:      shot.Camera,
-		Prompt:      shot.Prompt,
-	}); len(tags) > 0 {
-		parts = append(parts, tags...)
-	}
-	parts = append(parts, cinematicVideoEnhancers(artStyle)...)
-
-	negative := strings.Join([]string{
-		"static image", "frozen frame", "slideshow", "still photo", "no motion",
-		"morphing", "flickering", "jitter", "stuttering", "low fps",
-		"blurry", "out of focus", "low quality", "low resolution", "compression artifacts",
-		"distorted face", "deformed body", "bad anatomy", "extra limbs",
-		"watermark", "text overlay", "logo", "ugly", "cartoon flat 2D",
-		"plastic skin", "uncanny valley", "overexposed", "underexposed",
-	}, ", ")
-
-	return strings.Join(parts, ", "), negative
-}
-
-func cinematicVideoEnhancers(artStyle string) []string {
-	style := strings.ToLower(artStyle)
-	core := []string{
-		"3D cinematic blockbuster film quality",
-		"Pixar Disney DreamWorks level animation movie",
-		"physically based rendering PBR materials ambient occlusion",
-		"volumetric god rays atmospheric scattering light shafts",
-		"cinematic color grading teal and orange",
-		"shallow depth of field bokeh rack focus capable",
-		"subsurface scattering skin translucency realistic flesh",
-		"metallic PBR specular reflectivity on hard surfaces",
-		"subtle film grain anamorphic lens",
-		"smooth motivated camera movement",
-		"natural fluid character animation",
-		"realistic hair cloth and particle physics",
-		"epic dramatic lighting rim light global illumination",
-		"immersive movie scene ultra detailed 8K",
-	}
-	if strings.Contains(style, "2d") || strings.Contains(style, "flat") || strings.Contains(style, "pixel") {
-		core[0] = "premium animated film quality cinematic motion"
-		core[1] = "studio animation movie production quality"
-	}
-	if strings.Contains(style, "real") || strings.Contains(style, "真人") {
-		core[0] = "Hollywood blockbuster live-action cinematic quality"
-		core[1] = "ARRI camera film production IMAX quality"
-	}
-	return core
 }
 
 func mapCameraToVideoMotion(camera string) string {

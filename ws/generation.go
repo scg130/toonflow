@@ -127,7 +127,7 @@ func (gs *GenerationService) handleStartGenerate(cm *ConnManager, userID string,
 			return err
 		}
 		if tk.ProjectID != "" && len(tk.Storyboard) > 0 {
-			gs.saveStoryboardToDB(tk)
+			_ = service.SaveStoryboardItems(gs.DB, tk.ProjectID, tk.EpisodeID, tk.Storyboard)
 		}
 		logger.CtxTrace(ctx, "ws generate done task=%s mode=%s progress=%.0f", tk.ID, tk.Mode, tk.Progress)
 		return nil
@@ -167,19 +167,7 @@ func (gs *GenerationService) loadStoryboardFromDB(t *task.Task) error {
 }
 
 func (gs *GenerationService) saveStoryboardToDB(t *task.Task) {
-	shotsJSON, err := json.Marshal(t.Storyboard)
-	if err != nil {
-		return
-	}
-	sbID := fmt.Sprintf("sb_%s", t.ProjectID)
-	if t.EpisodeID != "" {
-		sbID = fmt.Sprintf("sb_%s_%s", t.ProjectID, t.EpisodeID)
-	}
-	_, _ = gs.DB.Exec(`
-		INSERT INTO o_storyboard (id, project_id, scene_name, shots, updated_at)
-		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT(id) DO UPDATE SET shots = excluded.shots, updated_at = CURRENT_TIMESTAMP
-	`, sbID, t.ProjectID, "episode", string(shotsJSON))
+	_ = service.SaveStoryboardItems(gs.DB, t.ProjectID, t.EpisodeID, t.Storyboard)
 }
 
 func (gs *GenerationService) ownsProject(userID, projectID string) bool {

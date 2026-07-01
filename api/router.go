@@ -19,6 +19,7 @@ func SetupRouter(
 	db *storage.DB,
 	queue *task.Queue,
 	engineCfg *engine.Config,
+	pipeline *engine.Pipeline,
 	skillMgr *skill.Manager,
 	v adapter.Vendor,
 	wsBC *ws.ConnManager,
@@ -26,7 +27,7 @@ func SetupRouter(
 	outputDir, staticDir string,
 	port int,
 ) *gin.Engine {
-	router := NewRouter(db, queue, engineCfg, skillMgr, v, wsBC, sessions, outputDir, staticDir, port)
+	router := NewRouter(db, queue, engineCfg, pipeline, skillMgr, v, wsBC, sessions, outputDir, staticDir, port)
 	return router.Setup()
 }
 

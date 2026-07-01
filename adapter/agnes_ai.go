@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -227,7 +228,7 @@ func (v *AgnesAIVendor) ImageRequest(ctx interface{}, model string, params Image
 		Model:        model,
 		Prompt:       params.Prompt,
 		Size:         size,
-		ReturnBase64: false,
+		ReturnBase64: true,
 	}
 	if params.ReferenceImageURL != "" {
 		body.Image = params.ReferenceImageURL
@@ -274,27 +275,99 @@ func (v *AgnesAIVendor) ImageRequest(ctx interface{}, model string, params Image
 	if err != nil {
 		return nil, err
 	}
-	if imgURL != "" {
-		logger.CtxTrace(c, "agnes image parsed remote_url=%s", imgURL)
+	if b64 != "" {
+		if _, err = base64.StdEncoding.DecodeString(b64); err != nil {
+			return nil, fmt.Errorf("image base64 decode failed: %w", err)
+		}
+		remote := ""
+		if IsCDNImageURL(imgURL) {
+			remote = imgURL
+		}
+		logger.CtxTrace(c, "agnes image parsed base64 len=%d remote_url=%s", len(b64), remote)
+		return &ImageResponse{
+			DataURL:   "data:image/png;base64," + b64,
+			RemoteURL: remote,
+			Model:     model,
+		}, nil
+	}
+	if IsCDNImageURL(imgURL) {
+		logger.CtxTrace(c, "agnes image parsed remote_url=%s (no inline base64)", imgURL)
 		return &ImageResponse{DataURL: imgURL, RemoteURL: imgURL, Model: model}, nil
 	}
-	if b64 == "" {
-		return nil, fmt.Errorf("agnes image empty data: %s", truncateForError(string(raw), 400))
+	return nil, fmt.Errorf("agnes image empty data: %s", truncateForError(string(raw), 400))
+}
+
+// PublishImageForVideo uploads a local image and returns an Agnes CDN URL (~24h) for I2V.
+func (v *AgnesAIVendor) PublishImageForVideo(ctx interface{}, localPath string) (string, error) {
+	if v == nil || v.client == nil || v.apiKey == "" {
+		return "", fmt.Errorf("Agnes-AI vendor not configured")
 	}
-
-	logger.CtxTrace(c, "agnes image parsed base64 len=%d (no remote url)", len(b64))
-
-	// 校验base64合法性
-	_, err = base64.StdEncoding.DecodeString(b64)
+	c, ok := ctx.(context.Context)
+	if !ok {
+		c = context.Background()
+	}
+	raw, err := os.ReadFile(localPath)
 	if err != nil {
-		return nil, fmt.Errorf("image base64 decode failed: %w", err)
+		return "", fmt.Errorf("read image: %w", err)
 	}
+	mime := "image/png"
+	lower := strings.ToLower(localPath)
+	if strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") {
+		mime = "image/jpeg"
+	}
+	type reqBody struct {
+		Model        string `json:"model"`
+		Prompt       string `json:"prompt"`
+		Image        string `json:"image"`
+		Size         string `json:"size"`
+		ReturnBase64 bool   `json:"return_base64"`
+		ExtraBody    struct {
+			ResponseFormat string `json:"response_format,omitempty"`
+		} `json:"extra_body,omitempty"`
+	}
+	body := reqBody{
+		Model:        DefaultImageModel,
+		Prompt:       "preserve exact same composition, subject, colors and lighting, high fidelity still frame",
+		Image:        "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(raw),
+		Size:         "1024x1024",
+		ReturnBase64: false,
+	}
+	body.ExtraBody.ResponseFormat = "url"
 
-	dataURL := "data:image/png;base64," + b64
-	return &ImageResponse{
-		DataURL: dataURL,
-		Model:   model,
-	}, nil
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return "", err
+	}
+	logger.CtxTrace(c, "agnes publish image for video local=%s", localPath)
+
+	req, err := http.NewRequestWithContext(c, "POST", v.baseURL+"/images/generations", bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+v.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := v.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("publish image request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	respRaw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("agnes publish image error %d: %s", resp.StatusCode, string(respRaw))
+	}
+	var respData map[string]interface{}
+	if err := json.Unmarshal(respRaw, &respData); err != nil {
+		return "", err
+	}
+	imgURL, _, err := extractImageURLOrB64(respData)
+	if err != nil {
+		return "", err
+	}
+	if !IsCDNImageURL(imgURL) {
+		return "", fmt.Errorf("agnes publish image: no cdn url in response")
+	}
+	return imgURL, nil
 }
 
 // extractImageURLOrB64 parses Agnes image API responses (data[].url, output[], top-level url, etc.).
@@ -320,21 +393,26 @@ func extractImageURLOrB64(data map[string]interface{}) (imgURL, b64 string, err 
 	if items, ok := data["data"].([]interface{}); ok && len(items) > 0 {
 		switch first := items[0].(type) {
 		case map[string]interface{}:
+			var u, b string
 			for _, key := range []string{"url", "image_url", "image"} {
-				if u := stringField(first, key); isHTTPURL(u) {
-					return u, "", nil
+				if found := stringField(first, key); isHTTPURL(found) {
+					u = found
+					break
 				}
 			}
-			if b := stringField(first, "b64_json"); b != "" {
-				return "", b, nil
+			for _, key := range []string{"b64_json", "base64"} {
+				if found := stringField(first, key); found != "" {
+					b = found
+					break
+				}
 			}
-			if b := stringField(first, "base64"); b != "" {
-				return "", b, nil
+			if u != "" || b != "" {
+				return u, b, nil
 			}
 			// 兜底：data[0] 内任意 https 字符串（如 platform-outputs.agnes-ai.space/...）
 			for _, v := range first {
 				if s, ok := v.(string); ok && isHTTPURL(s) {
-					return s, "", nil
+					return s, b, nil
 				}
 			}
 		case string:
@@ -364,6 +442,22 @@ func extractImageURLOrB64(data map[string]interface{}) (imgURL, b64 string, err 
 }
 
 func isHTTPURL(s string) bool {
+	return IsCDNImageURL(s)
+}
+
+// IsCDNImageURL reports whether s is an http(s) URL for Agnes video/img2video (not base64/data).
+func IsCDNImageURL(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	lower := strings.ToLower(s)
+	if strings.HasPrefix(lower, "data:") {
+		return false
+	}
+	if strings.HasPrefix(s, "/output/") || strings.HasPrefix(s, "/") {
+		return false
+	}
 	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
 }
 
@@ -478,17 +572,26 @@ func (v *AgnesAIVendor) VideoRequest(ctx interface{}, model string, params Video
 	body := reqBody{
 		Model:     model,
 		Prompt:    params.Prompt,
-		Image:     params.ImageURL,
 		Height:    height,
 		Width:     width,
 		NumFrames: numFrames,
 		FrameRate: frameRate,
 		NegativePrompt: params.Negative,
-		NumInferenceSteps: 30,
+		NumInferenceSteps: 45,
+	}
+	imageURL := strings.TrimSpace(params.ImageURL)
+	if imageURL != "" {
+		if !IsCDNImageURL(imageURL) {
+			return nil, fmt.Errorf("图生视频须使用 Agnes CDN 图片 URL（https://），不能传 base64 或本地路径")
+		}
+		body.Image = imageURL
+		logger.CtxTrace(c, "agnes video api image_url=%s", imageURL)
 	}
 	if body.NegativePrompt == "" {
 		body.NegativePrompt = "static image, frozen frame, no motion, blurry, low quality, distorted, watermark"
 	}
+	logger.CtxTrace(c, "agnes video api request model=%s %dx%d frames=%d steps=%d has_image=%v",
+		model, width, height, numFrames, body.NumInferenceSteps, imageURL != "")
 
 	payload, err := json.Marshal(body)
 	if err != nil {

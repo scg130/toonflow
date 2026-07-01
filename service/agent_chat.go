@@ -75,7 +75,7 @@ func (a *AgentChat) HandleMessage(ctx context.Context, userID, projectID, episod
 	ReportProgress(ctx, "chat", 25, "AI 回复完成")
 
 	reply, intent := parseActionFromReply(resp.Content)
-	if intent != nil && ShouldBlockChatAction(userMsg) {
+	if intent != nil && (ShouldBlockChatAction(userMsg) || !IsExplicitExecutionRequest(userMsg)) {
 		intent = nil
 		if strings.TrimSpace(reply) == "" {
 			reply = SanitizeWorkContent(resp.Content)

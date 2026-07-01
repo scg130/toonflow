@@ -28,6 +28,7 @@ type Router struct {
 	db            *storage.DB
 	queue         *task.Queue
 	cfg           *engine.Config
+	pipeline      *engine.Pipeline
 	skillMgr      *skill.Manager
 	adapter       adapter.Vendor
 	wsBroadcaster *ws.ConnManager
@@ -38,11 +39,12 @@ type Router struct {
 }
 
 // NewRouter creates a new Router with the given dependencies.
-func NewRouter(db *storage.DB, queue *task.Queue, engineCfg *engine.Config, skillMgr *skill.Manager, v adapter.Vendor, wsBC *ws.ConnManager, sessions *auth.Store, outputDir, staticDir string, port int) *Router {
+func NewRouter(db *storage.DB, queue *task.Queue, engineCfg *engine.Config, pipeline *engine.Pipeline, skillMgr *skill.Manager, v adapter.Vendor, wsBC *ws.ConnManager, sessions *auth.Store, outputDir, staticDir string, port int) *Router {
 	return &Router{
 		db:            db,
 		queue:         queue,
 		cfg:           engineCfg,
+		pipeline:      pipeline,
 		skillMgr:      skillMgr,
 		adapter:       v,
 		wsBroadcaster: wsBC,
@@ -130,6 +132,7 @@ func (r *Router) Setup() *gin.Engine {
 
 		protected.GET("/projects/:id/shot-clips", r.shotClipsListHandler)
 		protected.POST("/projects/:id/episodes/:epId/shots/:shotNum/generate-video", r.shotClipGenerateHandler)
+		protected.POST("/projects/:id/generate/images", r.generateImagesHandler)
 		protected.PUT("/shot-clips/:clipId/select", r.shotClipSelectHandler)
 		protected.DELETE("/shot-clips/:clipId", r.shotClipDeleteHandler)
 		protected.GET("/projects/:id/timeline", r.timelineGetHandler)

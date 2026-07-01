@@ -73,6 +73,9 @@ func main() {
 	// Wire WebSocket generation handler
 	genSvc := ws.NewGenerationService(pipeline, queue, db.DB, cfg.OutputDir, cfg.TaskTimeout)
 	broadcaster.SetGenerationService(genSvc)
+	wfSvc := ws.NewWorkflowService(db.DB, cfg.DefaultVendor, skillMgr, cfg.TaskTimeout)
+	wfSvc.SetTaskRunner(queue, pipeline, cfg.OutputDir)
+	broadcaster.SetWorkflowService(wfSvc)
 
 	// Create directories
 	os.MkdirAll(cfg.OutputDir, 0755)
@@ -88,6 +91,7 @@ func main() {
 		db,
 		queue,
 		pipelineCfg,
+		pipeline,
 		skillMgr,
 		v,
 		broadcaster,

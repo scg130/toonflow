@@ -287,6 +287,32 @@ func ShouldBlockChatAction(userMsg string) bool {
 	return isConsultativeChatMessage(msg)
 }
 
+// IsExplicitExecutionRequest reports whether the user clearly asks to run a workflow step now.
+// Chat must not execute actions unless this returns true (buttons use WS directly).
+func IsExplicitExecutionRequest(userMsg string) bool {
+	msg := strings.TrimSpace(userMsg)
+	if msg == "" {
+		return false
+	}
+	if isUnsupportedChatOperation(msg) {
+		return false
+	}
+	if isConsultativeChatMessage(msg) {
+		return false
+	}
+	strong := []string{
+		"帮我生成", "帮我做", "请生成", "请做", "现在生成", "现在开始", "开始生成", "立即生成",
+		"重新生成", "生成一下", "执行", "事件分析", "分析事件", "自动分集", "AI分集", "AI 分集",
+		"提取资产", "生成分镜", "现在分镜", "开始分镜", "生成图片", "生图", "出图", "生成视频", "从剧本提取",
+	}
+	for _, k := range strong {
+		if strings.Contains(msg, k) {
+			return true
+		}
+	}
+	return containsChatExecutionVerb(msg)
+}
+
 func isUnsupportedChatOperation(userMsg string) bool {
 	unsupported := []string{"删除", "移除", "改掉", "修改", "重命名", "导出", "下载", "清空"}
 	for _, k := range unsupported {
@@ -317,8 +343,7 @@ func isConsultativeChatMessage(userMsg string) bool {
 
 func containsChatExecutionVerb(userMsg string) bool {
 	execVerbs := []string{
-		"生成", "重新生成", "帮我生成", "帮我做", "现在开始", "开始生成", "执行",
-		"分镜", "提取资产", "分析", "分集", "出图", "生图", "做一版", "出一版",
+		"生成", "重新生成", "提取资产", "事件分析", "分析事件", "分集", "出图", "生图", "执行",
 	}
 	for _, v := range execVerbs {
 		if strings.Contains(userMsg, v) {
@@ -343,18 +368,17 @@ func ChatActionRulesText() string {
 - generate_shot_image — 为指定镜号生成图片（SHOT:镜号 或 ACTION:generate_shot_image:镜号）
 
 【何时可以输出 ACTION（须全部满足）】
-1. 用户在本轮消息里明确、当下要求执行上述某一步（如「帮我生成改编策略」「现在分镜」「提取资产」）
-2. 不是咨询（「是什么」「能不能」「应该先做哪个」）→ 只回答，不输出 ACTION
-3. 不是讨论、吐槽、复述历史、引用示例 → 不输出 ACTION
-4. 用户未明确要求执行时 → 只聊天，不输出 ACTION
-5. 已有骨架/策略/剧本/分镜不是拒绝理由；用户要求重做时输出对应 ACTION
+1. 用户在本轮消息里用祈使、明确的执行意图要求立刻做某一步（如「帮我生成改编策略」「现在分镜」「提取资产」）
+2. 用户只是在了解、比较、讨论、提问（含「是什么」「能不能」「应该先做哪个」「有什么看法」）→ 只回答，绝不输出 ACTION
+3. 用户仅提到步骤名称但未要求现在执行（如「改编策略很重要」）→ 不输出 ACTION
+4. 用户要求删除/修改/导出等不在白名单内的操作 → 说明无法通过聊天执行，禁止 ACTION
+5. 已有内容不是拒绝理由；用户明确要求重做时才输出对应 ACTION
 
-【何时禁止输出 ACTION】
-- 用户在问问题、要建议、闲聊（如「你对剧本有什么看法」「这样好不好」）
-- 用户要求删除/修改/导出等不在白名单内的操作（如「删除某镜视频」）→ 说明无法通过聊天执行，禁止 ACTION
-- 用户只是提到某步骤名称但未要求现在执行
-- 硬性条件不满足：需选集的动作但用户未选集；analyze/split 但无原文
+【何时禁止输出 ACTION（默认）】
+- 任何疑问句、咨询句、评价句、闲聊
+- 用户未用明确执行意图（帮我/请/现在/开始/重新生成 + 动作）要求执行
 - 想执行的动作不在白名单内
+- 硬性条件不满足：需选集但未选集；无原文却 analyze/split
 
 【输出格式（执行时）】
 聊天区只写 1～2 句确认语（如「好的，正在生成故事骨架」），最后一行单独输出：
@@ -363,6 +387,7 @@ ACTION:动作名
 正文（骨架/策略/剧本/分镜/资产）一律由系统在右侧面板生成展示，聊天里不要写正文
 
 【底线】
+- 默认纯聊天；只有用户明确要执行白名单动作时才输出 ACTION
 - 禁止输出白名单外的 ACTION
 - 禁止猜测、擅自替用户决定下一步
 - 禁止在聊天里输出骨架/策略/剧本/分镜表/资产列表等长正文`

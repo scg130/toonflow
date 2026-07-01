@@ -64,6 +64,18 @@ func TestExtractImageURLOrB64_dataStringURL(t *testing.T) {
 	}
 }
 
+func TestExtractImageURLOrB64_bothURLAndB64(t *testing.T) {
+	u := "https://platform-outputs.agnes-ai.space/images/t2i/abc.png"
+	got, b, err := extractImageURLOrB64(map[string]interface{}{
+		"data": []interface{}{
+			map[string]interface{}{"url": u, "b64_json": "aGVsbG8="},
+		},
+	})
+	if err != nil || got != u || b != "aGVsbG8=" {
+		t.Fatalf("got url=%q b64=%q err=%v", got, b, err)
+	}
+}
+
 func TestExtractImageURLOrB64_base64Alias(t *testing.T) {
 	u, b, err := extractImageURLOrB64(map[string]interface{}{
 		"data": []interface{}{

@@ -5,8 +5,6 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -290,32 +288,43 @@ func (p *Pipeline) genImage(ctx context.Context, t *task.Task, item task.Storybo
 	}
 	prompt := service.BuildShotImagePrompt(item, t.Style, service.ResolutionToVideoRatio(t.Resolution), assetPrompt)
 
-	resp, err := p.adapter.ImageRequest(ctx, p.imageModel, adapter.ImageParams{
-		Prompt:            prompt,
-		Model:             p.imageModel,
-		AspectRatio:       resToAspect(t.Resolution),
-		ReferenceImageURL: refURL,
-	})
-	if err != nil && refURL != "" {
-		logger.CtxTrace(ctx, "genImage shot=%d reference image failed, fallback to text: %v", item.ShotNumber, err)
-		resp, err = p.adapter.ImageRequest(ctx, p.imageModel, adapter.ImageParams{
-			Prompt:      prompt,
-			Model:       p.imageModel,
-			AspectRatio: resToAspect(t.Resolution),
-		})
+	resp, err := p.requestShotImage(ctx, t, prompt, refURL)
+	if err != nil && service.IsContentPolicyViolation(err) {
+		logger.CtxTrace(ctx, "genImage shot=%d policy block, retry strict sanitize", item.ShotNumber)
+		strict := service.SanitizeImagePromptForPolicy(prompt, service.SanitizeLevelStrict)
+		resp, err = p.requestShotImage(ctx, t, strict, "")
+	}
+	if err != nil && service.IsContentPolicyViolation(err) {
+		logger.CtxTrace(ctx, "genImage shot=%d policy block, retry fallback prompt", item.ShotNumber)
+		fallback := service.BuildFallbackSafeShotPrompt(item, t.Style, service.ResolutionToVideoRatio(t.Resolution))
+		resp, err = p.requestShotImage(ctx, t, fallback, "")
 	}
 	if err != nil {
+		if service.IsContentPolicyViolation(err) {
+			logger.CtxError(ctx, err, "genImage shot=%d policy blocked", item.ShotNumber)
+			return "", fmt.Errorf("%s: %w", service.UserFacingImagePolicyMessage(item.ShotNumber), err)
+		}
 		logger.CtxError(ctx, err, "genImage shot=%d failed", item.ShotNumber)
 		return "", err
 	}
 	logger.CtxTrace(ctx, "genImage shot=%d adapter resp model=%s data_url=%q remote_url=%q",
 		item.ShotNumber, resp.Model, summarizeDataURL(resp.DataURL), resp.RemoteURL)
-	if err := saveGeneratedImage(localPath, resp); err != nil {
+	if err := saveGeneratedImage(ctx, localPath, resp); err != nil {
 		return "", err
 	}
-	remoteURL := resp.RemoteURL
-	if remoteURL == "" && strings.HasPrefix(resp.DataURL, "http") {
+	remoteURL := ""
+	if adapter.IsCDNImageURL(resp.RemoteURL) {
+		remoteURL = resp.RemoteURL
+	} else if adapter.IsCDNImageURL(resp.DataURL) {
 		remoteURL = resp.DataURL
+	}
+	if remoteURL == "" {
+		if pub, ok := p.adapter.(adapter.ImageCDNPublisher); ok {
+			if u, pubErr := pub.PublishImageForVideo(ctx, localPath); pubErr == nil && adapter.IsCDNImageURL(u) {
+				remoteURL = u
+				logger.CtxTrace(ctx, "genImage shot=%d published remote_url=%s", item.ShotNumber, remoteURL)
+			}
+		}
 	}
 	if remoteURL != "" {
 		logger.CtxTrace(ctx, "genImage shot=%d saved local=%s image_remote_url=%s", item.ShotNumber, localPath, remoteURL)
@@ -323,6 +332,24 @@ func (p *Pipeline) genImage(ctx context.Context, t *task.Task, item task.Storybo
 		logger.CtxTrace(ctx, "genImage shot=%d saved local=%s (no image_remote_url, base64 only)", item.ShotNumber, localPath)
 	}
 	return remoteURL, nil
+}
+
+func (p *Pipeline) requestShotImage(ctx context.Context, t *task.Task, prompt, refURL string) (*adapter.ImageResponse, error) {
+	resp, err := p.adapter.ImageRequest(ctx, p.imageModel, adapter.ImageParams{
+		Prompt:            prompt,
+		Model:             p.imageModel,
+		AspectRatio:       resToAspect(t.Resolution),
+		ReferenceImageURL: refURL,
+	})
+	if err != nil && refURL != "" && !service.IsContentPolicyViolation(err) {
+		logger.CtxTrace(ctx, "image request reference failed, fallback text-only: %v", err)
+		resp, err = p.adapter.ImageRequest(ctx, p.imageModel, adapter.ImageParams{
+			Prompt:      prompt,
+			Model:       p.imageModel,
+			AspectRatio: resToAspect(t.Resolution),
+		})
+	}
+	return resp, err
 }
 
 func parseStoryboardText(text, resolution string) []task.StoryboardItem {
@@ -436,39 +463,18 @@ func resToAspect(res string) string {
 	}
 }
 
-func saveGeneratedImage(path string, resp *adapter.ImageResponse) error {
+func saveGeneratedImage(ctx context.Context, path string, resp *adapter.ImageResponse) error {
 	if resp == nil {
 		return fmt.Errorf("empty image response")
 	}
+	// Prefer inline base64 — avoids CDN download timeouts (platform-outputs.agnes-ai.space).
+	if resp.DataURL != "" && !strings.HasPrefix(resp.DataURL, "http://") && !strings.HasPrefix(resp.DataURL, "https://") {
+		return saveDataURL(path, resp.DataURL)
+	}
 	if strings.HasPrefix(resp.DataURL, "http://") || strings.HasPrefix(resp.DataURL, "https://") {
-		return downloadImageURL(path, resp.DataURL)
+		return adapter.DownloadHTTPURL(ctx, path, resp.DataURL)
 	}
-	return saveDataURL(path, resp.DataURL)
-}
-
-func downloadImageURL(path, url string) error {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return err
-	}
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		return fmt.Errorf("download image status %d", res.StatusCode)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = io.Copy(f, res.Body)
-	return err
+	return fmt.Errorf("no image data in response")
 }
 
 func saveDataURL(path, dataURL string) error {

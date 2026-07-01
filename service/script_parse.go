@@ -48,6 +48,7 @@ func parseScriptOnce(ctx context.Context, script, style string, assets []Project
 - duration (float) 秒数，默认3
 - prompt (string) 英文 AI 绘画提示词，须含：构图景别、与 camera 一致的运镜术语、AO/体积光/SSS/金属反射等 PBR 渲染细节；高速战斗或情绪爆发镜须标注 motion blur 或 high frame rate close-up
 - asset_ids (int[]) 本镜出现的资产 id，必须从下方资产清单选取（无资产时可省略）
+- prompt 须通过内容安全：禁止 blood/gore/nudity/裸露/血腥/残忍伤害；战斗用 stylized anime action、energy effects、dynamic pose，不写流血伤亡细节
 - prompt 中出场角色须含 character_id: [name], style: consistent 及特征关键词
 - prompt 须含渲染锚点：Unreal Engine 5 render, Octane Render, high fidelity, consistent lighting，并标明 16:9 或 9:16 构图与统一色调
 

@@ -13,7 +13,7 @@ func BuildShotImagePrompt(item task.StoryboardItem, style, videoRatio, assetProm
 		prompt = strings.TrimSpace(item.Description)
 	}
 	if assetPrompt != "" {
-		prompt += "。资产约束: " + assetPrompt
+		prompt += ". asset reference: " + SanitizeImagePromptForPolicy(assetPrompt, SanitizeLevelLight)
 	}
 	if style != "" {
 		prompt += ", " + style + " art style"
@@ -26,7 +26,7 @@ func BuildShotImagePrompt(item task.StoryboardItem, style, videoRatio, assetProm
 	if tags := motionBlurTags(item); len(tags) > 0 {
 		prompt += ", " + strings.Join(tags, ", ")
 	}
-	return prompt
+	return SanitizeImagePromptForPolicy(prompt, SanitizeLevelLight)
 }
 
 // EnrichCameraForPrompt maps storyboard camera notes to English prompt fragments.

@@ -27,7 +27,7 @@
 以下场景须在 prompt 中标注动态表现：
 
 - **高速战斗/追逐**：motion blur on limbs/weapons、motion streaks、high shutter action
-- **情绪爆发特写**：slow motion close-up 120fps、micro-expression detail、tear/blood particles
+- **情绪爆发特写**：slow motion close-up 120fps、micro-expression detail、light particles（禁止 blood/tear gore 描写）
 - **冲击瞬间**：radial motion blur、freeze-frame peak pose with blur trails
 
 prompt 与 camera 字段术语须一致，避免矛盾。
