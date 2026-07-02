@@ -138,6 +138,8 @@ func (r *Router) Setup() *gin.Engine {
 		protected.GET("/projects/:id/timeline", r.timelineGetHandler)
 		protected.PUT("/projects/:id/timeline", r.timelineSaveHandler)
 		protected.POST("/projects/:id/timeline/export", r.timelineExportHandler)
+		protected.POST("/projects/:id/narration/plan", r.narrationPlanHandler)
+		protected.POST("/projects/:id/narration/synthesize", r.narrationSynthesizeHandler)
 
 		protected.GET("/settings", r.settingsGetHandler)
 		protected.PUT("/settings", r.settingsUpdateHandler)

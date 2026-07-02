@@ -94,6 +94,9 @@
     timelineVideoClips: document.getElementById('timeline-video-clips'),
     timelineAudioClips: document.getElementById('timeline-audio-clips'),
     timelinePreview: document.getElementById('timeline-preview'),
+    narrationSegments: document.getElementById('narration-segments'),
+    narrationDurationHint: document.getElementById('narration-duration-hint'),
+    narrationPreview: document.getElementById('narration-preview'),
     videoExportArea: document.getElementById('video-export-area'),
     outputVideo: document.getElementById('output-video'),
     downloadLink: document.getElementById('download-link'),
@@ -1257,6 +1260,108 @@
     </div>`;
   }
 
+  function clipPlayDuration(clip) {
+    if (!clip) return 0;
+    const start = clip.start || 0;
+    let end = clip.end;
+    if (!end || end <= 0) end = clip.duration || 0;
+    if (end <= start) return clip.duration > 0 ? clip.duration : 3;
+    return end - start;
+  }
+
+  function timelineVideoDuration() {
+    const track = getVideoTrack();
+    if (!track || !track.clips) return 0;
+    return track.clips.reduce((sum, c) => sum + clipPlayDuration(c), 0);
+  }
+
+  function renderNarrationPanel() {
+    const dur = timelineVideoDuration();
+    if (els.narrationDurationHint) {
+      els.narrationDurationHint.textContent = dur > 0
+        ? ('成片时长：' + dur.toFixed(1) + ' 秒')
+        : '成片时长：—';
+    }
+    const plan = timeline && timeline.narration;
+    const segs = plan && plan.segments ? plan.segments : [];
+    if (!els.narrationSegments) return;
+    if (!segs.length) {
+      els.narrationSegments.innerHTML = '<div class="empty-state-sm"><p>点击「生成旁白方案」根据成片时长自动撰写解说词</p></div>';
+    } else {
+      els.narrationSegments.innerHTML = segs.map((seg, i) => `
+        <div class="narration-seg-item" data-seg-index="${i}">
+          <div class="narration-seg-meta">${(seg.start || 0).toFixed(1)}s ~ ${(seg.end || 0).toFixed(1)}s${seg.shot_number ? ' · 第' + seg.shot_number + '镜' : ''}</div>
+          <textarea class="narration-seg-text" data-i="${i}" rows="2">${escapeHtml(seg.text || '')}</textarea>
+        </div>
+      `).join('');
+      els.narrationSegments.querySelectorAll('.narration-seg-text').forEach(ta => {
+        ta.onchange = () => {
+          if (!timeline.narration || !timeline.narration.segments) return;
+          timeline.narration.segments[parseInt(ta.dataset.i, 10)].text = ta.value;
+        };
+      });
+    }
+    if (els.narrationPreview) {
+      const audioURL = plan && plan.audio_url;
+      if (audioURL) {
+        els.narrationPreview.style.display = 'block';
+        els.narrationPreview.src = audioURL;
+      } else {
+        els.narrationPreview.style.display = 'none';
+        els.narrationPreview.removeAttribute('src');
+      }
+    }
+  }
+
+  function planNarration() {
+    if (!currentProject || !currentEpisode) {
+      toast('请先选择项目与集', 'warning');
+      return;
+    }
+    if (timelineVideoDuration() <= 0) {
+      toast('时间线没有视频片段，请先载入分镜视频', 'warning');
+      return;
+    }
+    toast('正在生成旁白方案…', 'info');
+    apiFetch('/api/projects/' + currentProject.id + '/narration/plan', {
+      method: 'POST',
+      body: JSON.stringify({ episode_id: currentEpisode.id }),
+      signal: AbortSignal.timeout(5 * 60 * 1000),
+    }).then(r => r.json()).then(res => {
+      if (res.error) throw new Error(res.error);
+      if (res.timeline) timeline = res.timeline;
+      renderTimelineEditor();
+      toast('旁白方案已生成，可编辑后点击「合成配音」', 'success');
+    }).catch(err => toast('生成旁白方案失败: ' + (err.message || err), 'error'));
+  }
+
+  function synthesizeNarration() {
+    if (!currentProject || !currentEpisode) {
+      toast('请先选择项目与集', 'warning');
+      return;
+    }
+    const plan = timeline && timeline.narration;
+    if (!plan || !plan.segments || !plan.segments.length) {
+      toast('请先生成旁白方案', 'warning');
+      return;
+    }
+    toast('正在合成旁白配音（可能需要几分钟）…', 'info');
+    apiFetch('/api/projects/' + currentProject.id + '/narration/synthesize', {
+      method: 'POST',
+      body: JSON.stringify({
+        episode_id: currentEpisode.id,
+        segments: plan.segments,
+        voice: plan.voice || '',
+      }),
+      signal: AbortSignal.timeout(15 * 60 * 1000),
+    }).then(r => r.json()).then(res => {
+      if (res.error) throw new Error(res.error);
+      if (res.timeline) timeline = res.timeline;
+      renderTimelineEditor();
+      toast('旁白配音已合成并加入音频轨道，可导出成片', 'success');
+    }).catch(err => toast('合成配音失败: ' + (err.message || err), 'error'));
+  }
+
   function loadTimeline() {
     if (!currentProject || !currentEpisode) return Promise.resolve(null);
     return apiFetch('/api/projects/' + currentProject.id + '/timeline?episode_id=' +
@@ -1341,7 +1446,7 @@
       els.timelineAudioClips.innerHTML = aClips.map((clip, i) => `
         <div class="timeline-clip-item">
           <div class="timeline-clip-header">
-            <span class="timeline-clip-label">🎵 音频 ${i + 1}</span>
+            <span class="timeline-clip-label">${escapeHtml(clip.label || ('🎵 音频 ' + (i + 1)))}</span>
             <button class="btn btn-sm btn-outline tl-audio-del" data-i="${i}">×</button>
           </div>
           <div style="font-size:11px;color:var(--text-secondary);word-break:break-all">${escapeHtml(clip.file_url || '')}</div>
@@ -1353,6 +1458,7 @@
     }
 
     bindTimelineEvents();
+    renderNarrationPanel();
   }
 
   function bindTimelineEvents() {
@@ -2444,6 +2550,8 @@
   document.getElementById('btn-timeline-save')?.addEventListener('click', saveTimeline);
   document.getElementById('btn-timeline-export')?.addEventListener('click', exportTimeline);
   document.getElementById('btn-timeline-add-audio')?.addEventListener('click', addTimelineAudio);
+  document.getElementById('btn-narration-plan')?.addEventListener('click', planNarration);
+  document.getElementById('btn-narration-synthesize')?.addEventListener('click', synthesizeNarration);
 
   // 设置加载与保存（浏览器 localStorage 优先，服务端为备份）
   function readGeneralSettings() {

@@ -36,6 +36,7 @@ type TimelineEdit struct {
 	ProjectID string          `json:"project_id"`
 	EpisodeID string          `json:"episode_id"`
 	Tracks    []TimelineTrack `json:"tracks"`
+	Narration *NarrationPlan  `json:"narration,omitempty"`
 	UpdatedAt string          `json:"updated_at,omitempty"`
 }
 
@@ -140,22 +141,11 @@ func ExportTimeline(outputDir string, tl *TimelineEdit) (string, error) {
 
 	audioTrack := findTrack(tl, "audio")
 	if audioTrack != nil && len(audioTrack.Clips) > 0 {
-		audioClip := audioTrack.Clips[0]
-		audioLocal, ok := publicURLToLocal(outputDir, audioClip.FileURL)
-		if ok {
-			mixed := filepath.Join(workDir, "mixed.mp4")
-			args := []string{"-y", "-i", videoOnly, "-i", audioLocal,
-				"-c:v", "copy", "-c:a", "aac", "-shortest", mixed}
-			if audioClip.Start > 0 {
-				args = []string{"-y", "-i", videoOnly,
-					"-ss", fmt.Sprintf("%.3f", audioClip.Start), "-i", audioLocal,
-					"-c:v", "copy", "-c:a", "aac", "-shortest", mixed}
-			}
-			if out, err := exec.Command("ffmpeg", args...).CombinedOutput(); err != nil {
-				return "", fmt.Errorf("mix audio: %s", string(out))
-			}
-			finalPath = mixed
+		mixed := filepath.Join(workDir, "mixed.mp4")
+		if err := mixTimelineAudio(videoOnly, audioTrack, mixed, outputDir); err != nil {
+			return "", err
 		}
+		finalPath = mixed
 	}
 
 	if err := copyFile(finalPath, outPath); err != nil {
@@ -227,6 +217,49 @@ func findTrack(tl *TimelineEdit, typ string) *TimelineTrack {
 		if tl.Tracks[i].Type == typ {
 			return &tl.Tracks[i]
 		}
+	}
+	return nil
+}
+
+// mixTimelineAudio mixes all audio clips (narration + BGM) onto the video.
+func mixTimelineAudio(videoOnly string, audioTrack *TimelineTrack, dest, outputDir string) error {
+	if audioTrack == nil || len(audioTrack.Clips) == 0 {
+		return copyFile(videoOnly, dest)
+	}
+	var inputs []string
+	var filters []string
+	inputs = append(inputs, "-i", videoOnly)
+	valid := 0
+	for _, clip := range audioTrack.Clips {
+		local, ok := publicURLToLocal(outputDir, clip.FileURL)
+		if !ok {
+			continue
+		}
+		inputs = append(inputs, "-i", local)
+		delayMs := int((clip.Offset + clip.Start) * 1000)
+		if delayMs < 0 {
+			delayMs = 0
+		}
+		filters = append(filters, fmt.Sprintf("[%d:a]adelay=%d|%d,volume=1.0[a%d]", valid+1, delayMs, delayMs, valid))
+		valid++
+	}
+	if valid == 0 {
+		return copyFile(videoOnly, dest)
+	}
+	var mixInputs strings.Builder
+	for i := 0; i < valid; i++ {
+		mixInputs.WriteString(fmt.Sprintf("[a%d]", i))
+	}
+	filter := strings.Join(filters, ";") + ";" + mixInputs.String() +
+		fmt.Sprintf("amix=inputs=%d:duration=first:dropout_transition=0[aout]", valid)
+
+	args := []string{"-y"}
+	args = append(args, inputs...)
+	args = append(args, "-filter_complex", filter, "-map", "0:v", "-map", "[aout]",
+		"-c:v", "copy", "-c:a", "aac", "-shortest", dest)
+	out, err := exec.Command("ffmpeg", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("mix audio: %s", string(out))
 	}
 	return nil
 }

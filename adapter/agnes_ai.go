@@ -56,7 +56,7 @@ func (v *AgnesAIVendor) VendorConfig() VendorConfig {
 			{ID: DefaultImageModel, Name: "Agnes Image 2.0 Flash", Supports: []string{"image"}},
 			{ID: "agnes-image-2.1-flash", Name: "Agnes Image 2.1 Flash", Supports: []string{"image"}},
 			{ID: DefaultVideoModel, Name: "Agnes Video V2.0", Supports: []string{"video"}},
-			{ID: "microsoft-tts", Name: "Microsoft TTS", Supports: []string{"tts"}},
+			{ID: "microsoft-tts", Name: "Microsoft TTS (Edge 回退)", Supports: []string{"tts"}},
 		},
 	}
 }
@@ -710,79 +710,109 @@ func (v *AgnesAIVendor) pollVideoResult(ctx context.Context, videoID, model stri
 	}
 }
 
-// TTSRequest 对接 Agnes-AI 封装的微软TTS接口
+// TTSRequest 对接 OpenAI 兼容 TTS；Agnes 网关若未开放则 narration 会回退 Edge TTS。
 func (v *AgnesAIVendor) TTSRequest(ctx interface{}, model string, params TTSParams) (*TTSResponse, error) {
 	c, ok := ctx.(context.Context)
 	if !ok {
 		c = context.Background()
 	}
-
-	// 微软TTS标准入参，通过Agnes-AI中转
-	type reqBody struct {
-		Model  string  `json:"model"` // microsoft-tts
-		Text   string  `json:"text"`
-		Voice  string  `json:"voice"`           // 微软音色名称，如 zh-CN-YunyangNeural
-		Rate   float32 `json:"rate,omitempty"`  // 语速，对应微软rate
-		Pitch  float32 `json:"pitch,omitempty"` // 音调
-		Format string  `json:"response_format"`
+	if v.client == nil {
+		return nil, fmt.Errorf("Agnes-AI vendor not configured")
 	}
-
+	if v.apiKey == "" {
+		return nil, fmt.Errorf("API key not configured")
+	}
+	if model == "" {
+		model = DefaultTTSModel
+	}
 	voice := params.VoiceID
 	if voice == "" {
 		voice = "zh-CN-YunyangNeural"
 	}
 
-	body := reqBody{
-		Model:  model,
-		Text:   params.Text,
-		Voice:  voice,
-		Format: "base64_json",
+	// OpenAI-compatible speech endpoint (some gateways expose this).
+	type openAISpeechReq struct {
+		Model          string  `json:"model"`
+		Input          string  `json:"input"`
+		Voice          string  `json:"voice"`
+		ResponseFormat string  `json:"response_format,omitempty"`
+		Speed          float32 `json:"speed,omitempty"`
+	}
+	openBody, _ := json.Marshal(openAISpeechReq{
+		Model:          model,
+		Input:          params.Text,
+		Voice:          voice,
+		ResponseFormat: "mp3",
+	})
+	if resp, err := v.postTTS(c, v.baseURL+"/audio/speech", openBody, true); err == nil {
+		return resp, nil
 	}
 
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("marshal microsoft tts request: %w", err)
+	// Legacy Agnes microsoft-speech shape (if enabled on gateway).
+	type legacyReq struct {
+		Model  string  `json:"model"`
+		Text   string  `json:"text"`
+		Voice  string  `json:"voice"`
+		Rate   float32 `json:"rate,omitempty"`
+		Pitch  float32 `json:"pitch,omitempty"`
+		Format string  `json:"response_format"`
 	}
+	legacyBody, _ := json.Marshal(legacyReq{
+		Model: model, Text: params.Text, Voice: voice, Format: "base64_json",
+	})
+	return v.postTTS(c, v.baseURL+"/audio/microsoft-speech", legacyBody, false)
+}
 
-	req, err := http.NewRequestWithContext(c, "POST", v.baseURL+"/audio/microsoft-speech", bytes.NewReader(payload))
+func (v *AgnesAIVendor) postTTS(c context.Context, url string, payload []byte, binaryOK bool) (*TTSResponse, error) {
+	req, err := http.NewRequestWithContext(c, "POST", url, bytes.NewReader(payload))
 	if err != nil {
-		return nil, fmt.Errorf("create microsoft tts request: %w", err)
+		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+v.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := v.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("microsoft tts api request failed: %w", err)
+		return nil, fmt.Errorf("tts api request failed: %w", err)
 	}
 	defer resp.Body.Close()
-
+	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("microsoft tts error %d: %s", resp.StatusCode, string(raw))
+		return nil, fmt.Errorf("tts error %d: %s", resp.StatusCode, string(raw))
 	}
 
-	// Agnes-AI 统一返回音频base64字段
+	if binaryOK && len(raw) > 0 && raw[0] != '{' {
+		b64 := base64.StdEncoding.EncodeToString(raw)
+		return &TTSResponse{
+			AudioURL: "data:audio/mpeg;base64," + b64,
+			Model:    DefaultTTSModel,
+		}, nil
+	}
+
 	type ttsResp struct {
 		AudioB64 string `json:"audio_b64"`
+		Audio    string `json:"audio"`
+		Data     string `json:"data"`
 	}
 	var apiResp ttsResp
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
-		return nil, fmt.Errorf("decode microsoft tts resp: %w", err)
+	if err := json.Unmarshal(raw, &apiResp); err != nil {
+		return nil, fmt.Errorf("decode tts resp: %w", err)
 	}
-	if apiResp.AudioB64 == "" {
-		return nil, fmt.Errorf("microsoft tts empty audio data")
+	b64 := apiResp.AudioB64
+	if b64 == "" {
+		b64 = apiResp.Audio
 	}
-
-	// 校验base64有效性
-	_, err = base64.StdEncoding.DecodeString(apiResp.AudioB64)
-	if err != nil {
-		return nil, fmt.Errorf("microsoft tts base64 decode failed: %w", err)
+	if b64 == "" {
+		b64 = apiResp.Data
 	}
-
-	dataURL := "data:audio/mpeg;base64," + apiResp.AudioB64
+	if b64 == "" {
+		return nil, fmt.Errorf("tts empty audio data")
+	}
+	if _, err := base64.StdEncoding.DecodeString(b64); err != nil {
+		return nil, fmt.Errorf("tts base64 decode failed: %w", err)
+	}
 	return &TTSResponse{
-		AudioURL: dataURL,
-		Model:    model,
+		AudioURL: "data:audio/mpeg;base64," + b64,
+		Model:    DefaultTTSModel,
 	}, nil
 }

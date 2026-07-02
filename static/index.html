@@ -169,11 +169,24 @@
               </div>
             </div>
             <div class="video-editor">
-              <p class="video-editor-hint">步骤 1：在「分镜」页为每个镜头单独生成视频（可多次生成、选版、删除）。步骤 2：在此调整顺序、裁剪入出点、添加音频，最后手动导出。</p>
+              <p class="video-editor-hint">步骤 1：在「分镜」页为每个镜头单独生成视频。步骤 2：在此载入分镜、生成旁白方案并合成配音。步骤 3：调整裁剪与音频后导出成片。</p>
               <div class="video-editor-layout">
                 <div class="timeline-panel">
                   <h4>视频轨道</h4>
                   <div id="timeline-video-clips" class="timeline-clips"></div>
+                  <div class="narration-panel">
+                    <div class="narration-panel-header">
+                      <h4>旁白配音</h4>
+                      <span id="narration-duration-hint" class="narration-duration-hint">成片时长：—</span>
+                    </div>
+                    <p class="narration-hint">根据成片总时长生成解说词；配音使用微软 Edge 神经语音（无需额外 API Key），合成后写入音频轨道。</p>
+                    <div class="narration-actions">
+                      <button class="btn btn-sm btn-outline" id="btn-narration-plan" type="button">📝 生成旁白方案</button>
+                      <button class="btn btn-sm btn-primary" id="btn-narration-synthesize" type="button">🎙️ 合成配音</button>
+                    </div>
+                    <div id="narration-segments" class="narration-segments"></div>
+                    <audio id="narration-preview" controls class="narration-preview-audio" style="display:none;margin-top:8px;width:100%;"></audio>
+                  </div>
                   <h4 style="margin-top:16px">音频轨道</h4>
                   <div class="timeline-audio-add">
                     <input type="text" id="timeline-audio-url" class="form-input" placeholder="音频 URL（/output/... 或 http）">
@@ -514,6 +527,6 @@
   </div>
 </div>
 
-<script src="/static/js/app.js?v=20260630aj"></script>
+<script src="/static/js/app.js?v=20260630ak"></script>
 </body>
 </html>
