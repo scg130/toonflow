@@ -244,6 +244,9 @@ func (p *Pipeline) broadcast(t *task.Task, msg string, progress float32, extra m
 		"task_update": true,
 		"title":       t.Title,
 		"state":       t.State,
+		"mode":        t.Mode,
+		"project_id":  t.ProjectID,
+		"episode_id":  t.EpisodeID,
 	}
 	for k, v := range extra {
 		data[k] = v

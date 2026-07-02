@@ -326,6 +326,7 @@
   function onWSMessage(msg) {
     if (msg.data && msg.data.task_update) {
       loadTasks();
+      handleGenerationTaskUpdate(msg);
     }
     if (msg.step === 'workflow_error') {
       if (msg.data && msg.data.project_id && currentProject && msg.data.project_id !== currentProject.id) {
@@ -444,6 +445,30 @@
       default:
         if (msg.progress > 0) updateProgress(msg.progress);
         if (msg.data && msg.data.task_id) loadTasks();
+    }
+  }
+
+  function handleGenerationTaskUpdate(msg) {
+    const d = msg.data || {};
+    const state = d.state || msg.step || '';
+    if (d.project_id && currentProject && d.project_id !== currentProject.id) return;
+
+    if (state === 'video_gen' || state === 'drawing') {
+      setStatus(msg.msg || '生成中...');
+      return;
+    }
+    if (state !== 'done' && state !== 'error') return;
+
+    if (state === 'done' && currentProject) {
+      const mode = d.mode || '';
+      if (mode === 'video' || mode === 'images' || !mode) {
+        loadProjectStoryboards(currentProject.id, currentEpisode?.id);
+        loadShotClips();
+      }
+      if (msg.msg) toast(msg.msg, 'success');
+    }
+    if (state === 'error' && msg.msg) {
+      toast(msg.msg, 'error');
     }
   }
 

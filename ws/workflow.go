@@ -387,6 +387,9 @@ func (wfs *WorkflowService) broadcastTaskUpdate(cm *ConnManager, t *task.Task, m
 			"task_update": true,
 			"title":       t.Title,
 			"state":       t.State,
+			"mode":        t.Mode,
+			"project_id":  t.ProjectID,
+			"episode_id":  t.EpisodeID,
 		}),
 	})
 }

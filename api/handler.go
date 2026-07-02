@@ -391,6 +391,9 @@ func (r *Router) broadcastTaskUpdate(t *task.Task, msg string) {
 			"task_update": true,
 			"title":       t.Title,
 			"state":       t.State,
+			"mode":        t.Mode,
+			"project_id":  t.ProjectID,
+			"episode_id":  t.EpisodeID,
 		}),
 	})
 }
