@@ -15,8 +15,10 @@ type Config struct {
 	OutputDir string
 
 	// Concurrency
-	MaxConcurrentTasks int
-	TaskTimeout        time.Duration
+	MaxConcurrentTasks     int // site-wide concurrent cap
+	MaxConcurrentPerUser   int // per-user concurrent cap
+	MaxTaskHistoryPerUser  int
+	TaskTimeout            time.Duration
 
 	// AI Adapters
 	DefaultVendor string
@@ -38,8 +40,10 @@ func DefaultConfig() *Config {
 		Port:               9090,
 		DBPath:             filepath.Join(home, ".toonflow", "toonflow.db"),
 		OutputDir:          filepath.Join(".", "output"),
-		MaxConcurrentTasks: 5,
-		TaskTimeout:        10 * time.Minute,
+		MaxConcurrentTasks:    10,
+		MaxConcurrentPerUser:  3,
+		MaxTaskHistoryPerUser: 50,
+		TaskTimeout:           10 * time.Minute,
 		DefaultVendor:      "agnes_ai",
 		FFmpegPath:         "ffmpeg",
 		SkillsDir:          filepath.Join(".", "skills"),
@@ -54,7 +58,9 @@ func Load() *Config {
 	flag.IntVar(&cfg.Port, "port", cfg.Port, "HTTP server port")
 	flag.StringVar(&cfg.DBPath, "db", cfg.DBPath, "SQLite database path")
 	flag.StringVar(&cfg.OutputDir, "output-dir", cfg.OutputDir, "Output directory for generated files")
-	flag.IntVar(&cfg.MaxConcurrentTasks, "max-concurrent", cfg.MaxConcurrentTasks, "Max concurrent generation tasks")
+	flag.IntVar(&cfg.MaxConcurrentTasks, "max-concurrent", cfg.MaxConcurrentTasks, "Max concurrent generation tasks (site-wide)")
+	flag.IntVar(&cfg.MaxConcurrentPerUser, "max-concurrent-per-user", cfg.MaxConcurrentPerUser, "Max concurrent generation tasks per user")
+	flag.IntVar(&cfg.MaxTaskHistoryPerUser, "max-task-history-per-user", cfg.MaxTaskHistoryPerUser, "Completed tasks kept in task center per user")
 	flag.DurationVar(&cfg.TaskTimeout, "task-timeout", cfg.TaskTimeout, "Per-task timeout duration")
 	flag.StringVar(&cfg.FFmpegPath, "ffmpeg", cfg.FFmpegPath, "FFmpeg binary path")
 	flag.StringVar(&cfg.SkillsDir, "skills-dir", cfg.SkillsDir, "Skills markdown directory")

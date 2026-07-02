@@ -7,7 +7,7 @@ import (
 
 	"toonflow/auth"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 // DB wraps a sql.DB handle with helper methods.
@@ -17,7 +17,7 @@ type DB struct {
 
 // Init opens (or creates) the SQLite database and runs migrations.
 func Init(dbPath string) (*DB, error) {
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}

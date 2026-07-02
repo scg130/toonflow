@@ -30,7 +30,7 @@
 | 层级 | 技术 |
 |------|------|
 | 后端 | Go 1.25+、Gin |
-| 数据库 | SQLite（`github.com/mattn/go-sqlite3`） |
+| 数据库 | SQLite（`modernc.org/sqlite`，纯 Go，无需 CGO） |
 | 实时通信 | gorilla/websocket |
 | 视频 / 音频 | FFmpeg |
 | 旁白 TTS | Microsoft Edge 神经语音（`bytectlgo/edge-tts`） |
@@ -65,7 +65,9 @@ go run main.go --db ~/.toonflow/toonflow.db
 go run main.go --output-dir ./output
 go run main.go --skills-dir ./skills
 go run main.go --log-dir ./logs
-go run main.go --max-concurrent 5
+go run main.go --max-concurrent 10
+go run main.go --max-concurrent-per-user 3
+go run main.go --max-task-history-per-user 50
 go run main.go --task-timeout 10m
 ```
 
@@ -173,6 +175,8 @@ toonflow/
 | `delete_shot_clip` | 删除视频版本 |
 
 服务端推送 `task_update`、`workflow_done`、`chat_progress`、`chat_stream` 等步骤；任务 `done` 时前端自动刷新分镜与视频列表。
+
+任务队列采用 **按用户 + 全站** 双层并发限制，历史记录按用户各保留最近 N 条（默认全站 10 并发、每用户 3 并发、每用户 50 条历史）。
 
 ## REST API 概览
 

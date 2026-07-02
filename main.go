@@ -61,7 +61,11 @@ func main() {
 	broadcaster.Run()
 
 	// Initialize task queue
-	queue := task.NewQueue(cfg.MaxConcurrentTasks)
+	queue := task.NewQueue(task.QueueConfig{
+		MaxGlobal:         cfg.MaxConcurrentTasks,
+		MaxPerUser:        cfg.MaxConcurrentPerUser,
+		MaxHistoryPerUser: cfg.MaxTaskHistoryPerUser,
+	})
 
 	// Initialize pipeline with broadcaster
 	pipelineCfg := &engine.Config{

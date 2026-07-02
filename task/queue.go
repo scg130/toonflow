@@ -7,41 +7,77 @@ import (
 	"time"
 )
 
-// Queue manages concurrent task execution.
-type Queue struct {
-	mu         sync.Mutex
-	tasks      map[string]*Task
-	history    []*Task
-	maxHistory int
-	done       chan *Task
-	maxConc    int
+const anonymousUserID = "_anonymous"
+
+// QueueConfig limits task concurrency and history retention.
+type QueueConfig struct {
+	MaxGlobal         int // site-wide concurrent cap
+	MaxPerUser        int // per-user concurrent cap
+	MaxHistoryPerUser int // completed tasks kept per user
 }
 
-// NewQueue creates a new task queue.
-func NewQueue(maxConcurrency int) *Queue {
-	return &Queue{
-		tasks:      make(map[string]*Task),
-		history:    make([]*Task, 0, 64),
-		maxHistory: 100,
-		done:       make(chan *Task, 100),
-		maxConc:    maxConcurrency,
+// DefaultQueueConfig returns multi-user friendly defaults.
+func DefaultQueueConfig() QueueConfig {
+	return QueueConfig{
+		MaxGlobal:         10,
+		MaxPerUser:        3,
+		MaxHistoryPerUser: 50,
 	}
 }
 
-// Submit runs the function in a goroutine with concurrency limiting.
+// Queue manages concurrent task execution.
+type Queue struct {
+	mu                sync.Mutex
+	tasks             map[string]*Task
+	history           map[string][]*Task // userID -> recent tasks
+	maxGlobal         int
+	maxPerUser        int
+	maxHistoryPerUser int
+	done              chan *Task
+}
+
+// NewQueue creates a queue with the given limits.
+func NewQueue(cfg QueueConfig) *Queue {
+	if cfg.MaxGlobal <= 0 {
+		cfg.MaxGlobal = DefaultQueueConfig().MaxGlobal
+	}
+	if cfg.MaxPerUser <= 0 {
+		cfg.MaxPerUser = DefaultQueueConfig().MaxPerUser
+	}
+	if cfg.MaxHistoryPerUser <= 0 {
+		cfg.MaxHistoryPerUser = DefaultQueueConfig().MaxHistoryPerUser
+	}
+	return &Queue{
+		tasks:             make(map[string]*Task),
+		history:           make(map[string][]*Task),
+		maxGlobal:         cfg.MaxGlobal,
+		maxPerUser:        cfg.MaxPerUser,
+		maxHistoryPerUser: cfg.MaxHistoryPerUser,
+		done:              make(chan *Task, 100),
+	}
+}
+
+func taskUserID(t *Task) string {
+	if t == nil || t.UserID == "" {
+		return anonymousUserID
+	}
+	return t.UserID
+}
+
+// Submit runs the function in a goroutine with per-user and global concurrency limits.
 func (q *Queue) Submit(t *Task, fn func(context.Context, *Task) error) {
 	q.mu.Lock()
 	q.tasks[t.ID] = t
-	active := len(q.tasks)
+	globalActive := len(q.tasks)
+	userActive := q.activeCountForLocked(taskUserID(t))
 	q.mu.Unlock()
 
-	if active > q.maxConc {
-		t.SetError("max concurrent tasks reached")
-		q.mu.Lock()
-		delete(q.tasks, t.ID)
-		q.addHistoryLocked(t)
-		q.mu.Unlock()
-		q.done <- t
+	if globalActive > q.maxGlobal {
+		q.rejectTask(t, "全站并发任务已满，请稍后再试")
+		return
+	}
+	if userActive > q.maxPerUser {
+		q.rejectTask(t, "您的并发任务已满，请稍后再试")
 		return
 	}
 
@@ -64,16 +100,49 @@ func (q *Queue) Submit(t *Task, fn func(context.Context, *Task) error) {
 	}()
 }
 
+func (q *Queue) rejectTask(t *Task, msg string) {
+	t.SetError(msg)
+	q.mu.Lock()
+	delete(q.tasks, t.ID)
+	q.addHistoryLocked(t)
+	q.mu.Unlock()
+	q.done <- t
+}
+
 // WaitDone returns the completion channel.
 func (q *Queue) WaitDone() <-chan *Task {
 	return q.done
 }
 
-// ActiveCount returns the number of running tasks.
+// ActiveCount returns the number of running tasks (global).
 func (q *Queue) ActiveCount() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return len(q.tasks)
+}
+
+// ActiveCountForUser returns running tasks for one user.
+func (q *Queue) ActiveCountForUser(userID string) int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.activeCountForLocked(normalizeUserID(userID))
+}
+
+func normalizeUserID(userID string) string {
+	if userID == "" {
+		return anonymousUserID
+	}
+	return userID
+}
+
+func (q *Queue) activeCountForLocked(userID string) int {
+	n := 0
+	for _, t := range q.tasks {
+		if taskUserID(t) == userID {
+			n++
+		}
+	}
+	return n
 }
 
 // GetTask returns a task by ID.
@@ -89,16 +158,17 @@ func (q *Queue) AllTasksForUser(userID string) []*Task {
 	if userID == "" {
 		return nil
 	}
+	uid := normalizeUserID(userID)
+
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	result := make([]*Task, 0, len(q.tasks)+len(q.history))
-	for _, t := range q.history {
-		if t.UserID == userID {
-			result = append(result, t.Clone())
-		}
+
+	result := make([]*Task, 0, len(q.tasks)+q.maxHistoryPerUser)
+	for _, t := range q.history[uid] {
+		result = append(result, t.Clone())
 	}
 	for _, t := range q.tasks {
-		if t.UserID == userID {
+		if taskUserID(t) == uid {
 			result = append(result, t.Clone())
 		}
 	}
@@ -120,9 +190,11 @@ func sortTasksByTime(tasks []*Task) {
 func (q *Queue) AllTasks() []*Task {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	result := make([]*Task, 0, len(q.tasks)+len(q.history))
-	for _, t := range q.history {
-		result = append(result, t.Clone())
+	result := make([]*Task, 0, len(q.tasks)+64)
+	for _, hist := range q.history {
+		for _, t := range hist {
+			result = append(result, t.Clone())
+		}
 	}
 	for _, t := range q.tasks {
 		result = append(result, t.Clone())
@@ -131,9 +203,11 @@ func (q *Queue) AllTasks() []*Task {
 }
 
 func (q *Queue) addHistoryLocked(t *Task) {
-	q.history = append(q.history, t.Clone())
-	if len(q.history) > q.maxHistory {
-		q.history = q.history[len(q.history)-q.maxHistory:]
+	uid := taskUserID(t)
+	q.history[uid] = append(q.history[uid], t.Clone())
+	hist := q.history[uid]
+	if len(hist) > q.maxHistoryPerUser {
+		q.history[uid] = hist[len(hist)-q.maxHistoryPerUser:]
 	}
 }
 

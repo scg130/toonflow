@@ -1118,7 +1118,12 @@ body {
 .form-group { margin-bottom: 14px; }
 .form-group label { display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 4px; }
 
+/* Shared text-like inputs (inside or outside .form-group) */
+.form-input,
 .form-group input[type="text"],
+.form-group input[type="password"],
+.form-group input[type="email"],
+.form-group input[type="url"],
 .form-group input[type="number"],
 .form-group select,
 .form-group textarea {
@@ -1129,13 +1134,37 @@ body {
   color: var(--text-primary);
   padding: 7px 10px;
   font-size: 13px;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 
+.form-input::placeholder,
+.form-group input::placeholder,
+.form-group textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.form-group input[type="password"] {
+  font-family: inherit;
+  letter-spacing: 0.08em;
+}
+
+.form-input:focus,
 .form-group input:focus,
 .form-group select:focus,
 .form-group textarea:focus {
   outline: none;
   border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.12);
+}
+
+.form-input:-webkit-autofill,
+.form-group input:-webkit-autofill,
+.form-group input:-webkit-autofill:hover,
+.form-group input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px var(--bg-dark) inset;
+  -webkit-text-fill-color: var(--text-primary);
+  caret-color: var(--text-primary);
+  border: 1px solid var(--border);
 }
 
 .form-row {
@@ -1296,7 +1325,40 @@ body {
 .login-subtitle {
   text-align: center;
   color: var(--text-secondary);
-  margin: 8px 0 24px;
+  margin: 8px 0 28px;
+}
+
+#login-form .form-group {
+  margin-bottom: 18px;
+}
+
+#login-form .form-group label {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+}
+
+#login-form input[type="text"],
+#login-form input[type="password"] {
+  padding: 11px 14px;
+  font-size: 14px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-input);
+}
+
+#login-form input[type="text"]:focus,
+#login-form input[type="password"]:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
+}
+
+#login-form .btn-primary {
+  margin-top: 8px;
+  padding: 11px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: var(--radius-lg);
 }
 
 .login-hint {
@@ -1580,8 +1642,29 @@ body {
   width: 100%; padding: 4px 6px; border: 1px solid var(--border);
   border-radius: 4px; background: var(--bg-panel); color: var(--text-primary);
 }
-.timeline-audio-add { display: flex; gap: 6px; margin-bottom: 8px; }
-.timeline-audio-add .form-input { flex: 1; font-size: 12px; }
+.timeline-audio-add {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  margin-bottom: 10px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.timeline-audio-add .form-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+}
+.timeline-audio-add .btn {
+  flex-shrink: 0;
+  align-self: stretch;
+  padding-left: 14px;
+  padding-right: 14px;
+}
 .narration-panel {
   margin-top: 16px; padding: 12px; border: 1px solid var(--border-color);
   border-radius: 8px; background: var(--bg-secondary, rgba(0,0,0,.15));
