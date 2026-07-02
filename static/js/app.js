@@ -110,6 +110,7 @@
     activeTasks: document.getElementById('active-tasks-display'),
     projectDisplay: document.getElementById('project-display'),
     wsStatus: document.getElementById('ws-status'),
+    wsStatusLabel: document.getElementById('ws-status-label'),
     // 弹窗
     modalNewProject: document.getElementById('modal-new-project'),
     modalAsset: document.getElementById('modal-asset'),
@@ -303,6 +304,11 @@
 
   function setWSStatus(status) {
     els.wsStatus.className = 'status-dot ' + status;
+    if (els.wsStatusLabel) {
+      const labels = { connected: '已连接', connecting: '连接中', disconnected: '未连接' };
+      els.wsStatusLabel.textContent = labels[status] || status;
+      els.wsStatusLabel.className = 'ws-status-label ' + status;
+    }
   }
 
   function scheduleReconnect() {
