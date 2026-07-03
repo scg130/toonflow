@@ -136,6 +136,8 @@ func (r *Router) Setup() *gin.Engine {
 		protected.PUT("/shot-clips/:clipId/select", r.shotClipSelectHandler)
 		protected.DELETE("/shot-clips/:clipId", r.shotClipDeleteHandler)
 		protected.GET("/projects/:id/timeline", r.timelineGetHandler)
+		protected.POST("/projects/:id/timeline/reload", r.timelineReloadHandler)
+		protected.POST("/projects/:id/timeline/clear", r.timelineClearHandler)
 		protected.PUT("/projects/:id/timeline", r.timelineSaveHandler)
 		protected.POST("/projects/:id/timeline/export", r.timelineExportHandler)
 		protected.POST("/projects/:id/narration/plan", r.narrationPlanHandler)

@@ -92,6 +92,42 @@ func (r *Router) timelineGetHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, tl)
 }
 
+func (r *Router) timelineReloadHandler(c *gin.Context) {
+	projectID, ok := r.requireProject(c)
+	if !ok {
+		return
+	}
+	episodeID := c.Query("episode_id")
+	if episodeID == "" {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "episode_id required"})
+		return
+	}
+	tl, err := service.ReloadTimelineFromClips(r.db.DB, projectID, episodeID)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
+		return
+	}
+	c.JSON(http.StatusOK, tl)
+}
+
+func (r *Router) timelineClearHandler(c *gin.Context) {
+	projectID, ok := r.requireProject(c)
+	if !ok {
+		return
+	}
+	episodeID := c.Query("episode_id")
+	if episodeID == "" {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "episode_id required"})
+		return
+	}
+	tl, err := service.ClearTimeline(r.db.DB, projectID, episodeID)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
+		return
+	}
+	c.JSON(http.StatusOK, tl)
+}
+
 func (r *Router) timelineSaveHandler(c *gin.Context) {
 	projectID, ok := r.requireProject(c)
 	if !ok {

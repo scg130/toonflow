@@ -176,6 +176,45 @@ func ExportTimeline(outputDir string, tl *TimelineEdit) (string, error) {
 	return publicURL, nil
 }
 
+// ReloadTimelineFromClips rebuilds the timeline from currently selected shot clips and saves it.
+func ReloadTimelineFromClips(db *sql.DB, projectID, episodeID string) (*TimelineEdit, error) {
+	var prevSettings *TimelineExportSettings
+	if old, err := LoadTimeline(db, projectID, episodeID); err == nil && old != nil && old.ExportSettings != nil {
+		prevSettings = old.ExportSettings
+	}
+
+	tl, err := buildDefaultTimeline(db, projectID, episodeID)
+	if err != nil {
+		return nil, err
+	}
+	if prevSettings != nil {
+		tl.ExportSettings = prevSettings
+		mergeExportSettingsDefaults(tl.ExportSettings)
+	}
+	if err := SaveTimeline(db, tl); err != nil {
+		return nil, err
+	}
+	NormalizeTimelineEdit(tl)
+	return tl, nil
+}
+
+// ClearTimeline removes all clips and narration, keeping default export settings.
+func ClearTimeline(db *sql.DB, projectID, episodeID string) (*TimelineEdit, error) {
+	tl := &TimelineEdit{
+		ProjectID:      projectID,
+		EpisodeID:      episodeID,
+		ExportSettings: DefaultExportSettings(),
+		Tracks: []TimelineTrack{
+			{Type: "video", Clips: []TimelineClip{}},
+			{Type: "audio", Clips: []TimelineClip{}},
+		},
+	}
+	if err := SaveTimeline(db, tl); err != nil {
+		return nil, err
+	}
+	return tl, nil
+}
+
 func buildDefaultTimeline(db *sql.DB, projectID, episodeID string) (*TimelineEdit, error) {
 	clips, err := ListShotClips(db, projectID, episodeID)
 	if err != nil {

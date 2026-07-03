@@ -1579,7 +1579,31 @@
   }
 
   function reloadTimelineFromSelected() {
-    loadTimeline().then(() => toast('已从选中分镜视频载入时间线', 'success'));
+    if (!currentProject || !currentEpisode) return;
+    stopTimelinePreview();
+    apiFetch('/api/projects/' + currentProject.id + '/timeline/reload?episode_id=' +
+      encodeURIComponent(currentEpisode.id), { method: 'POST' })
+      .then(tl => {
+        timeline = tl;
+        renderTimelineEditor();
+        const n = (getVideoTrack()?.clips || []).length;
+        toast(n > 0 ? ('已重新载入 ' + n + ' 个分镜片段') : '没有可用的分镜视频，请先在分镜页生成并选中', n > 0 ? 'success' : 'warning');
+      })
+      .catch(err => toast('载入失败: ' + (err.message || err), 'error'));
+  }
+
+  function clearTimeline() {
+    if (!currentProject || !currentEpisode) return;
+    if (!confirm('确定清空时间线？将删除所有视频/音频片段和旁白方案（不可撤销）。')) return;
+    stopTimelinePreview();
+    apiFetch('/api/projects/' + currentProject.id + '/timeline/clear?episode_id=' +
+      encodeURIComponent(currentEpisode.id), { method: 'POST' })
+      .then(tl => {
+        timeline = tl;
+        renderTimelineEditor();
+        toast('时间线已清空', 'success');
+      })
+      .catch(err => toast('清空失败: ' + (err.message || err), 'error'));
   }
 
   function getVideoTrack() {
@@ -1624,7 +1648,7 @@
     renderTimelineRuler(vClips);
 
     if (vClips.length === 0) {
-      els.timelineVideoClips.innerHTML = '<div class="empty-state-sm"><p>暂无片段，点击「载入选中分镜」或先在分镜页生成视频</p></div>';
+      els.timelineVideoClips.innerHTML = '<div class="empty-state-sm"><p>暂无片段，点击「重新载入分镜」或先在分镜页生成视频</p></div>';
     } else {
       els.timelineVideoClips.innerHTML = vClips.map((clip, i) => `
         <div class="timeline-clip-item" data-v-index="${i}">
@@ -2850,6 +2874,7 @@
     batchGenerateShotVideos();
   });
 
+  document.getElementById('btn-timeline-clear')?.addEventListener('click', clearTimeline);
   document.getElementById('btn-timeline-reload')?.addEventListener('click', reloadTimelineFromSelected);
   document.getElementById('btn-timeline-save')?.addEventListener('click', saveTimeline);
   document.getElementById('btn-timeline-export')?.addEventListener('click', exportTimeline);
