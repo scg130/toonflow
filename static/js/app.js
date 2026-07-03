@@ -514,11 +514,13 @@
 
     if (state === 'done') {
       applyTaskFinishSideEffects(msg);
+      updateTaskChatMessageStatus(d.task_id, 'success');
       showTaskToast(msg.msg || '生成完成！', 'success', d.task_id);
       return true;
     }
     if (state === 'error' && msg.msg) {
       isGenerating = false;
+      updateTaskChatMessageStatus(d.task_id, 'error');
       showTaskToast(userFacingError(msg.msg, d), 'error', d.task_id);
       return true;
     }
@@ -813,11 +815,44 @@
     if (box) box.scrollTop = box.scrollHeight;
   }
 
-  function appendChatMessage(role, content) {
+  function getWorkflowTaskIds(data) {
+    if (!data) return [];
+    if (data.task_id) return [data.task_id];
+    if (Array.isArray(data.task_ids)) return data.task_ids.filter(Boolean);
+    return [];
+  }
+
+  function appendChatMessage(role, content, opts) {
+    opts = opts || {};
     const box = document.getElementById('wb-chat-messages');
-    if (!box || !content) return;
-    box.innerHTML += `<div class="wb-chat-msg ${role}">${escapeHtml(content)}</div>`;
+    if (!box || !content) return null;
+    const taskIds = opts.taskIds || [];
+    let cls = 'wb-chat-msg ' + role;
+    if (taskIds.length) cls += ' task-pending';
+    let attrs = '';
+    if (taskIds.length) {
+      attrs = ' data-task-ids="' + escapeHtml(taskIds.join(',')) + '"';
+    }
+    box.innerHTML += `<div class="${cls}"${attrs}>${escapeHtml(content)}</div>`;
     scrollChatToBottom();
+    return box.lastElementChild;
+  }
+
+  function updateTaskChatMessageStatus(taskId, status) {
+    if (!taskId) return;
+    const box = document.getElementById('wb-chat-messages');
+    if (!box) return;
+    const msgs = box.querySelectorAll('.wb-chat-msg[data-task-ids]');
+    for (const el of msgs) {
+      const ids = (el.getAttribute('data-task-ids') || '').split(',').filter(Boolean);
+      if (!ids.includes(taskId)) continue;
+      el.classList.remove('task-pending', 'task-success', 'task-error');
+      if (status === 'success') {
+        el.classList.add('task-success');
+      } else if (status === 'error') {
+        el.classList.add('task-error');
+      }
+    }
   }
 
   function appendWorkflowReply(data) {
@@ -829,7 +864,7 @@
     setTimeout(() => {
       if (lastWorkflowReplyKey === key) lastWorkflowReplyKey = '';
     }, 3000);
-    appendChatMessage('assistant', reply);
+    appendChatMessage('assistant', reply, { taskIds: getWorkflowTaskIds(data) });
   }
 
   function finishPendingWorkflowUI() {

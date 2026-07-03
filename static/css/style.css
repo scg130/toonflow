@@ -1752,6 +1752,18 @@ body {
   border-bottom-left-radius: var(--radius-sm);
 }
 
+.wb-chat-msg.assistant.task-success {
+  background: var(--accent-green-muted);
+  border-color: rgba(34, 197, 94, 0.4);
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.12);
+}
+
+.wb-chat-msg.assistant.task-error {
+  background: var(--accent-red-muted);
+  border-color: rgba(239, 68, 68, 0.4);
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.12);
+}
+
 .wb-chat-msg.assistant.streaming .chat-stream-cursor {
   display: inline;
   color: var(--accent-blue, #6366f1);
