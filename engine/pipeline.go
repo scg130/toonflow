@@ -120,7 +120,6 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 			return fmt.Errorf("no shots selected for image generation")
 		}
 		total := len(indices)
-		var lastShotRemoteURL string
 		for seq, idx := range indices {
 			item := t.Storyboard[idx]
 			select {
@@ -137,12 +136,9 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 			})
 
 			localPath := filepath.Join(taskDir, fmt.Sprintf("shot_%03d.png", item.ShotNumber))
-			remoteURL, err := p.genImage(ctx, t, item, localPath, lastShotRemoteURL)
+			remoteURL, err := p.genImage(ctx, t, item, localPath)
 			if err != nil {
 				return fmt.Errorf("shot %d: %w", item.ShotNumber, err)
-			}
-			if remoteURL != "" {
-				lastShotRemoteURL = remoteURL
 			}
 
 			imageURL := fmt.Sprintf("/output/%s/shot_%03d.png", t.ID, item.ShotNumber)
@@ -291,14 +287,10 @@ func (p *Pipeline) parseScript(ctx context.Context, t *task.Task) ([]task.Storyb
 	return parseStoryboardText(resp.Content, t.Resolution), nil
 }
 
-func (p *Pipeline) genImage(ctx context.Context, t *task.Task, item task.StoryboardItem, localPath string, prevShotRemoteURL string) (string, error) {
+func (p *Pipeline) genImage(ctx context.Context, t *task.Task, item task.StoryboardItem, localPath string) (string, error) {
 	var refURL, assetPrompt string
 	if p.db != nil && t.ProjectID != "" {
 		refURL, assetPrompt, _ = service.ShotImageParams(p.db, t.ProjectID, item)
-	}
-	if refURL == "" && adapter.IsCDNImageURL(prevShotRemoteURL) {
-		refURL = prevShotRemoteURL
-		logger.CtxTrace(ctx, "genImage shot=%d using prev shot reference url", item.ShotNumber)
 	}
 	prompt := service.BuildShotImagePrompt(item, t.Style, service.ResolutionToVideoRatio(t.Resolution), assetPrompt)
 

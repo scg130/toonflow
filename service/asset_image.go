@@ -114,18 +114,23 @@ func ShotImageParams(db *sql.DB, projectID string, shot task.StoryboardItem) (re
 	var descParts []string
 	for _, a := range matched {
 		assetIDs = append(assetIDs, a.ID)
-		if refURL == "" && isHTTPURL(a.FileURL) {
+		if refURL == "" && roleReferenceImageURL(a) {
 			refURL = strings.TrimSpace(a.FileURL)
 		}
 		label := assetTypeLabel(a.Type)
 		cid := CharacterIDFromName(a.Name)
 		if a.Type == "role" {
-			descParts = append(descParts, fmt.Sprintf("%s「%s」character_id: %s, style: consistent", label, a.Name, cid))
+			part := fmt.Sprintf("%s「%s」character_id: %s, style: consistent", label, a.Name, cid)
+			if d := RoleAssetDescForShot(a.Desc, shot); d != "" {
+				part += ": " + d
+			}
+			descParts = append(descParts, part)
 		} else {
-			descParts = append(descParts, fmt.Sprintf("%s「%s」", label, a.Name))
-		}
-		if strings.TrimSpace(a.Desc) != "" {
-			descParts[len(descParts)-1] += ": " + strings.TrimSpace(a.Desc)
+			part := fmt.Sprintf("%s「%s」", label, a.Name)
+			if strings.TrimSpace(a.Desc) != "" {
+				part += ": " + strings.TrimSpace(a.Desc)
+			}
+			descParts = append(descParts, part)
 		}
 	}
 	return refURL, strings.Join(descParts, "；"), assetIDs
