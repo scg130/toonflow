@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI-VIDEO · 短剧 AI 创作平台</title>
-<link rel="stylesheet" href="/static/css/style.css?v=20260702r">
+<link rel="stylesheet" href="/static/css/style.css?v=20260703c">
 </head>
 <body>
 <div id="app">
@@ -166,7 +166,7 @@
             <div class="main-toolbar">
               <div class="toolbar-left">
                 <span class="toolbar-title">视频剪辑</span>
-                <span class="toolbar-count">手动合成 · 类剪映简易版</span>
+                <span class="toolbar-count">多轨道 · 转场 · 调色 · 变速</span>
               </div>
               <div class="toolbar-right">
                 <button class="btn btn-sm btn-outline" id="btn-timeline-reload">↻ 载入选中分镜</button>
@@ -175,9 +175,16 @@
               </div>
             </div>
             <div class="video-editor">
-              <p class="video-editor-hint">步骤 1：在「分镜」页为每个镜头单独生成视频。步骤 2：在此载入分镜、生成旁白方案并合成配音。步骤 3：调整裁剪与音频后导出成片。</p>
+              <p class="video-editor-hint">载入分镜视频 → 在时间线调整裁剪/转场/调色/变速 → 生成旁白 → 导出成片。导出默认叠化转场 0.15s，并裁切 AI 片段首尾各 2 帧。</p>
               <div class="video-editor-layout">
                 <div class="timeline-panel">
+                  <div class="timeline-toolbar">
+                    <button class="btn btn-sm btn-outline" id="btn-timeline-play-all" type="button">▶ 顺序预览</button>
+                    <button class="btn btn-sm btn-outline" id="btn-timeline-stop-preview" type="button">■ 停止</button>
+                    <span id="timeline-total-hint" class="timeline-total-hint">总时长 —</span>
+                  </div>
+                  <h4>时间线</h4>
+                  <div id="timeline-ruler" class="timeline-ruler"></div>
                   <h4>视频轨道</h4>
                   <div id="timeline-video-clips" class="timeline-clips"></div>
                   <div class="narration-panel">
@@ -203,6 +210,44 @@
                 <div class="timeline-preview-panel">
                   <h4>预览</h4>
                   <video id="timeline-preview" controls class="timeline-preview-video"></video>
+                  <div class="timeline-export-settings">
+                    <h4>导出设置</h4>
+                    <div class="export-settings-grid">
+                      <label>默认转场
+                        <select id="tl-export-transition" class="form-input">
+                          <option value="fade">叠化 fade</option>
+                          <option value="dip">闪黑 dip</option>
+                          <option value="wipe">划像 wipe</option>
+                          <option value="none">硬切 none</option>
+                        </select>
+                      </label>
+                      <label>转场时长 (s)
+                        <input type="number" id="tl-export-trans-dur" class="form-input" step="0.05" min="0" max="1" value="0.15">
+                      </label>
+                      <label>裁切首帧数
+                        <input type="number" id="tl-export-trim-head" class="form-input" step="1" min="0" max="12" value="2">
+                      </label>
+                      <label>裁切尾帧数
+                        <input type="number" id="tl-export-trim-tail" class="form-input" step="1" min="0" max="12" value="2">
+                      </label>
+                      <label>全局亮度
+                        <input type="range" id="tl-export-brightness" min="-0.3" max="0.3" step="0.01" value="0">
+                      </label>
+                      <label>全局对比度
+                        <input type="range" id="tl-export-contrast" min="0.5" max="1.5" step="0.05" value="1">
+                      </label>
+                      <label>全局饱和度
+                        <input type="range" id="tl-export-saturation" min="0.5" max="1.5" step="0.05" value="1">
+                      </label>
+                    </div>
+                    <div class="export-preset-row">
+                      <span class="export-preset-label">调色预设</span>
+                      <button type="button" class="btn btn-sm btn-outline tl-preset-btn" data-preset="default">默认</button>
+                      <button type="button" class="btn btn-sm btn-outline tl-preset-btn" data-preset="warm">暖色</button>
+                      <button type="button" class="btn btn-sm btn-outline tl-preset-btn" data-preset="cool">冷色</button>
+                      <button type="button" class="btn btn-sm btn-outline tl-preset-btn" data-preset="cinema">电影</button>
+                    </div>
+                  </div>
                   <div id="video-export-area" class="video-preview-area" style="display:none;margin-top:12px;">
                     <p style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;">导出成片</p>
                     <video id="output-video" controls></video>
@@ -536,6 +581,6 @@
   </div>
 </div>
 
-<script src="/static/js/app.js?v=20260703b"></script>
+<script src="/static/js/app.js?v=20260703c"></script>
 </body>
 </html>

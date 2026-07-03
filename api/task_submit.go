@@ -26,7 +26,7 @@ func (r *Router) submitShotVideoTask(userID, projectID, episodeID string, shotNu
 		tk.UpdateProgress(5)
 		r.broadcastTaskUpdate(tk, "视频生成中")
 
-		clip, err := service.GenerateShotClip(ctx, r.db.DB, r.resolveVendor(), r.outputDir, projectID, episodeID, shotNum)
+		clip, err := service.GenerateShotClip(ctx, r.db.DB, r.resolveVendor(), r.outputDir, projectID, episodeID, shotNum, nil)
 		if err != nil {
 			logger.CtxError(ctx, err, "shot video task failed shot=%d", shotNum)
 			r.broadcastTaskUpdate(tk, service.UserMessageWithLogID(err, tk.ID))

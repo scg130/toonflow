@@ -59,8 +59,14 @@ func ListShotClips(db *sql.DB, projectID, episodeID string) ([]ShotClip, error) 
 	return clips, nil
 }
 
+// ShotClipOptions optional controls for chained video generation.
+type ShotClipOptions struct {
+	// ContinuityImageURL is the previous clip's last frame (Agnes CDN). When set, used as I2V input.
+	ContinuityImageURL string
+}
+
 // GenerateShotClip creates a new video version for one storyboard shot.
-func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputDir, projectID, episodeID string, shotNumber int) (*ShotClip, error) {
+func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputDir, projectID, episodeID string, shotNumber int, opts *ShotClipOptions) (*ShotClip, error) {
 	logger.CtxTrace(ctx, "shot video generate start project=%s episode=%s shot=%d", projectID, episodeID, shotNumber)
 
 	shot, err := loadStoryboardShot(db, projectID, episodeID, shotNumber)
@@ -80,9 +86,17 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 	logger.CtxTrace(ctx, "shot video prompt shot=%d prompt=%s", shotNumber, prompt)
 
 	width, height := videoSizeForRatio(videoRatio)
-	imageInput, err := ResolveShotImageCDNURL(ctx, db, v, outputDir, projectID, episodeID, shot)
+	storyboardImage, err := ResolveShotImageCDNURL(ctx, db, v, outputDir, projectID, episodeID, shot)
 	if err != nil {
 		return nil, err
+	}
+	imageInput := storyboardImage
+	if opts != nil && adapter.IsCDNImageURL(opts.ContinuityImageURL) {
+		imageInput = opts.ContinuityImageURL
+		logger.CtxTrace(ctx, "shot video continuity frame shot=%d url=%s", shotNumber, imageInput)
+	}
+	if imageInput == "" {
+		return nil, fmt.Errorf("请先生成第 %d 镜图片后再生成视频", shotNumber)
 	}
 
 	version, err := nextClipVersion(db, projectID, episodeID, shotNumber)
@@ -96,10 +110,7 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 		return nil, err
 	}
 	localFile := filepath.Join(clipDir, fmt.Sprintf("shot_%03d_v%d.mp4", shotNumber, version))
-	duration := shot.Duration
-	if duration <= 0 {
-		duration = 3
-	}
+	duration := ResolveShotVideoDuration(shot.Duration)
 
 	var fileURL string
 	var source string
@@ -162,6 +173,49 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 		Version: version, Prompt: prompt, SourceImageURL: shot.ImageURL, FileURL: fileURL,
 		Duration: duration, Status: "ready", Source: source, IsSelected: isFirst,
 	}, nil
+}
+
+// GenerateShotClipsSequential generates clips in shot order, chaining each shot from the previous clip's last frame.
+func GenerateShotClipsSequential(ctx context.Context, db *sql.DB, v adapter.Vendor, outputDir, projectID, episodeID string, shotNumbers []int) ([]*ShotClip, error) {
+	ordered := SortShotNumbers(shotNumbers)
+	if len(ordered) == 0 {
+		return nil, fmt.Errorf("请至少选择一个分镜")
+	}
+
+	workDir, err := os.MkdirTemp(filepath.Join(outputDir, "clips", projectID, episodeID), "chain_")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(workDir)
+
+	var clips []*ShotClip
+	var continuityURL string
+	for i, shotNum := range ordered {
+		var opts *ShotClipOptions
+		if i > 0 && continuityURL != "" {
+			opts = &ShotClipOptions{ContinuityImageURL: continuityURL}
+		}
+		clip, err := GenerateShotClip(ctx, db, v, outputDir, projectID, episodeID, shotNum, opts)
+		if err != nil {
+			return clips, fmt.Errorf("第 %d 镜: %w", shotNum, err)
+		}
+		clips = append(clips, clip)
+
+		local, ok := publicURLToLocal(outputDir, clip.FileURL)
+		if !ok {
+			logger.CtxTrace(ctx, "continuity skip shot=%d: clip file not local", shotNum)
+			continuityURL = ""
+			continue
+		}
+		nextURL, err := ContinuityFrameFromClip(ctx, v, outputDir, local, workDir, shotNum)
+		if err != nil {
+			logger.CtxTrace(ctx, "continuity frame failed shot=%d: %v", shotNum, err)
+			continuityURL = ""
+			continue
+		}
+		continuityURL = nextURL
+	}
+	return clips, nil
 }
 
 // SelectShotClip marks one version as the active clip for its shot.

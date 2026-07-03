@@ -96,6 +96,8 @@
     timelineVideoClips: document.getElementById('timeline-video-clips'),
     timelineAudioClips: document.getElementById('timeline-audio-clips'),
     timelinePreview: document.getElementById('timeline-preview'),
+    timelineRuler: document.getElementById('timeline-ruler'),
+    timelineTotalHint: document.getElementById('timeline-total-hint'),
     narrationSegments: document.getElementById('narration-segments'),
     narrationDurationHint: document.getElementById('narration-duration-hint'),
     narrationPreview: document.getElementById('narration-preview'),
@@ -1360,19 +1362,96 @@
     </div>`;
   }
 
+  let timelinePreviewTimer = null;
+
+  function ensureExportSettings() {
+    if (!timeline) return null;
+    if (!timeline.export_settings) {
+      timeline.export_settings = {
+        default_transition: 'fade',
+        transition_duration: 0.15,
+        trim_head_frames: 2,
+        trim_tail_frames: 2,
+        global_brightness: 0,
+        global_contrast: 1,
+        global_saturation: 1,
+      };
+    }
+    return timeline.export_settings;
+  }
+
+  function syncExportSettingsFromUI() {
+    const s = ensureExportSettings();
+    if (!s) return;
+    s.default_transition = document.getElementById('tl-export-transition')?.value || 'fade';
+    s.transition_duration = parseFloat(document.getElementById('tl-export-trans-dur')?.value) || 0.15;
+    s.trim_head_frames = parseInt(document.getElementById('tl-export-trim-head')?.value, 10) || 0;
+    s.trim_tail_frames = parseInt(document.getElementById('tl-export-trim-tail')?.value, 10) || 0;
+    s.global_brightness = parseFloat(document.getElementById('tl-export-brightness')?.value) || 0;
+    s.global_contrast = parseFloat(document.getElementById('tl-export-contrast')?.value) || 1;
+    s.global_saturation = parseFloat(document.getElementById('tl-export-saturation')?.value) || 1;
+  }
+
+  function syncExportSettingsToUI() {
+    const s = ensureExportSettings();
+    if (!s) return;
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+    set('tl-export-transition', s.default_transition || 'fade');
+    set('tl-export-trans-dur', s.transition_duration ?? 0.15);
+    set('tl-export-trim-head', s.trim_head_frames ?? 2);
+    set('tl-export-trim-tail', s.trim_tail_frames ?? 2);
+    set('tl-export-brightness', s.global_brightness ?? 0);
+    set('tl-export-contrast', s.global_contrast ?? 1);
+    set('tl-export-saturation', s.global_saturation ?? 1);
+  }
+
+  function applyColorPreset(preset) {
+    const s = ensureExportSettings();
+    if (!s) return;
+    const presets = {
+      default: { global_brightness: 0, global_contrast: 1, global_saturation: 1 },
+      warm: { global_brightness: 0.03, global_contrast: 1.05, global_saturation: 1.15 },
+      cool: { global_brightness: -0.02, global_contrast: 1.08, global_saturation: 0.95 },
+      cinema: { global_brightness: -0.05, global_contrast: 1.15, global_saturation: 0.9 },
+    };
+    Object.assign(s, presets[preset] || presets.default);
+    syncExportSettingsToUI();
+    toast('已应用「' + preset + '」调色预设', 'success');
+  }
+
   function clipPlayDuration(clip) {
     if (!clip) return 0;
-    const start = clip.start || 0;
+    const s = timeline && timeline.export_settings;
+    const fps = 24;
+    let start = clip.start || 0;
     let end = clip.end;
     if (!end || end <= 0) end = clip.duration || 0;
-    if (end <= start) return clip.duration > 0 ? clip.duration : 3;
-    return end - start;
+    if (s) {
+      if (s.trim_head_frames > 0) start += s.trim_head_frames / fps;
+      if (s.trim_tail_frames > 0) end -= s.trim_tail_frames / fps;
+    }
+    if (end <= start) return clip.duration > 0 ? clip.duration : 2.5;
+    let dur = end - start;
+    const speed = clip.speed || 1;
+    if (speed > 0 && speed !== 1) dur /= speed;
+    return Math.max(0.05, dur);
+  }
+
+  function timelineExportDuration() {
+    const track = getVideoTrack();
+    if (!track || !track.clips || !track.clips.length) return 0;
+    const s = ensureExportSettings();
+    let total = track.clips.reduce((sum, c) => sum + clipPlayDuration(c), 0);
+    const transCount = Math.max(0, track.clips.length - 1);
+    const transDur = (s && s.transition_duration) || 0.15;
+    if (s && s.default_transition !== 'none' && transCount > 0) {
+      total -= transCount * transDur;
+    }
+    return Math.max(0, total);
   }
 
   function timelineVideoDuration() {
-    const track = getVideoTrack();
-    if (!track || !track.clips) return 0;
-    return track.clips.reduce((sum, c) => sum + clipPlayDuration(c), 0);
+    return timelineExportDuration();
   }
 
   function renderNarrationPanel() {
@@ -1473,6 +1552,7 @@
 
   function saveTimeline() {
     if (!currentProject || !currentEpisode || !timeline) return;
+    syncExportSettingsFromUI();
     timeline.project_id = currentProject.id;
     timeline.episode_id = currentEpisode.id;
     apiFetch('/api/projects/' + currentProject.id + '/timeline', {
@@ -1484,6 +1564,7 @@
 
   function exportTimeline() {
     if (!currentProject || !currentEpisode) return;
+    if (timeline) syncExportSettingsFromUI();
     if (timeline) saveTimeline();
     toast('正在导出成片…', 'info');
     apiFetch('/api/projects/' + currentProject.id + '/timeline/export', {
@@ -1511,12 +1592,36 @@
     return (timeline.tracks || []).find(t => t.type === 'audio') || null;
   }
 
+  function renderTimelineRuler(vClips) {
+    if (!els.timelineRuler) return;
+    const total = timelineExportDuration() || vClips.reduce((s, c) => s + clipPlayDuration(c), 0);
+    if (els.timelineTotalHint) {
+      els.timelineTotalHint.textContent = total > 0 ? ('总时长 ' + total.toFixed(1) + 's') : '总时长 —';
+    }
+    if (!vClips.length || total <= 0) {
+      els.timelineRuler.innerHTML = '<div class="timeline-ruler-empty">暂无片段</div>';
+      return;
+    }
+    let offset = 0;
+    els.timelineRuler.innerHTML = vClips.map((clip, i) => {
+      const dur = clipPlayDuration(clip);
+      const pct = (dur / total) * 100;
+      const left = (offset / total) * 100;
+      offset += dur;
+      const label = clip.label || ('镜' + (i + 1));
+      return `<div class="timeline-ruler-block" style="left:${left}%;width:${pct}%" title="${escapeHtml(label)} · ${dur.toFixed(1)}s">${escapeHtml(label)}</div>`;
+    }).join('');
+  }
+
   function renderTimelineEditor() {
     if (!els.timelineVideoClips) return;
+    ensureExportSettings();
+    syncExportSettingsToUI();
     const vTrack = getVideoTrack();
     const aTrack = getAudioTrack();
     const vClips = vTrack ? vTrack.clips || [] : [];
     const aClips = aTrack ? aTrack.clips || [] : [];
+    renderTimelineRuler(vClips);
 
     if (vClips.length === 0) {
       els.timelineVideoClips.innerHTML = '<div class="empty-state-sm"><p>暂无片段，点击「载入选中分镜」或先在分镜页生成视频</p></div>';
@@ -1524,17 +1629,33 @@
       els.timelineVideoClips.innerHTML = vClips.map((clip, i) => `
         <div class="timeline-clip-item" data-v-index="${i}">
           <div class="timeline-clip-header">
-            <span class="timeline-clip-label">${escapeHtml(clip.label || ('片段 ' + (i + 1)))}</span>
+            <span class="timeline-clip-label">${escapeHtml(clip.label || ('片段 ' + (i + 1)))} <span class="clip-dur-badge">${clipPlayDuration(clip).toFixed(1)}s</span></span>
             <div class="timeline-clip-actions">
               <button class="btn btn-sm btn-outline tl-preview-btn" data-url="${escapeHtml(clip.file_url || '')}">预览</button>
+              <button class="btn btn-sm btn-outline tl-dup-btn" data-i="${i}">复制</button>
               <button class="btn btn-sm btn-outline tl-up-btn" data-i="${i}">↑</button>
               <button class="btn btn-sm btn-outline tl-down-btn" data-i="${i}">↓</button>
               <button class="btn btn-sm btn-outline tl-del-btn" data-i="${i}">×</button>
             </div>
           </div>
           <div class="timeline-clip-trim">
-            <div><label>入点 (s)</label><input type="number" step="0.1" min="0" class="tl-trim-start" data-i="${i}" value="${clip.start || 0}"></div>
-            <div><label>出点 (s)</label><input type="number" step="0.1" min="0" class="tl-trim-end" data-i="${i}" value="${clip.end || clip.duration || 3}"></div>
+            <div><label>入点 (s)</label><input type="number" step="0.05" min="0" class="tl-trim-start" data-i="${i}" value="${clip.start || 0}"></div>
+            <div><label>出点 (s)</label><input type="number" step="0.05" min="0" class="tl-trim-end" data-i="${i}" value="${clip.end || clip.duration || 2.5}"></div>
+            <div><label>变速</label><input type="number" step="0.1" min="0.5" max="2" class="tl-speed" data-i="${i}" value="${clip.speed || 1}"></div>
+            <div><label>转场→</label>
+              <select class="tl-transition form-input" data-i="${i}">
+                <option value="" ${!clip.transition ? 'selected' : ''}>默认</option>
+                <option value="fade" ${clip.transition === 'fade' ? 'selected' : ''}>叠化</option>
+                <option value="dip" ${clip.transition === 'dip' ? 'selected' : ''}>闪黑</option>
+                <option value="wipe" ${clip.transition === 'wipe' ? 'selected' : ''}>划像</option>
+                <option value="none" ${clip.transition === 'none' ? 'selected' : ''}>硬切</option>
+              </select>
+            </div>
+            <div><label>亮度</label><input type="range" class="tl-brightness" data-i="${i}" min="-0.3" max="0.3" step="0.01" value="${clip.brightness || 0}"></div>
+            <div><label>对比度</label><input type="range" class="tl-contrast" data-i="${i}" min="0.5" max="1.5" step="0.05" value="${clip.contrast || 1}"></div>
+            <div><label>饱和度</label><input type="range" class="tl-saturation" data-i="${i}" min="0.5" max="1.5" step="0.05" value="${clip.saturation || 1}"></div>
+            <div><label>淡入 (s)</label><input type="number" step="0.05" min="0" max="1" class="tl-fade-in" data-i="${i}" value="${clip.fade_in || 0}"></div>
+            <div><label>淡出 (s)</label><input type="number" step="0.05" min="0" max="1" class="tl-fade-out" data-i="${i}" value="${clip.fade_out || 0}"></div>
           </div>
         </div>
       `).join('');
@@ -1550,8 +1671,9 @@
             <button class="btn btn-sm btn-outline tl-audio-del" data-i="${i}">×</button>
           </div>
           <div style="font-size:11px;color:var(--text-secondary);word-break:break-all">${escapeHtml(clip.file_url || '')}</div>
-          <div class="timeline-clip-trim" style="margin-top:6px">
+          <div class="timeline-clip-trim timeline-clip-trim-audio">
             <div><label>起始 (s)</label><input type="number" step="0.1" min="0" class="tl-audio-start" data-i="${i}" value="${clip.start || 0}"></div>
+            <div><label>音量</label><input type="range" class="tl-audio-volume" data-i="${i}" min="0" max="2" step="0.05" value="${clip.volume || 1}"></div>
           </div>
         </div>
       `).join('');
@@ -1563,22 +1685,42 @@
 
   function bindTimelineEvents() {
     if (!els.timelineVideoClips) return;
+    const vTrack = getVideoTrack();
     els.timelineVideoClips.querySelectorAll('.tl-preview-btn').forEach(btn => {
       btn.onclick = () => { if (els.timelinePreview) els.timelinePreview.src = btn.dataset.url; };
     });
-    els.timelineVideoClips.querySelectorAll('.tl-trim-start').forEach(inp => {
-      inp.onchange = () => {
-        const track = getVideoTrack(); if (!track) return;
-        const i = parseInt(inp.dataset.i, 10);
-        track.clips[i].start = parseFloat(inp.value) || 0;
+    const bindNum = (sel, field) => {
+      els.timelineVideoClips.querySelectorAll(sel).forEach(inp => {
+        inp.onchange = () => {
+          if (!vTrack) return;
+          const i = parseInt(inp.dataset.i, 10);
+          vTrack.clips[i][field] = parseFloat(inp.value) || 0;
+          renderTimelineRuler(vTrack.clips);
+        };
+      });
+    };
+    bindNum('.tl-trim-start', 'start');
+    bindNum('.tl-trim-end', 'end');
+    bindNum('.tl-speed', 'speed');
+    bindNum('.tl-fade-in', 'fade_in');
+    bindNum('.tl-fade-out', 'fade_out');
+    els.timelineVideoClips.querySelectorAll('.tl-brightness').forEach(inp => {
+      inp.oninput = () => { if (vTrack) vTrack.clips[parseInt(inp.dataset.i, 10)].brightness = parseFloat(inp.value) || 0; };
+    });
+    els.timelineVideoClips.querySelectorAll('.tl-contrast').forEach(inp => {
+      inp.oninput = () => { if (vTrack) vTrack.clips[parseInt(inp.dataset.i, 10)].contrast = parseFloat(inp.value) || 1; };
+    });
+    els.timelineVideoClips.querySelectorAll('.tl-saturation').forEach(inp => {
+      inp.oninput = () => { if (vTrack) vTrack.clips[parseInt(inp.dataset.i, 10)].saturation = parseFloat(inp.value) || 1; };
+    });
+    els.timelineVideoClips.querySelectorAll('.tl-transition').forEach(sel => {
+      sel.onchange = () => {
+        if (!vTrack) return;
+        vTrack.clips[parseInt(sel.dataset.i, 10)].transition = sel.value;
       };
     });
-    els.timelineVideoClips.querySelectorAll('.tl-trim-end').forEach(inp => {
-      inp.onchange = () => {
-        const track = getVideoTrack(); if (!track) return;
-        const i = parseInt(inp.dataset.i, 10);
-        track.clips[i].end = parseFloat(inp.value) || track.clips[i].duration;
-      };
+    els.timelineVideoClips.querySelectorAll('.tl-dup-btn').forEach(btn => {
+      btn.onclick = () => duplicateTimelineClip(parseInt(btn.dataset.i, 10));
     });
     els.timelineVideoClips.querySelectorAll('.tl-up-btn').forEach(btn => {
       btn.onclick = () => moveTimelineClip('video', parseInt(btn.dataset.i, 10), -1);
@@ -1607,7 +1749,69 @@
           track.clips[parseInt(inp.dataset.i, 10)].start = parseFloat(inp.value) || 0;
         };
       });
+      els.timelineAudioClips.querySelectorAll('.tl-audio-volume').forEach(inp => {
+        inp.oninput = () => {
+          const track = getAudioTrack(); if (!track) return;
+          track.clips[parseInt(inp.dataset.i, 10)].volume = parseFloat(inp.value) || 1;
+        };
+      });
     }
+  }
+
+  function duplicateTimelineClip(index) {
+    const track = getVideoTrack();
+    if (!track || !track.clips[index]) return;
+    const src = track.clips[index];
+    const copy = JSON.parse(JSON.stringify(src));
+    copy.id = 'tlc_dup_' + Date.now();
+    copy.label = (src.label || '片段') + ' (副本)';
+    track.clips.splice(index + 1, 0, copy);
+    renderTimelineEditor();
+  }
+
+  function stopTimelinePreview() {
+    if (timelinePreviewTimer) {
+      clearTimeout(timelinePreviewTimer);
+      timelinePreviewTimer = null;
+    }
+    if (els.timelinePreview) {
+      els.timelinePreview.onended = null;
+      els.timelinePreview.pause();
+    }
+  }
+
+  function playTimelineSequence(index) {
+    const track = getVideoTrack();
+    if (!track || !track.clips || !track.clips.length || !els.timelinePreview) return;
+    if (index >= track.clips.length) {
+      stopTimelinePreview();
+      return;
+    }
+    const clip = track.clips[index];
+    const url = clip.file_url;
+    if (!url) {
+      playTimelineSequence(index + 1);
+      return;
+    }
+    const vid = els.timelinePreview;
+    vid.src = url;
+    vid.currentTime = clip.start || 0;
+    const end = clip.end || clip.duration || 0;
+    vid.play().catch(() => {});
+    const tick = () => {
+      if (end > 0 && vid.currentTime >= end - 0.05) {
+        vid.pause();
+        playTimelineSequence(index + 1);
+        return;
+      }
+      timelinePreviewTimer = setTimeout(tick, 80);
+    };
+    tick();
+  }
+
+  function playTimelineAll() {
+    stopTimelinePreview();
+    playTimelineSequence(0);
   }
 
   function moveTimelineClip(type, index, delta) {
@@ -2650,6 +2854,20 @@
   document.getElementById('btn-timeline-save')?.addEventListener('click', saveTimeline);
   document.getElementById('btn-timeline-export')?.addEventListener('click', exportTimeline);
   document.getElementById('btn-timeline-add-audio')?.addEventListener('click', addTimelineAudio);
+  document.getElementById('btn-timeline-play-all')?.addEventListener('click', playTimelineAll);
+  document.getElementById('btn-timeline-stop-preview')?.addEventListener('click', stopTimelinePreview);
+  ['tl-export-transition', 'tl-export-trans-dur', 'tl-export-trim-head', 'tl-export-trim-tail',
+    'tl-export-brightness', 'tl-export-contrast', 'tl-export-saturation'].forEach(id => {
+    document.getElementById(id)?.addEventListener('change', () => {
+      syncExportSettingsFromUI();
+      const track = getVideoTrack();
+      if (track) renderTimelineRuler(track.clips || []);
+      renderNarrationPanel();
+    });
+  });
+  document.querySelectorAll('.tl-preset-btn').forEach(btn => {
+    btn.addEventListener('click', () => applyColorPreset(btn.dataset.preset));
+  });
   document.getElementById('btn-narration-plan')?.addEventListener('click', planNarration);
   document.getElementById('btn-narration-synthesize')?.addEventListener('click', synthesizeNarration);
 

@@ -23,21 +23,43 @@ type TimelineClip struct {
 	End        float64 `json:"end"`    // trim out (seconds); 0 = full length
 	Duration   float64 `json:"duration"`
 	Offset     float64 `json:"offset,omitempty"` // audio offset on timeline
+	// Per-clip edit (剪映基础)
+	Transition   string  `json:"transition,omitempty"`    // none | fade | dip | wipe — after this clip
+	TransitionDur float64 `json:"transition_dur,omitempty"` // override global transition seconds
+	Speed        float64 `json:"speed,omitempty"`         // 0.5–2.0
+	Volume       float64 `json:"volume,omitempty"`        // audio volume multiplier
+	Brightness   float64 `json:"brightness,omitempty"`    // ffmpeg eq -1..1
+	Contrast     float64 `json:"contrast,omitempty"`
+	Saturation   float64 `json:"saturation,omitempty"`
+	FadeIn       float64 `json:"fade_in,omitempty"`  // seconds
+	FadeOut      float64 `json:"fade_out,omitempty"` // seconds
+}
+
+// TimelineExportSettings is persisted on TimelineEdit.export_settings.
+type TimelineExportSettings struct {
+	DefaultTransition  string  `json:"default_transition,omitempty"`
+	TransitionDuration float64 `json:"transition_duration,omitempty"`
+	TrimHeadFrames     int     `json:"trim_head_frames,omitempty"`
+	TrimTailFrames     int     `json:"trim_tail_frames,omitempty"`
+	GlobalBrightness   float64 `json:"global_brightness,omitempty"`
+	GlobalContrast     float64 `json:"global_contrast,omitempty"`
+	GlobalSaturation   float64 `json:"global_saturation,omitempty"`
+}
+
+// TimelineEdit is the saved editor state per episode.
+type TimelineEdit struct {
+	ProjectID      string                  `json:"project_id"`
+	EpisodeID      string                  `json:"episode_id"`
+	Tracks         []TimelineTrack         `json:"tracks"`
+	Narration      *NarrationPlan          `json:"narration,omitempty"`
+	ExportSettings *TimelineExportSettings `json:"export_settings,omitempty"`
+	UpdatedAt      string                  `json:"updated_at,omitempty"`
 }
 
 // TimelineTrack holds clips for one track.
 type TimelineTrack struct {
 	Type  string         `json:"type"` // video | audio
 	Clips []TimelineClip `json:"clips"`
-}
-
-// TimelineEdit is the saved editor state per episode.
-type TimelineEdit struct {
-	ProjectID string          `json:"project_id"`
-	EpisodeID string          `json:"episode_id"`
-	Tracks    []TimelineTrack `json:"tracks"`
-	Narration *NarrationPlan  `json:"narration,omitempty"`
-	UpdatedAt string          `json:"updated_at,omitempty"`
 }
 
 // LoadTimeline loads timeline editor state.
@@ -60,6 +82,7 @@ func LoadTimeline(db *sql.DB, projectID, episodeID string) (*TimelineEdit, error
 	tl.ProjectID = projectID
 	tl.EpisodeID = episodeID
 	tl.UpdatedAt = updatedAt.Format(time.RFC3339)
+	NormalizeTimelineEdit(&tl)
 	return &tl, nil
 }
 
@@ -80,9 +103,14 @@ func SaveTimeline(db *sql.DB, tl *TimelineEdit) error {
 
 // ExportTimeline renders the timeline to a final mp4 using ffmpeg.
 func ExportTimeline(outputDir string, tl *TimelineEdit) (string, error) {
+	NormalizeTimelineEdit(tl)
 	videoTrack := findTrack(tl, "video")
 	if videoTrack == nil || len(videoTrack.Clips) == 0 {
 		return "", fmt.Errorf("时间线没有视频片段，请先添加分镜视频")
+	}
+	settings := tl.ExportSettings
+	if settings == nil {
+		settings = DefaultExportSettings()
 	}
 
 	exportDir := filepath.Join(outputDir, "exports", tl.ProjectID, tl.EpisodeID)
@@ -96,53 +124,45 @@ func ExportTimeline(outputDir string, tl *TimelineEdit) (string, error) {
 	defer os.RemoveAll(workDir)
 
 	var partFiles []string
+	var partDurations []float64
+	var transitions []string
 	for i, clip := range videoTrack.Clips {
 		local, ok := publicURLToLocal(outputDir, clip.FileURL)
 		if !ok {
 			return "", fmt.Errorf("无效片段路径: %s", clip.FileURL)
 		}
 		part := filepath.Join(workDir, fmt.Sprintf("part_%03d.mp4", i))
-		start := clip.Start
-		end := clip.End
-		if end <= 0 {
-			end = clip.Duration
-		}
-		if end <= start {
-			end = start + 1
-		}
-		args := []string{"-y", "-ss", fmt.Sprintf("%.3f", start), "-to", fmt.Sprintf("%.3f", end), "-i", local,
-			"-c:v", "libx264", "-pix_fmt", "yuv420p", "-an", part}
-		if out, err := exec.Command("ffmpeg", args...).CombinedOutput(); err != nil {
-			return "", fmt.Errorf("trim clip %d: %s", i+1, string(out))
+		dur, err := renderTimelinePart(local, part, clip, settings)
+		if err != nil {
+			return "", fmt.Errorf("clip %d: %w", i+1, err)
 		}
 		partFiles = append(partFiles, part)
+		partDurations = append(partDurations, dur)
+		if i < len(videoTrack.Clips)-1 {
+			transitions = append(transitions, effectiveTransitionAfter(clip, settings))
+		}
 	}
 
-	concatList := filepath.Join(workDir, "concat.txt")
-	f, err := os.Create(concatList)
-	if err != nil {
+	transDur := settings.TransitionDuration
+	videoOnly := filepath.Join(workDir, "video_only.mp4")
+	if err := concatTimelineParts(partFiles, partDurations, transitions, transDur, videoOnly); err != nil {
 		return "", err
 	}
-	for _, p := range partFiles {
-		abs, _ := filepath.Abs(p)
-		fmt.Fprintf(f, "file '%s'\n", strings.ReplaceAll(abs, "'", `'\''`))
-	}
-	f.Close()
 
-	videoOnly := filepath.Join(workDir, "video_only.mp4")
-	if out, err := exec.Command("ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concatList,
-		"-c:v", "libx264", "-pix_fmt", "yuv420p", videoOnly).CombinedOutput(); err != nil {
-		return "", fmt.Errorf("concat video: %s", string(out))
+	graded := filepath.Join(workDir, "graded.mp4")
+	if err := applyGlobalGrade(videoOnly, graded, settings); err != nil {
+		return "", err
 	}
+	finalVideo := graded
 
 	outName := fmt.Sprintf("final_%d.mp4", time.Now().UnixNano())
 	outPath := filepath.Join(exportDir, outName)
-	finalPath := videoOnly
+	finalPath := finalVideo
 
 	audioTrack := findTrack(tl, "audio")
 	if audioTrack != nil && len(audioTrack.Clips) > 0 {
 		mixed := filepath.Join(workDir, "mixed.mp4")
-		if err := mixTimelineAudio(videoOnly, audioTrack, mixed, outputDir); err != nil {
+		if err := mixTimelineAudio(finalVideo, audioTrack, mixed, outputDir); err != nil {
 			return "", err
 		}
 		finalPath = mixed
@@ -159,7 +179,7 @@ func ExportTimeline(outputDir string, tl *TimelineEdit) (string, error) {
 func buildDefaultTimeline(db *sql.DB, projectID, episodeID string) (*TimelineEdit, error) {
 	clips, err := ListShotClips(db, projectID, episodeID)
 	if err != nil {
-		return &TimelineEdit{ProjectID: projectID, EpisodeID: episodeID, Tracks: []TimelineTrack{
+		return &TimelineEdit{ProjectID: projectID, EpisodeID: episodeID, ExportSettings: DefaultExportSettings(), Tracks: []TimelineTrack{
 			{Type: "video", Clips: []TimelineClip{}},
 			{Type: "audio", Clips: []TimelineClip{}},
 		}}, nil
@@ -205,6 +225,7 @@ func buildDefaultTimeline(db *sql.DB, projectID, episodeID string) (*TimelineEdi
 	}
 	return &TimelineEdit{
 		ProjectID: projectID, EpisodeID: episodeID,
+		ExportSettings: DefaultExportSettings(),
 		Tracks: []TimelineTrack{
 			{Type: "video", Clips: videoClips},
 			{Type: "audio", Clips: []TimelineClip{}},
@@ -240,7 +261,11 @@ func mixTimelineAudio(videoOnly string, audioTrack *TimelineTrack, dest, outputD
 		if delayMs < 0 {
 			delayMs = 0
 		}
-		filters = append(filters, fmt.Sprintf("[%d:a]adelay=%d|%d,volume=1.0[a%d]", valid+1, delayMs, delayMs, valid))
+		vol := clip.Volume
+		if vol <= 0 {
+			vol = 1
+		}
+		filters = append(filters, fmt.Sprintf("[%d:a]adelay=%d|%d,volume=%.2f[a%d]", valid+1, delayMs, delayMs, vol, valid))
 		valid++
 	}
 	if valid == 0 {

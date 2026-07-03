@@ -315,8 +315,25 @@ func (wfs *WorkflowService) runShotVideos(ctx context.Context, cm *ConnManager, 
 		return workflowOutcome{}, fmt.Errorf("请至少选择一个分镜")
 	}
 
+	ordered := service.SortShotNumbers(shots)
+	if batch {
+		tk, err := wfs.submitSequentialShotVideoTask(ctx, cm, userID, req.ProjectID, req.EpisodeID, ordered)
+		if err != nil {
+			return workflowOutcome{}, err
+		}
+		reply := fmt.Sprintf("已提交 %d 个分镜的串行连贯视频任务（按镜号顺序，上一镜末帧继承）", len(ordered))
+		return workflowOutcome{
+			reply: reply,
+			extra: map[string]interface{}{
+				"task_ids":     []string{tk.ID},
+				"shot_numbers": ordered,
+				"sequential":   true,
+			},
+		}, nil
+	}
+
 	var taskIDs []string
-	for _, shotNum := range shots {
+	for _, shotNum := range ordered[:1] {
 		tk, err := wfs.submitShotVideoTask(ctx, cm, userID, req.ProjectID, req.EpisodeID, shotNum)
 		if err != nil {
 			return workflowOutcome{}, err
@@ -324,19 +341,54 @@ func (wfs *WorkflowService) runShotVideos(ctx context.Context, cm *ConnManager, 
 		taskIDs = append(taskIDs, tk.ID)
 	}
 
-	reply := fmt.Sprintf("已提交 %d 个分镜的视频生成任务", len(shots))
+	reply := "已提交 1 个分镜的视频生成任务"
 	return workflowOutcome{
 		reply: reply,
 		extra: map[string]interface{}{
 			"task_ids":     taskIDs,
-			"shot_numbers": shots,
+			"shot_numbers": ordered[:1],
 		},
 	}, nil
 }
 
+func (wfs *WorkflowService) submitSequentialShotVideoTask(ctx context.Context, cm *ConnManager, userID, projectID, episodeID string, shots []int) (*task.Task, error) {
+	id := fmt.Sprintf("task_%d", time.Now().UnixNano())
+	timeout := wfs.Timeout * time.Duration(len(shots))
+	if timeout < 15*time.Minute {
+		timeout = 15 * time.Minute
+	}
+	tk := task.NewTask(id, projectID, "", "", service.DefaultShotDurationSec, "1280x720", 24, timeout)
+	tk.UserID = userID
+	tk.Mode = "video"
+	tk.EpisodeID = episodeID
+	tk.GenerateShots = shots
+	service.EnrichTaskMeta(wfs.DB, tk)
+	tk.SetState(task.StateWaiting, tk.Title)
+	wfs.broadcastTaskUpdate(cm, tk, "串行视频任务已接收")
+
+	wfs.Queue.Submit(tk, func(runCtx context.Context, t *task.Task) error {
+		runCtx = logger.WithID(runCtx, t.ID)
+		t.SetState(task.StateVideoGen, t.Title)
+		t.UpdateProgress(5)
+		wfs.broadcastTaskUpdate(cm, t, fmt.Sprintf("连贯视频生成中（共 %d 镜，按镜号串行 + 末帧继承）", len(shots)))
+
+		clips, err := service.GenerateShotClipsSequential(runCtx, wfs.DB, wfs.resolveVendor(), wfs.OutputDir, projectID, episodeID, shots)
+		if err != nil {
+			wfs.broadcastTaskUpdate(cm, t, service.UserMessageWithLogID(err, t.ID))
+			return err
+		}
+		t.UpdateProgress(100)
+		t.SetState(task.StateDone, t.Title)
+		wfs.broadcastTaskUpdate(cm, t, fmt.Sprintf("连贯视频生成完成（%d 镜）", len(clips)))
+		logger.CtxTrace(runCtx, "sequential shot video done count=%d", len(clips))
+		return nil
+	})
+	return tk, nil
+}
+
 func (wfs *WorkflowService) submitShotVideoTask(ctx context.Context, cm *ConnManager, userID, projectID, episodeID string, shotNum int) (*task.Task, error) {
 	id := fmt.Sprintf("task_%d", time.Now().UnixNano())
-	tk := task.NewTask(id, projectID, "", "", 3, "1280x720", 24, 15*time.Minute)
+	tk := task.NewTask(id, projectID, "", "", service.DefaultShotDurationSec, "1280x720", 24, 15*time.Minute)
 	tk.UserID = userID
 	tk.Mode = "video"
 	tk.EpisodeID = episodeID
@@ -351,7 +403,7 @@ func (wfs *WorkflowService) submitShotVideoTask(ctx context.Context, cm *ConnMan
 		t.UpdateProgress(5)
 		wfs.broadcastTaskUpdate(cm, t, "视频生成中")
 
-		clip, err := service.GenerateShotClip(runCtx, wfs.DB, wfs.resolveVendor(), wfs.OutputDir, projectID, episodeID, shotNum)
+		clip, err := service.GenerateShotClip(runCtx, wfs.DB, wfs.resolveVendor(), wfs.OutputDir, projectID, episodeID, shotNum, nil)
 		if err != nil {
 			wfs.broadcastTaskUpdate(cm, t, service.UserMessageWithLogID(err, t.ID))
 			return err

@@ -33,26 +33,34 @@ func ParseScript(ctx context.Context, script, style string, assets []ProjectAsse
 }
 
 func parseScriptOnce(ctx context.Context, script, style string, assets []ProjectAsset, skillMgr *skill.Manager, v adapter.Vendor, minShots int, strict bool) ([]task.StoryboardItem, error) {
-	systemPrompt := fmt.Sprintf(`你是专业短剧分镜师。将剧本拆分为多个独立镜头，必须覆盖剧本中的每一个场次、关键动作和对白段落，不得把整集压缩成单镜。
+	systemPrompt := fmt.Sprintf(`你是专业抖音 AI 短剧分镜师。将剧本拆分为多个独立镜头，必须覆盖剧本中的每一个场次、关键动作和对白段落，不得把整集压缩成单镜。
 
 硬性要求：
 - 至少输出 %d 个镜头（shot_number 从 1 连续编号）
 - 每个场次至少 2 个镜头（建立镜头 + 细节/对白镜头）
 - 对白、动作转折、情绪变化处应单独成镜
 
+连贯分镜规则（减少镜间割裂）：
+- 单镜时长统一 2.5 秒；一句短台词 = 1 镜 (2.5s)；长台词拆成 2 镜 (各 2.5~5s)，禁止混用混乱时长
+- 景别递进：同场景内优先 全景→中景→近景→特写，禁止全景直接跳超大特写（中间加中景过渡）
+- 连续运镜：相邻镜头运镜方向一致，如「缓慢 dolly in」→「继续小幅 dolly in 特写」，避免一镜环绕下一镜拉远
+- 转场衔接：相邻镜 description 预留动作衔接点（上一镜转头/抬手/遮挡 → 下一镜顺接该动作或同物体入镜）
+- 同场景：scene 相同的多镜，prompt 中人物服装发型 character_id 描述一字不改，仅换景别与动作
+- 跨场景：只换背景/场景，人物基础 character_id 与 style: consistent 保持不变
+
 必须只输出 JSON 数组，不要 markdown 说明文字。每项字段：
 - shot_number (int) 镜头序号
 - scene (string) 场景名
-- description (string) 中文画面描述（含动作、情绪、光影氛围）
-- camera (string) 运镜与技术参数：中文简述 + 英文术语，如「推镜 dolly in」「希区库克变焦 dolly zoom」「跟焦 rack focus」「升格 slow motion 120fps」，不得只写「推镜/特写」
-- duration (float) 秒数，默认3
-- prompt (string) 英文 AI 绘画提示词，须含：构图景别、与 camera 一致的运镜术语、AO/体积光/SSS/金属反射等 PBR 渲染细节；高速战斗或情绪爆发镜须标注 motion blur 或 high frame rate close-up
+- description (string) 中文画面描述（含动作、情绪、光影氛围；与上一镜动作可衔接）
+- camera (string) 运镜：中文简述 + 英文术语，如「缓慢推镜 slow dolly in」「固定 locked-off」；相邻镜标注连续运镜关系
+- duration (float) 秒数，默认 2.5，上限 5
+- prompt (string) 英文 AI 绘画提示词，须含：景别( wide/medium/close-up )、与 camera 一致的运镜术语、PBR 渲染细节
 - asset_ids (int[]) 本镜出现的资产 id，必须从下方资产清单选取（无资产时可省略）
-- prompt 须通过内容安全：禁止 blood/gore/nudity/裸露/血腥/残忍伤害；战斗用 stylized anime action、energy effects、dynamic pose，不写流血伤亡细节
-- prompt 中出场角色须含 character_id: [name], style: consistent 及特征关键词
-- prompt 须含渲染锚点：Unreal Engine 5 render, Octane Render, high fidelity, consistent lighting，并标明 16:9 或 9:16 构图与统一色调
+- prompt 须通过内容安全：禁止 blood/gore/nudity/裸露/血腥/残忍伤害；战斗用 stylized anime action、energy effects、dynamic pose
+- prompt 中出场角色须含 character_id: [name], style: consistent 及特征关键词（全片统一复制，勿每镜重写人设）
+- prompt 须含渲染锚点：Unreal Engine 5 render, Octane Render, high fidelity, consistent lighting，并标明 16:9 或 9:16 与统一暖/冷色调
 
-示例：[{"shot_number":1,"scene":"界海边缘","description":"石昊猛然起身，赤红双目","camera":"推镜 dolly in + rack focus 面部","duration":3.5,"asset_ids":[12],"prompt":"3D anime, character_id: ShiHao, style: consistent, Unreal Engine 5 render, Octane Render high fidelity, consistent lighting, widescreen 16:9, dolly in rack focus..."}]`, minShots)
+示例：[{"shot_number":1,"scene":"界海边缘","description":"石昊猛然起身，赤红双目","camera":"缓慢推镜 slow dolly in","duration":2.5,"asset_ids":[12],"prompt":"3D anime, wide shot, character_id: ShiHao, style: consistent, Unreal Engine 5 render, consistent lighting, vertical 9:16, slow dolly in..."}]`, minShots)
 
 	systemPrompt += FormatAssetsForStoryboardPrompt(assets)
 	systemPrompt += "\n\n" + skillMgr.Get("art_skills")
