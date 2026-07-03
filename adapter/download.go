@@ -11,7 +11,7 @@ import (
 )
 
 var downloadClient = &http.Client{
-	Timeout: 120 * time.Second,
+	Timeout: 180 * time.Second,
 	Transport: &http.Transport{
 		MaxIdleConns:        20,
 		IdleConnTimeout:     90 * time.Second,

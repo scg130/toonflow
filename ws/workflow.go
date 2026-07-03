@@ -353,10 +353,7 @@ func (wfs *WorkflowService) runShotVideos(ctx context.Context, cm *ConnManager, 
 
 func (wfs *WorkflowService) submitSequentialShotVideoTask(ctx context.Context, cm *ConnManager, userID, projectID, episodeID string, shots []int) (*task.Task, error) {
 	id := fmt.Sprintf("task_%d", time.Now().UnixNano())
-	timeout := wfs.Timeout * time.Duration(len(shots))
-	if timeout < 15*time.Minute {
-		timeout = 15 * time.Minute
-	}
+	timeout := service.BatchVideoTaskTimeout(len(shots))
 	tk := task.NewTask(id, projectID, "", "", service.DefaultShotDurationSec, "1280x720", 24, timeout)
 	tk.UserID = userID
 	tk.Mode = "video"
@@ -372,16 +369,26 @@ func (wfs *WorkflowService) submitSequentialShotVideoTask(ctx context.Context, c
 		t.UpdateProgress(5)
 		wfs.broadcastTaskUpdate(cm, t, fmt.Sprintf("连贯视频生成中（共 %d 镜，按镜号串行 + 末帧继承）", len(shots)))
 
-		clips, err := service.GenerateShotClipsSequential(runCtx, wfs.DB, wfs.resolveVendor(), wfs.OutputDir, projectID, episodeID, shots)
+		outcome, err := service.GenerateShotClipsSequential(runCtx, wfs.DB, wfs.resolveVendor(), wfs.OutputDir, projectID, episodeID, shots)
+		if outcome != nil && len(outcome.Clips) > 0 {
+			t.UpdateProgress(100)
+			t.SetState(task.StateDone, t.Title)
+			msg := fmt.Sprintf("视频生成完成（成功 %d 镜）", len(outcome.Clips))
+			if len(outcome.Failed) > 0 {
+				msg = fmt.Sprintf("部分完成：成功 %d 镜，失败 %d 镜（可单独重试失败镜号）", len(outcome.Clips), len(outcome.Failed))
+			}
+			wfs.broadcastTaskUpdate(cm, t, msg)
+			logger.CtxTrace(runCtx, "sequential shot video done ok=%d failed=%d", len(outcome.Clips), len(outcome.Failed))
+			if err != nil {
+				logger.CtxTrace(runCtx, "sequential shot video partial: %v", err)
+			}
+			return nil
+		}
 		if err != nil {
 			wfs.broadcastTaskUpdate(cm, t, service.UserMessageWithLogID(err, t.ID))
 			return err
 		}
-		t.UpdateProgress(100)
-		t.SetState(task.StateDone, t.Title)
-		wfs.broadcastTaskUpdate(cm, t, fmt.Sprintf("连贯视频生成完成（%d 镜）", len(clips)))
-		logger.CtxTrace(runCtx, "sequential shot video done count=%d", len(clips))
-		return nil
+		return fmt.Errorf("批量视频未生成任何片段")
 	})
 	return tk, nil
 }

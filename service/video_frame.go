@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"toonflow/adapter"
 	"toonflow/logger"
@@ -36,14 +38,28 @@ func PublishContinuityFrame(ctx context.Context, v adapter.Vendor, localPNG stri
 	if !ok {
 		return "", fmt.Errorf("当前模型不支持上传连贯参考帧")
 	}
-	url, err := pub.PublishImageForVideo(ctx, localPNG)
-	if err != nil {
-		return "", err
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(time.Duration(attempt*5) * time.Second):
+			}
+		}
+		url, err := pub.PublishImageForVideo(ctx, localPNG)
+		if err == nil && adapter.IsCDNImageURL(url) {
+			return url, nil
+		}
+		lastErr = err
+		if err != nil && !strings.Contains(strings.ToLower(err.Error()), "429") {
+			break
+		}
 	}
-	if !adapter.IsCDNImageURL(url) {
-		return "", fmt.Errorf("连贯参考帧上传未返回有效 CDN URL")
+	if lastErr != nil {
+		return "", lastErr
 	}
-	return url, nil
+	return "", fmt.Errorf("连贯参考帧上传未返回有效 CDN URL")
 }
 
 // ContinuityFrameFromClip extracts and publishes the last frame of a generated clip.

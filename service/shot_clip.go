@@ -175,49 +175,6 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 	}, nil
 }
 
-// GenerateShotClipsSequential generates clips in shot order, chaining each shot from the previous clip's last frame.
-func GenerateShotClipsSequential(ctx context.Context, db *sql.DB, v adapter.Vendor, outputDir, projectID, episodeID string, shotNumbers []int) ([]*ShotClip, error) {
-	ordered := SortShotNumbers(shotNumbers)
-	if len(ordered) == 0 {
-		return nil, fmt.Errorf("请至少选择一个分镜")
-	}
-
-	workDir, err := os.MkdirTemp(filepath.Join(outputDir, "clips", projectID, episodeID), "chain_")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(workDir)
-
-	var clips []*ShotClip
-	var continuityURL string
-	for i, shotNum := range ordered {
-		var opts *ShotClipOptions
-		if i > 0 && continuityURL != "" {
-			opts = &ShotClipOptions{ContinuityImageURL: continuityURL}
-		}
-		clip, err := GenerateShotClip(ctx, db, v, outputDir, projectID, episodeID, shotNum, opts)
-		if err != nil {
-			return clips, fmt.Errorf("第 %d 镜: %w", shotNum, err)
-		}
-		clips = append(clips, clip)
-
-		local, ok := publicURLToLocal(outputDir, clip.FileURL)
-		if !ok {
-			logger.CtxTrace(ctx, "continuity skip shot=%d: clip file not local", shotNum)
-			continuityURL = ""
-			continue
-		}
-		nextURL, err := ContinuityFrameFromClip(ctx, v, outputDir, local, workDir, shotNum)
-		if err != nil {
-			logger.CtxTrace(ctx, "continuity frame failed shot=%d: %v", shotNum, err)
-			continuityURL = ""
-			continue
-		}
-		continuityURL = nextURL
-	}
-	return clips, nil
-}
-
 // SelectShotClip marks one version as the active clip for its shot.
 func SelectShotClip(db *sql.DB, clipID string) error {
 	var projectID, episodeID string

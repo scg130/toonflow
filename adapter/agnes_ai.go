@@ -65,7 +65,15 @@ func (v *AgnesAIVendor) VendorConfig() VendorConfig {
 func (v *AgnesAIVendor) Configure(baseURL, apiKey string) {
 	v.baseURL = NormalizeAgnesBaseURL(baseURL)
 	v.apiKey = SanitizeAPIKey(apiKey)
-	v.client = &http.Client{Timeout: 180 * time.Second}
+	v.client = &http.Client{
+		Timeout: 180 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:          20,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   15 * time.Second,
+			ResponseHeaderTimeout: 120 * time.Second,
+		},
+	}
 }
 
 // NormalizeAgnesBaseURL fixes common misconfigured Agnes API base URLs.
