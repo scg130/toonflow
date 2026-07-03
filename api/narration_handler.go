@@ -17,7 +17,7 @@ func (r *Router) narrationPlanHandler(c *gin.Context) {
 		EpisodeID string `json:"episode_id" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 
@@ -28,7 +28,7 @@ func (r *Router) narrationPlanHandler(c *gin.Context) {
 	}
 	plan, err := service.GenerateNarrationPlan(c.Request.Context(), r.db.DB, r.resolveVendor(), projectID, req.EpisodeID, tl)
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 	tl.Narration = plan
@@ -50,7 +50,7 @@ func (r *Router) narrationSynthesizeHandler(c *gin.Context) {
 		Voice     string                    `json:"voice,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 
@@ -85,11 +85,11 @@ func (r *Router) narrationSynthesizeHandler(c *gin.Context) {
 	service.NormalizeNarrationSegments(plan.Segments, plan.TotalDuration)
 
 	if err := service.SynthesizeNarrationPlan(c.Request.Context(), r.resolveVendor(), r.outputDir, plan); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 	if err := service.ApplyNarrationToTimeline(tl, plan); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 	if err := service.SaveTimeline(r.db.DB, tl); err != nil {

@@ -12,7 +12,7 @@ import (
 )
 
 func (r *Router) modelTestError(c *gin.Context, err error) {
-	msg := err.Error()
+	msg := userMsg(c, err)
 	hint := ""
 	if strings.Contains(msg, "401") || strings.Contains(msg, "无效的令牌") {
 		hint = "API Key 无效。请在「设置 → 供应商」中编辑并填入 Agnes 控制台 (platform.agnes-ai.com) 的密钥，不要填 API 地址。"

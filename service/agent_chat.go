@@ -84,7 +84,7 @@ func (a *AgentChat) HandleMessage(ctx context.Context, userID, projectID, episod
 	if intent != nil {
 		EnrichIntentFromUserMessage(intent, userMsg)
 		if err := intent.Validate(episodeID); err != nil {
-			out := &ChatResponse{Reply: strings.TrimSpace(reply + "\n\n⚠️ " + err.Error())}
+			out := &ChatResponse{Reply: strings.TrimSpace(reply + "\n\n⚠️ " + UserMessageFromContext(ctx, err))}
 			a.saveMessage(projectID, episodeID, "user", userMsg, "")
 			a.saveMessage(projectID, episodeID, "assistant", out.Reply, "")
 			ReportProgress(ctx, "chat", 100, "完成")
@@ -130,10 +130,11 @@ func (a *AgentChat) handleWorkflowAction(ctx context.Context, userID, projectID,
 		action, work, err = a.executeAction(ctx, userID, projectID, episodeID, stage, intent, userMsg)
 	}
 
-	out.Reply = actionChatReply(actionType, err)
+	out.Reply = actionChatReply(ctx, actionType, err)
 	if err != nil {
-		ReportProgress(ctx, actionType, 0, "执行失败: "+err.Error())
-		out.Action = &ChatAction{Type: actionType, Error: err.Error()}
+		userErr := UserMessageFromContext(ctx, err)
+		ReportProgress(ctx, actionType, 0, "执行失败: "+userErr)
+		out.Action = &ChatAction{Type: actionType, Error: userErr}
 	} else {
 		if actionType == "generate_storyboard" && aiContent != "" {
 			work = a.refineStoryboardWork(ctx, projectID, episodeID, aiContent, work)
@@ -184,9 +185,9 @@ func actionPendingReply(actionType string) string {
 	}
 }
 
-func actionChatReply(actionType string, err error) string {
+func actionChatReply(ctx context.Context, actionType string, err error) string {
 	if err != nil {
-		return fmt.Sprintf("⚠️ %s失败：%s", actionLabel(actionType), err.Error())
+		return fmt.Sprintf("⚠️ %s失败：%s", actionLabel(actionType), UserMessageFromContext(ctx, err))
 	}
 	switch actionType {
 	case "generate_skeleton":

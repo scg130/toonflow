@@ -243,7 +243,7 @@ func (r *Router) vendorsCreateHandler(c *gin.Context) {
 
 	apiKey := adapter.SanitizeAPIKey(req.APIKey)
 	if err := validateVendorAPIKey(apiKey); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 
@@ -261,7 +261,7 @@ func (r *Router) vendorsCreateHandler(c *gin.Context) {
 		Messages:  []adapter.TextMessage{{Role: "user", Content: "ping"}},
 		MaxTokens: 5,
 	}); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "API Key 验证失败: " + err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "API Key 验证失败: " + userMsg(c, err)})
 		return
 	}
 
@@ -316,7 +316,7 @@ func (r *Router) vendorsUpdateHandler(c *gin.Context) {
 	if req.APIKey != "" {
 		apiKey := adapter.SanitizeAPIKey(req.APIKey)
 		if err := validateVendorAPIKey(apiKey); err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 			return
 		}
 		url := vals["url"]
@@ -334,7 +334,7 @@ func (r *Router) vendorsUpdateHandler(c *gin.Context) {
 			Messages:  []adapter.TextMessage{{Role: "user", Content: "ping"}},
 			MaxTokens: 5,
 		}); err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "API Key 验证失败: " + err.Error()})
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "API Key 验证失败: " + userMsg(c, err)})
 			return
 		}
 		vals["key"] = apiKey
@@ -374,7 +374,13 @@ func (r *Router) vendorsDeleteHandler(c *gin.Context) {
 
 func (r *Router) tasksHandler(c *gin.Context) {
 	userID := currentUserID(c)
-	c.JSON(http.StatusOK, r.queue.AllTasksForUser(userID))
+	tasks := r.queue.AllTasksForUser(userID)
+	for _, t := range tasks {
+		if t.ErrorMessage != "" {
+			t.ErrorMessage = service.AppendLogID(service.UserMessageText(t.ErrorMessage), t.ID)
+		}
+	}
+	c.JSON(http.StatusOK, tasks)
 }
 
 func (r *Router) broadcastTaskUpdate(t *task.Task, msg string) {
@@ -707,7 +713,7 @@ func (r *Router) assetUpdateHandler(c *gin.Context) {
 		FileURL string `json:"file_url"`
 	}
 	if err := c.ShouldBindJSON(&a); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 	if a.Type == "" {
@@ -833,7 +839,7 @@ func (r *Router) assetsExtractHandler(c *gin.Context) {
 	v := r.resolveVendor()
 	n, err := service.ExtractAssetsFromEpisode(ctx, r.db.DB, v, userID, projectID, req.EpisodeID)
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"count": n})

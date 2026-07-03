@@ -66,7 +66,7 @@ func (r *Router) sourceTextsCreateHandler(c *gin.Context) {
 		Content     string `json:"content" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 	if req.Volume == "" {
@@ -123,7 +123,7 @@ func (r *Router) sourceTextsAnalyzeHandler(c *gin.Context) {
 
 	var chapterCount int
 	if err := r.db.QueryRow("SELECT COUNT(*) FROM o_source_text WHERE project_id = ?", projectID).Scan(&chapterCount); err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "读取原文失败: " + err.Error()})
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "读取原文失败: " + userMsg(c, err)})
 		return
 	}
 	if chapterCount == 0 {
@@ -152,7 +152,7 @@ func (r *Router) sourceTextsAnalyzeHandler(c *gin.Context) {
 	n, err := service.AnalyzeSourceEvents(ctx, r.db.DB, v, projectID)
 	if err != nil {
 		logger.CtxError(ctx, err, "source text analyze failed analyzed=%d", n)
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error(), "analyzed": n, "log_id": LogID(c)})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err), "analyzed": n, "log_id": LogID(c)})
 		return
 	}
 
@@ -234,7 +234,7 @@ func (r *Router) episodesSplitHandler(c *gin.Context) {
 	v := r.resolveVendor()
 	eps, err := service.SplitEpisodes(ctx, r.db.DB, v, r.skillMgr, projectID)
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"episodes": eps})
@@ -252,7 +252,7 @@ func (r *Router) episodeUpdateHandler(c *gin.Context) {
 		Status string                 `json:"status"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 
@@ -317,7 +317,7 @@ func (r *Router) agentWorkGenerateHandler(c *gin.Context) {
 		Type      string `json:"type" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 	switch req.Type {
@@ -333,7 +333,7 @@ func (r *Router) agentWorkGenerateHandler(c *gin.Context) {
 	agent := &service.AgentChat{DB: r.db.DB, Vendor: r.resolveVendor(), SkillMgr: r.skillMgr}
 	content, err := agent.GenerateWork(ctx, projectID, req.EpisodeID, req.Type)
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"content": content, "type": req.Type})
@@ -385,7 +385,7 @@ func (r *Router) chatSendHandler(c *gin.Context) {
 		Stage     string `json:"stage"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 	if req.Stage == "" {
@@ -445,7 +445,7 @@ func (r *Router) chatSendHandler(c *gin.Context) {
 	agent := &service.AgentChat{DB: r.db.DB, Vendor: r.resolveVendor(), SkillMgr: r.skillMgr}
 	resp, err := agent.HandleMessage(ctx, currentUserID(c), projectID, req.EpisodeID, req.Stage, req.Message)
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 	c.JSON(http.StatusOK, resp)
@@ -462,7 +462,7 @@ func (r *Router) chatActionHandler(c *gin.Context) {
 		Params    map[string]string `json:"params"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 
@@ -486,7 +486,7 @@ func (r *Router) chatActionHandler(c *gin.Context) {
 	intent := &service.ChatActionIntent{Type: req.Action, Params: req.Params}
 	resp, err := agent.RunAction(ctx, currentUserID(c), projectID, req.EpisodeID, "general", intent)
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 	c.JSON(http.StatusOK, resp)

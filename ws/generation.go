@@ -55,6 +55,8 @@ func (gs *GenerationService) handleStartGenerate(cm *ConnManager, userID string,
 		return
 	}
 
+	id := fmt.Sprintf("task_%d", time.Now().UnixNano())
+
 	frameDuration := req.FrameDuration
 	if frameDuration <= 0 {
 		frameDuration = 3
@@ -73,7 +75,6 @@ func (gs *GenerationService) handleStartGenerate(cm *ConnManager, userID string,
 		mode = "full"
 	}
 
-	id := fmt.Sprintf("task_%d", time.Now().UnixNano())
 	t := task.NewTask(id, req.ProjectID, req.Script, req.Style, frameDuration, resolution, fps, gs.Timeout)
 	t.UserID = userID
 	t.Mode = mode
@@ -86,13 +87,13 @@ func (gs *GenerationService) handleStartGenerate(cm *ConnManager, userID string,
 
 	if mode == "images" || mode == "video" {
 		if err := gs.loadStoryboardFromDB(t); err != nil {
-			cm.Broadcast(WSResponse{Code: 1, Msg: err.Error(), Step: "error"})
+			cm.Broadcast(WSResponse{Code: 1, Msg: service.UserMessageWithLogID(err, id), Step: "error"})
 			return
 		}
 	}
 	if mode == "images" {
 		if err := service.RequireProjectAssets(gs.DB, req.ProjectID); err != nil {
-			cm.Broadcast(WSResponse{Code: 1, Msg: err.Error(), Step: "error"})
+			cm.Broadcast(WSResponse{Code: 1, Msg: service.UserMessageWithLogID(err, id), Step: "error"})
 			return
 		}
 	}
@@ -121,7 +122,7 @@ func (gs *GenerationService) handleStartGenerate(cm *ConnManager, userID string,
 		if err != nil {
 			logger.CtxError(ctx, err, "ws generate failed task=%s mode=%s", tk.ID, tk.Mode)
 			cm.Broadcast(WSResponse{
-				Code: 1, Msg: err.Error(), Step: "error", Progress: tk.Progress,
+				Code: 1, Msg: service.UserMessageWithLogID(err, tk.ID), Step: "error", Progress: tk.Progress,
 				Data: MustMarshalJSON(map[string]string{"task_id": tk.ID}),
 			})
 			return err

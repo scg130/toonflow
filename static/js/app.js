@@ -328,6 +328,15 @@
     return true;
   }
 
+  function userFacingError(msg, data) {
+    const text = msg || '操作失败';
+    const logId = data && (data.log_id || data.task_id);
+    if (logId && !text.includes(logId)) {
+      return text + '（log_id: ' + logId + '）';
+    }
+    return text;
+  }
+
   // ======================== WS 消息处理 ========================
   function onWSMessage(msg) {
     if (msg.data && msg.data.task_update) {
@@ -340,8 +349,9 @@
       }
       updateChatProgress('', 0);
       finishPendingWorkflowUI();
-      appendChatMessage('assistant', '⚠️ ' + (msg.msg || '操作失败'));
-      toast(msg.msg || '操作失败', 'error');
+      const errText = userFacingError(msg.msg, msg.data);
+      appendChatMessage('assistant', errText.startsWith('⚠️') ? errText : '⚠️ ' + errText);
+      toast(errText, 'error');
       setStatus('就绪');
       return;
     }
@@ -446,7 +456,7 @@
         setStatus('❌ ' + (msg.msg || '生成失败'));
         isGenerating = false;
         loadTasks();
-        toast('错误: ' + (msg.msg || '未知错误'), 'error');
+        toast('错误: ' + userFacingError(msg.msg, msg.data), 'error');
         break;
       default:
         if (msg.progress > 0) updateProgress(msg.progress);

@@ -26,7 +26,7 @@ func (r *Router) generateImagesHandler(c *gin.Context) {
 
 	t, err := r.submitImageGenerationTask(currentUserID(c), projectID, req.EpisodeID, req.ShotNumbers)
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{

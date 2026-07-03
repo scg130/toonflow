@@ -42,7 +42,7 @@ func (r *Router) shotClipGenerateHandler(c *gin.Context) {
 
 	t, err := r.submitShotVideoTask(userID, projectID, episodeID, shotNum)
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{
@@ -59,7 +59,7 @@ func (r *Router) shotClipGenerateHandler(c *gin.Context) {
 func (r *Router) shotClipSelectHandler(c *gin.Context) {
 	clipID := c.Param("clipId")
 	if err := service.SelectShotClip(r.db.DB, clipID); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -68,7 +68,7 @@ func (r *Router) shotClipSelectHandler(c *gin.Context) {
 func (r *Router) shotClipDeleteHandler(c *gin.Context) {
 	clipID := c.Param("clipId")
 	if err := service.DeleteShotClip(r.db.DB, r.outputDir, clipID); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -99,7 +99,7 @@ func (r *Router) timelineSaveHandler(c *gin.Context) {
 	}
 	var tl service.TimelineEdit
 	if err := c.ShouldBindJSON(&tl); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 	tl.ProjectID = projectID
@@ -124,7 +124,7 @@ func (r *Router) timelineExportHandler(c *gin.Context) {
 		Timeline  *service.TimelineEdit `json:"timeline"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 	tl := req.Timeline
@@ -140,7 +140,7 @@ func (r *Router) timelineExportHandler(c *gin.Context) {
 	tl.EpisodeID = req.EpisodeID
 	url, err := service.ExportTimeline(r.outputDir, tl)
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"video_url": url})

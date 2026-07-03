@@ -169,7 +169,7 @@ func (wfs *WorkflowService) runWorkflow(cm *ConnManager, userID string, req *WSR
 	if err != nil {
 		logger.CtxError(ctx, err, "ws workflow failed action=%s project=%s", action, req.ProjectID)
 		cm.Broadcast(WSResponse{
-			Code: 1, Msg: err.Error(), Step: "workflow_error", Progress: 0,
+			Code: 1, Msg: service.UserMessageWithLogID(err, logID), Step: "workflow_error", Progress: 0,
 			Data: MustMarshalJSON(map[string]interface{}{
 				"log_id": logID, "project_id": req.ProjectID, "action": action,
 			}),
@@ -212,7 +212,7 @@ type workflowOutcome struct {
 func (wfs *WorkflowService) finishWorkflow(cm *ConnManager, req *WSRequest, logID, action string, out workflowOutcome, err error) {
 	if err != nil {
 		cm.Broadcast(WSResponse{
-			Code: 1, Msg: err.Error(), Step: "workflow_error", Progress: 0,
+			Code: 1, Msg: service.UserMessageWithLogID(err, logID), Step: "workflow_error", Progress: 0,
 			Data: MustMarshalJSON(map[string]interface{}{
 				"log_id": logID, "project_id": req.ProjectID, "action": action,
 			}),
@@ -274,7 +274,7 @@ func (wfs *WorkflowService) runBatchImages(ctx context.Context, cm *ConnManager,
 	wfs.Queue.Submit(tk, func(runCtx context.Context, t *task.Task) error {
 		runCtx = logger.WithID(runCtx, t.ID)
 		if err := wfs.Pipeline.Execute(runCtx, t); err != nil {
-			wfs.broadcastTaskUpdate(cm, t, err.Error())
+			wfs.broadcastTaskUpdate(cm, t, service.UserMessageWithLogID(err, t.ID))
 			return err
 		}
 		if t.ProjectID != "" && len(t.Storyboard) > 0 {
@@ -354,7 +354,7 @@ func (wfs *WorkflowService) submitShotVideoTask(ctx context.Context, cm *ConnMan
 
 		clip, err := service.GenerateShotClip(runCtx, wfs.DB, wfs.resolveVendor(), wfs.OutputDir, projectID, episodeID, shotNum)
 		if err != nil {
-			wfs.broadcastTaskUpdate(cm, t, err.Error())
+			wfs.broadcastTaskUpdate(cm, t, service.UserMessageWithLogID(err, t.ID))
 			return err
 		}
 		t.UpdateProgress(100)
