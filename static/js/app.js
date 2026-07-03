@@ -74,6 +74,7 @@
   let clipVersionDropdownShot = null;
   let chatStreamSession = null;
   let pendingWorkflowUI = null;
+  let lastWorkflowReplyKey = '';
 
   // ======================== DOM 引用 ========================
   const els = {
@@ -277,6 +278,15 @@
   // ======================== WebSocket ========================
   function connectWS() {
     if (!authToken) return;
+    if (ws) {
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        return;
+      }
+      ws.onclose = null;
+      ws.onmessage = null;
+      ws.close();
+      ws = null;
+    }
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(proto + '//' + location.host + '/ws?token=' + encodeURIComponent(authToken));
 
@@ -362,7 +372,7 @@
       updateChatProgress('', 0);
       finishPendingWorkflowUI();
       if (msg.data && msg.data.reply) {
-        appendChatMessage('assistant', msg.data.reply);
+        appendWorkflowReply(msg.data);
       }
       applyWorkflowResult(msg.data && msg.data.action, msg.data || {});
       setStatus('就绪');
@@ -783,6 +793,18 @@
     scrollChatToBottom();
   }
 
+  function appendWorkflowReply(data) {
+    const reply = data && data.reply;
+    if (!reply) return;
+    const key = (data.log_id || data.task_id || '') + '|' + reply;
+    if (key && key === lastWorkflowReplyKey) return;
+    lastWorkflowReplyKey = key;
+    setTimeout(() => {
+      if (lastWorkflowReplyKey === key) lastWorkflowReplyKey = '';
+    }, 3000);
+    appendChatMessage('assistant', reply);
+  }
+
   function finishPendingWorkflowUI() {
     if (pendingWorkflowUI && pendingWorkflowUI.btn) {
       pendingWorkflowUI.btn.disabled = false;
@@ -885,7 +907,7 @@
     if (action === 'generate_shot_image') {
       const shot = data && data.action_result && data.action_result.result && data.action_result.result.shot_number;
       if (shot) {
-        submitShotImagesViaWS([shot], '为第 ' + shot + ' 镜生成图片');
+        submitShotImagesViaWS([shot], '为第 ' + shot + ' 镜生成图片', { skipUserMessage: true });
       }
       return;
     }
@@ -908,7 +930,8 @@
     }
   }
 
-  function submitShotImagesViaWS(shotNumbers, userLabel) {
+  function submitShotImagesViaWS(shotNumbers, userLabel, wsOpts) {
+    wsOpts = wsOpts || {};
     if (!currentProject || !currentEpisode) {
       toast('请先选择项目与集', 'warning');
       return Promise.resolve();
@@ -932,7 +955,7 @@
         userLabel || ('为 ' + shotNumbers.length + ' 个分镜生成图片'),
         null,
         '生成中',
-        { shotNumbers: shotNumbers }
+        { shotNumbers: shotNumbers, skipUserMessage: !!wsOpts.skipUserMessage }
       );
     });
   }
@@ -986,7 +1009,9 @@
       clip_id: opts.clipId || '',
     });
     if (!sent) return;
-    appendChatMessage('user', userLabel);
+    if (!opts.skipUserMessage) {
+      appendChatMessage('user', userLabel);
+    }
     updateChatProgress((loadingLabel || userLabel) + '...', 5);
     setStatus((loadingLabel || userLabel) + '...');
     if (btn) {
@@ -1091,8 +1116,17 @@
     }).then(r => r.json()).then(res => {
       updateChatProgress('', 0);
       if (res.action && res.action.type) {
-        finalizeChatStreamBubble(res.reply || '');
-        handleChatAction(res);
+        const delegatesToWS = res.action.type === 'generate_shot_image';
+        if (delegatesToWS) {
+          if (chatStreamSession && chatStreamSession.el) {
+            chatStreamSession.el.remove();
+            chatStreamSession = null;
+          }
+          handleChatAction(res);
+        } else {
+          finalizeChatStreamBubble(res.reply || '');
+          handleChatAction(res);
+        }
       } else {
         finalizeChatStreamBubble(res.reply || '');
       }
