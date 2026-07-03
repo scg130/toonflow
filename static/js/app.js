@@ -75,6 +75,7 @@
   let chatStreamSession = null;
   let pendingWorkflowUI = null;
   let lastWorkflowReplyKey = '';
+  let lastTaskToastKey = '';
 
   // ======================== DOM 引用 ========================
   const els = {
@@ -347,11 +348,45 @@
     return text;
   }
 
+  function showTaskToast(msg, type, taskId) {
+    if (!msg) return;
+    const key = (taskId || '') + '|' + type + '|' + msg;
+    if (key === lastTaskToastKey) return;
+    lastTaskToastKey = key;
+    setTimeout(() => {
+      if (lastTaskToastKey === key) lastTaskToastKey = '';
+    }, 3000);
+    toast(msg, type);
+  }
+
+  function applyTaskFinishSideEffects(msg) {
+    const d = msg.data || {};
+    setStatus('🎉 生成完成！');
+    updateProgress(100);
+    isGenerating = false;
+    loadTasks();
+    if (d.storyboard) {
+      storyboards = normalizeStoryboards(d.storyboard);
+      renderStoryboards();
+      updateVideoTracksFromStoryboards();
+    }
+    if (d.video_url) showVideoResult(d.video_url);
+    if (currentProject) {
+      const mode = d.mode || '';
+      if (mode === 'video' || mode === 'images' || !mode) {
+        loadProjectStoryboards(currentProject.id, currentEpisode?.id);
+        loadShotClips();
+      } else {
+        loadProjectStoryboards(currentProject.id, currentEpisode?.id);
+      }
+    }
+  }
+
   // ======================== WS 消息处理 ========================
   function onWSMessage(msg) {
     if (msg.data && msg.data.task_update) {
       loadTasks();
-      handleGenerationTaskUpdate(msg);
+      if (handleGenerationTaskUpdate(msg)) return;
     }
     if (msg.step === 'workflow_error') {
       if (msg.data && msg.data.project_id && currentProject && msg.data.project_id !== currentProject.id) {
@@ -447,20 +482,10 @@
         updateProgress(msg.progress);
         break;
       case 'finish':
-        setStatus('🎉 生成完成！');
-        updateProgress(100);
-        isGenerating = false;
-        loadTasks();
-        if (msg.data && msg.data.storyboard) {
-          storyboards = normalizeStoryboards(msg.data.storyboard);
-          renderStoryboards();
-          updateVideoTracksFromStoryboards();
+        applyTaskFinishSideEffects(msg);
+        if (!msg.data || !msg.data.task_update) {
+          showTaskToast(msg.msg || '生成完成！', 'success', msg.data && msg.data.task_id);
         }
-        if (msg.data && msg.data.video_url) {
-          showVideoResult(msg.data.video_url);
-        }
-        if (currentProject) loadProjectStoryboards(currentProject.id, currentEpisode?.id);
-        toast('生成完成！', 'success');
         break;
       case 'error':
         setStatus('❌ ' + (msg.msg || '生成失败'));
@@ -477,25 +502,25 @@
   function handleGenerationTaskUpdate(msg) {
     const d = msg.data || {};
     const state = d.state || msg.step || '';
-    if (d.project_id && currentProject && d.project_id !== currentProject.id) return;
+    if (d.project_id && currentProject && d.project_id !== currentProject.id) return false;
 
     if (state === 'video_gen' || state === 'drawing') {
       setStatus(msg.msg || '生成中...');
-      return;
+      return false;
     }
-    if (state !== 'done' && state !== 'error') return;
+    if (state !== 'done' && state !== 'error') return false;
 
-    if (state === 'done' && currentProject) {
-      const mode = d.mode || '';
-      if (mode === 'video' || mode === 'images' || !mode) {
-        loadProjectStoryboards(currentProject.id, currentEpisode?.id);
-        loadShotClips();
-      }
-      if (msg.msg) toast(msg.msg, 'success');
+    if (state === 'done') {
+      applyTaskFinishSideEffects(msg);
+      showTaskToast(msg.msg || '生成完成！', 'success', d.task_id);
+      return true;
     }
     if (state === 'error' && msg.msg) {
-      toast(msg.msg, 'error');
+      isGenerating = false;
+      showTaskToast(userFacingError(msg.msg, d), 'error', d.task_id);
+      return true;
     }
+    return false;
   }
 
   function updateProgress(pct) {

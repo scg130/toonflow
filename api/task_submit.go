@@ -86,7 +86,6 @@ func (r *Router) submitImageGenerationTask(userID, projectID, episodeID string, 
 		if tk.ProjectID != "" && len(tk.Storyboard) > 0 {
 			_ = service.SaveStoryboardItems(r.db.DB, tk.ProjectID, tk.EpisodeID, tk.Storyboard)
 		}
-		r.broadcastTaskUpdate(tk, "图片生成完成")
 		return nil
 	})
 	r.broadcastTaskUpdate(t, "任务已接收")

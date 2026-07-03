@@ -280,7 +280,6 @@ func (wfs *WorkflowService) runBatchImages(ctx context.Context, cm *ConnManager,
 		if t.ProjectID != "" && len(t.Storyboard) > 0 {
 			_ = service.SaveStoryboardItems(wfs.DB, t.ProjectID, t.EpisodeID, t.Storyboard)
 		}
-		wfs.broadcastTaskUpdate(cm, t, "图片生成完成")
 		return nil
 	})
 
