@@ -7,7 +7,7 @@ import (
 )
 
 // BuildShotImagePrompt composes the final image-generation prompt for one storyboard shot.
-func BuildShotImagePrompt(item task.StoryboardItem, style, videoRatio, assetPrompt string) string {
+func BuildShotImagePrompt(item task.StoryboardItem, style, videoRatio, assetPrompt, styleAnchor string) string {
 	prompt := strings.TrimSpace(item.Prompt)
 	if prompt == "" {
 		prompt = strings.TrimSpace(item.Description)
@@ -18,11 +18,22 @@ func BuildShotImagePrompt(item task.StoryboardItem, style, videoRatio, assetProm
 	if style != "" {
 		prompt += ", " + style + " art style"
 	}
+	if lit := strings.TrimSpace(item.Lighting); lit != "" {
+		prompt += ", lighting: " + lit
+	}
+	if ac := strings.TrimSpace(item.ActionContinue); ac != "" {
+		prompt += ", action continuation: " + ac
+	}
 	if cam := EnrichCameraForPrompt(item.Camera); cam != "" {
 		prompt += ", " + cam
 	}
-	prompt += ", " + strings.Join(StylePromptAnchors(videoRatio, style), ", ")
+	if styleAnchor != "" {
+		prompt += ", " + styleAnchor
+	} else {
+		prompt += ", " + strings.Join(StylePromptAnchors(videoRatio, style), ", ")
+	}
 	prompt += ", " + strings.Join(imageRenderEnhancers(), ", ")
+	prompt += ", frame-to-frame continuity, zero model mutation, no random color shift"
 	if tags := motionBlurTags(item); len(tags) > 0 {
 		prompt += ", " + strings.Join(tags, ", ")
 	}

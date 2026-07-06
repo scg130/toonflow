@@ -69,10 +69,16 @@
       <div class="workbench-layout">
         <!-- 左侧 AI 对话 -->
         <aside class="wb-chat-panel">
-          <div class="wb-chat-header">AI 创作助手</div>
+          <div class="wb-chat-header">
+            <span class="wb-chat-header-title">AI 创作助手</span>
+          </div>
           <div id="wb-chat-progress" class="wb-chat-progress" style="display:none;">
             <div class="wb-chat-progress-bar"><div id="wb-chat-progress-fill"></div></div>
             <div id="wb-chat-progress-text" class="wb-chat-progress-text"></div>
+            <div id="wb-pipeline-controls" class="wb-pipeline-controls" style="display:none;">
+              <button class="btn btn-sm btn-outline" id="btn-pipeline-pause" type="button">暂停</button>
+              <button class="btn btn-sm btn-primary" id="btn-pipeline-resume" type="button" style="display:none;">继续</button>
+            </div>
           </div>
           <div id="wb-chat-messages" class="wb-chat-messages"></div>
           <div class="wb-chat-input-area">
@@ -104,12 +110,17 @@
               <button class="planning-tab" data-plan="script">剧本</button>
             </div>
             <div id="planning-content" class="planning-content">
-              <div class="empty-state-sm"><p>在左侧对话中让 AI 生成，或点击快捷指令</p></div>
+              <div class="planning-pipeline-bar">
+                <button class="btn btn-sm btn-primary" id="btn-run-episode-pipeline" type="button" title="从当前进度自动执行：策划 → 分镜 → 资产 → 生图 → 生视频">一键执行后续流程</button>
+              </div>
+              <div id="planning-body" class="planning-body">
+                <div class="empty-state-sm"><p>在左侧对话中让 AI 生成，或点击快捷指令；就绪后可点上方「一键执行后续流程」</p></div>
+              </div>
             </div>
             <div class="planning-actions">
-              <button class="btn btn-sm btn-outline" data-quick="generate_skeleton">生成/重新生成 故事骨架</button>
-              <button class="btn btn-sm btn-outline" data-quick="generate_strategy">生成/重新生成 改编策略</button>
-              <button class="btn btn-sm btn-primary" data-quick="generate_script">生成/重新生成 剧本</button>
+              <button class="btn btn-sm btn-outline" data-quick="generate_skeleton">生成 故事骨架</button>
+              <button class="btn btn-sm btn-outline" data-quick="generate_strategy">生成 改编策略</button>
+              <button class="btn btn-sm btn-primary" data-quick="generate_script">生成 剧本</button>
             </div>
           </div>
 

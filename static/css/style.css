@@ -1674,23 +1674,37 @@ body {
 }
 
 .wb-chat-header {
-  padding: 12px 14px;
+  padding: 10px 12px;
   font-weight: 600;
   border-bottom: 1px solid var(--border-subtle);
   font-size: 13px;
   color: var(--text-secondary);
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
+  flex-shrink: 0;
 }
 
-.wb-chat-header::before {
+.wb-chat-header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.wb-chat-header-title::before {
   content: '';
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--accent-indigo);
   box-shadow: 0 0 8px rgba(99, 102, 241, 0.6);
+  flex-shrink: 0;
+}
+
+#btn-run-episode-pipeline {
+  white-space: nowrap;
 }
 
 .wb-chat-progress {
@@ -1718,6 +1732,47 @@ body {
 .wb-chat-progress-text {
   font-size: 12px;
   color: var(--text-secondary);
+  margin-top: 6px;
+  line-height: 1.4;
+}
+
+.wb-chat-msg.pipeline-progress-log {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--accent-blue, #6366f1);
+  font-size: 12px;
+  line-height: 1.5;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.wb-chat-msg.pipeline-progress-log.pipeline-progress-finished {
+  border-left-color: var(--accent-green, #22c55e);
+}
+
+.pipeline-progress-title {
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--text-primary);
+}
+
+.pipeline-progress-line {
+  color: var(--text-secondary);
+  padding: 2px 0;
+}
+
+.pipeline-progress-line.active {
+  color: var(--accent-blue, #6366f1);
+}
+
+.pipeline-progress-line.done {
+  color: var(--text-muted, #9ca3af);
+}
+
+.wb-pipeline-controls {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .wb-chat-messages {
@@ -1762,6 +1817,8 @@ body {
   background: var(--accent-red-muted);
   border-color: rgba(239, 68, 68, 0.4);
   box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.12);
+  color: var(--accent-red);
+  white-space: pre-wrap;
 }
 
 .wb-chat-msg.assistant.streaming .chat-stream-cursor {
@@ -1843,15 +1900,30 @@ body {
 
 .planning-content {
   flex: 1;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 200px;
+  overflow: hidden;
   background: var(--bg-dark);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+}
+
+.planning-pipeline-bar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.planning-body {
+  flex: 1;
+  overflow: auto;
   padding: 16px;
   font-size: 13px;
   line-height: 1.6;
   white-space: pre-wrap;
-  min-height: 200px;
 }
 
 .planning-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
@@ -1872,6 +1944,7 @@ body {
 }
 .episode-card-title { font-weight: 600; margin-bottom: 6px; }
 .episode-card-meta { font-size: 12px; color: var(--text-secondary); }
+.episode-card-actions { margin-top: 10px; }
 
 .modal-lg { max-width: 640px; width: 90%; }
 

@@ -74,6 +74,8 @@
   let clipVersionDropdownShot = null;
   let chatStreamSession = null;
   let pendingWorkflowUI = null;
+  let episodePipelineActive = false;
+  let episodePipelinePaused = false;
   let lastWorkflowReplyKey = '';
   let lastTaskToastKey = '';
 
@@ -394,9 +396,16 @@
       if (msg.data && msg.data.project_id && currentProject && msg.data.project_id !== currentProject.id) {
         return;
       }
+      if (msg.data && msg.data.action === 'run_episode_pipeline') {
+        episodePipelineActive = false;
+        episodePipelinePaused = false;
+        setPipelineControlsVisible(false, false);
+        finishPendingWorkflowUI();
+      }
       updateChatProgress('', 0);
       finishPendingWorkflowUI();
       const errText = userFacingError(msg.msg, msg.data);
+      finalizePipelineProgressLog('⚠️ ' + errText);
       appendChatMessage('assistant', errText.startsWith('⚠️') ? errText : '⚠️ ' + errText);
       toast(errText, 'error');
       setStatus('就绪');
@@ -406,9 +415,15 @@
       if (msg.data && msg.data.project_id && currentProject && msg.data.project_id !== currentProject.id) {
         return;
       }
+      if (msg.data && msg.data.action === 'run_episode_pipeline') {
+        episodePipelineActive = false;
+        episodePipelinePaused = false;
+        setPipelineControlsVisible(false, false);
+      }
       updateChatProgress('', 0);
       finishPendingWorkflowUI();
       if (msg.data && msg.data.reply) {
+        finalizePipelineProgressLog('✅ ' + msg.data.reply);
         appendWorkflowReply(msg.data);
       }
       applyWorkflowResult(msg.data && msg.data.action, msg.data || {});
@@ -421,6 +436,11 @@
       }
       updateChatProgress(msg.msg || '处理中...', msg.progress);
       setStatus(msg.msg || '处理中...');
+      if (msg.data && msg.data.pipeline) {
+        episodePipelineActive = true;
+        setPipelineControlsVisible(true, episodePipelinePaused);
+        appendPipelineProgressLog(msg.msg || '流水线执行中...');
+      }
       const progressAction = msg.data && msg.data.action;
       if (progressAction && planningActionMap[progressAction] && msg.progress > 0 && msg.progress < 100) {
         showPlanningWorkInProgress(progressAction, msg.msg);
@@ -428,6 +448,40 @@
       if (msg.progress >= 100 && msg.data && msg.data.action === 'extract_assets' && currentProject) {
         loadProjectAssets(currentProject.id);
         switchWorkbenchPanel('assets');
+      }
+      return;
+    }
+    if (msg.step === 'episode_pipeline') {
+      if (msg.data && msg.data.project_id && currentProject && msg.data.project_id !== currentProject.id) {
+        return;
+      }
+      const state = msg.data && msg.data.state;
+      if (state === 'running') {
+        episodePipelineActive = true;
+        episodePipelinePaused = false;
+        setPipelineControlsVisible(true, false);
+        updateChatProgress(msg.msg || '流水线执行中...', msg.progress || 0);
+        setStatus(msg.msg || '流水线执行中...');
+      } else if (state === 'paused') {
+        episodePipelinePaused = true;
+        setPipelineControlsVisible(true, true);
+        updateChatProgress(msg.msg || '已暂停', msg.progress || 0);
+        appendChatMessage('assistant', '⏸ ' + (msg.msg || '流水线已暂停，发送「继续」或点击继续按钮恢复'));
+      } else if (state === 'done' || state === 'cancelled' || state === 'error') {
+        episodePipelineActive = false;
+        episodePipelinePaused = false;
+        setPipelineControlsVisible(false, false);
+        if (state === 'done') {
+          updateChatProgress('', 0);
+          finalizePipelineProgressLog('✅ ' + (msg.msg || '流水线全部完成'));
+        } else if (state === 'error') {
+          finalizePipelineProgressLog('⚠️ ' + (msg.msg || '流水线失败'));
+        } else {
+          finalizePipelineProgressLog('⏹ ' + (msg.msg || '流水线已取消'));
+        }
+        if (msg.msg) {
+          appendChatMessage('assistant', (state === 'error' ? '⚠️ ' : state === 'cancelled' ? '⏹ ' : '✅ ') + msg.msg);
+        }
       }
       return;
     }
@@ -520,8 +574,10 @@
     }
     if (state === 'error' && msg.msg) {
       isGenerating = false;
-      updateTaskChatMessageStatus(d.task_id, 'error');
-      showTaskToast(userFacingError(msg.msg, d), 'error', d.task_id);
+      const errText = userFacingError(msg.msg, d);
+      updateTaskChatMessageStatus(d.task_id, 'error', errText);
+      setStatus('❌ ' + errText);
+      showTaskToast(errText, 'error', d.task_id);
       return true;
     }
     return false;
@@ -723,6 +779,9 @@
         <div class="episode-card-title">${escapeHtml(ep.title)}</div>
         <div class="episode-card-meta">时长 ${ep.params?.target_duration_minutes || 3} 分钟 · ${ep.params?.video_ratio || '16:9'} · ${ep.status || 'draft'}</div>
         <div class="content-preview" style="margin-top:8px;">${escapeHtml((ep.script_content || ep.events_ref || '').slice(0, 120))}</div>
+        <div class="episode-card-actions">
+          <button class="btn btn-sm btn-primary btn-episode-pipeline" data-id="${ep.id}" type="button">一键执行后续流程</button>
+        </div>
       </div>`).join('');
     wrap.querySelectorAll('.episode-card').forEach(card => {
       card.addEventListener('click', () => {
@@ -731,6 +790,15 @@
         renderEpisodeList();
         loadPlanningContent();
         loadChatMessages();
+      });
+    });
+    wrap.querySelectorAll('.btn-episode-pipeline').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        currentEpisode = episodes.find(ep => ep.id === btn.dataset.id) || currentEpisode;
+        renderEpisodeSelect();
+        renderEpisodeList();
+        runEpisodePipeline(btn);
       });
     });
   }
@@ -756,10 +824,10 @@
   }
 
   function showPlanningContent(content) {
-    const el = document.getElementById('planning-content');
+    const el = document.getElementById('planning-body');
     if (!el) return;
     const cleaned = sanitizePlanningContent(content);
-    const text = cleaned ? cleaned : '暂无内容，请让 AI 生成或点击下方按钮';
+    const text = cleaned ? cleaned : '暂无内容，请让 AI 生成或使用下方快捷按钮';
     el.textContent = text;
   }
 
@@ -794,20 +862,148 @@
       }).catch(() => {});
   }
 
+  function initPipelineProgressLog() {
+    const box = document.getElementById('wb-chat-messages');
+    if (!box) return;
+    const existing = document.getElementById('wb-pipeline-progress-log');
+    if (existing) existing.remove();
+    const el = document.createElement('div');
+    el.id = 'wb-pipeline-progress-log';
+    el.className = 'wb-chat-msg assistant pipeline-progress-log';
+    el.innerHTML = '<div class="pipeline-progress-title">📋 执行进度</div><div class="pipeline-progress-lines"></div>';
+    box.appendChild(el);
+    scrollChatToBottom();
+  }
+
+  function appendPipelineProgressLog(message) {
+    if (!message) return;
+    const box = document.getElementById('wb-chat-messages');
+    if (!box) return;
+    let wrap = document.getElementById('wb-pipeline-progress-log');
+    if (!wrap) {
+      initPipelineProgressLog();
+      wrap = document.getElementById('wb-pipeline-progress-log');
+    }
+    const linesEl = wrap && wrap.querySelector('.pipeline-progress-lines');
+    if (!linesEl) return;
+    const lines = Array.from(linesEl.querySelectorAll('.pipeline-progress-line')).map(n => n.textContent);
+    if (lines.length && lines[lines.length - 1] === message) return;
+    const inProgress = /^正在/.test(message);
+    const lastLine = lines.length ? lines[lines.length - 1] : '';
+    if (inProgress && /^正在/.test(lastLine)) {
+      const lastNode = linesEl.querySelector('.pipeline-progress-line:last-child');
+      if (lastNode) {
+        lastNode.textContent = message;
+        lastNode.classList.add('active');
+        scrollChatToBottom();
+        return;
+      }
+    }
+    const line = document.createElement('div');
+    line.className = 'pipeline-progress-line' + (inProgress ? ' active' : ' done');
+    line.textContent = message;
+    linesEl.appendChild(line);
+    if (!inProgress && linesEl.children.length > 1) {
+      const prev = linesEl.children[linesEl.children.length - 2];
+      if (prev && prev.classList.contains('active')) {
+        prev.classList.remove('active');
+        prev.classList.add('done');
+      }
+    }
+    scrollChatToBottom();
+  }
+
+  function finalizePipelineProgressLog(doneMessage) {
+    const wrap = document.getElementById('wb-pipeline-progress-log');
+    if (!wrap) return;
+    wrap.querySelectorAll('.pipeline-progress-line.active').forEach(el => {
+      el.classList.remove('active');
+    });
+    if (doneMessage) {
+      appendPipelineProgressLog(doneMessage);
+    }
+    wrap.classList.add('pipeline-progress-finished');
+  }
+
   function updateChatProgress(message, progress) {
     const wrap = document.getElementById('wb-chat-progress');
     const fill = document.getElementById('wb-chat-progress-fill');
     const text = document.getElementById('wb-chat-progress-text');
     if (!wrap || !fill || !text) return;
     if (!message) {
-      wrap.style.display = 'none';
-      fill.style.width = '0%';
-      text.textContent = '';
+      wrap.style.display = episodePipelineActive ? 'block' : 'none';
+      if (!episodePipelineActive) {
+        fill.style.width = '0%';
+        text.textContent = '';
+        setPipelineControlsVisible(false, false);
+      }
       return;
     }
     wrap.style.display = 'block';
     fill.style.width = Math.min(100, Math.max(0, progress || 0)) + '%';
     text.textContent = message;
+  }
+
+  function setPipelineControlsVisible(active, paused) {
+    const controls = document.getElementById('wb-pipeline-controls');
+    const pauseBtn = document.getElementById('btn-pipeline-pause');
+    const resumeBtn = document.getElementById('btn-pipeline-resume');
+    if (!controls) return;
+    controls.style.display = active ? 'flex' : 'none';
+    if (pauseBtn) pauseBtn.style.display = active && !paused ? 'inline-flex' : 'none';
+    if (resumeBtn) resumeBtn.style.display = active && paused ? 'inline-flex' : 'none';
+  }
+
+  function isPipelineControlMessage(message) {
+    const m = (message || '').trim().toLowerCase();
+    if (!m) return null;
+    if (/^(暂停|pause|停止流水线)$/.test(m)) return 'pause';
+    if (/^(继续|恢复|resume|continue)$/.test(m)) return 'resume';
+    return null;
+  }
+
+  function sendPipelineControl(action) {
+    if (!currentProject || !currentEpisode) {
+      toast('请先选择项目与分集', 'warning');
+      return false;
+    }
+    const wsAction = action === 'pause' ? 'pause_episode_pipeline' : 'resume_episode_pipeline';
+    return sendWS(wsAction, {
+      action: wsAction,
+      project_id: currentProject.id,
+      episode_id: currentEpisode.id,
+    });
+  }
+
+  function runEpisodePipeline(btn) {
+    if (!currentProject || !currentEpisode) {
+      toast('请先选择项目与分集', 'warning');
+      return;
+    }
+    if (episodePipelineActive) {
+      toast('该分集流水线正在执行中', 'warning');
+      return;
+    }
+    const sent = sendWS('run_workflow', {
+      action: 'run_workflow',
+      workflow_action: 'run_episode_pipeline',
+      project_id: currentProject.id,
+      episode_id: currentEpisode.id,
+    });
+    if (!sent) return;
+    appendChatMessage('user', '一键执行本集后续流程');
+    appendChatMessage('assistant', '🚀 已开始自动执行：策划 → 分镜 → 资产 → 生图 → 生视频。可随时发送「暂停」或「继续」。');
+    initPipelineProgressLog();
+    episodePipelineActive = true;
+    episodePipelinePaused = false;
+    setPipelineControlsVisible(true, false);
+    updateChatProgress('流水线启动中...', 2);
+    setStatus('分集流水线执行中...');
+    if (btn) {
+      btn.disabled = true;
+      pendingWorkflowUI = { btn: btn, origLabel: btn.textContent };
+      btn.textContent = '执行中...';
+    }
   }
 
   function scrollChatToBottom() {
@@ -838,7 +1034,7 @@
     return box.lastElementChild;
   }
 
-  function updateTaskChatMessageStatus(taskId, status) {
+  function updateTaskChatMessageStatus(taskId, status, detail) {
     if (!taskId) return;
     const box = document.getElementById('wb-chat-messages');
     if (!box) return;
@@ -851,6 +1047,16 @@
         el.classList.add('task-success');
       } else if (status === 'error') {
         el.classList.add('task-error');
+        if (detail) {
+          const errLine = detail.startsWith('⚠️') ? detail : '⚠️ ' + detail;
+          const base = (el.getAttribute('data-task-base') || el.textContent || '').trim();
+          if (!el.getAttribute('data-task-base')) {
+            el.setAttribute('data-task-base', base);
+          }
+          if (!el.textContent.includes(detail)) {
+            el.textContent = base + '\n' + errLine;
+          }
+        }
       }
     }
   }
@@ -989,6 +1195,18 @@
     if (action === 'delete_shot_clip') {
       loadShotClips();
       toast('视频版本已删除', 'info');
+      return;
+    }
+    if (action === 'run_episode_pipeline') {
+      loadEpisodes();
+      loadPlanningContent();
+      if (currentProject) {
+        loadProjectStoryboards(currentProject.id, currentEpisode?.id);
+        loadProjectAssets(currentProject.id);
+        loadShotClips();
+      }
+      switchWorkbenchPanel('storyboard');
+      toast('分集流水线已完成', 'success');
     }
   }
 
@@ -1160,6 +1378,30 @@
 
   function sendChat(message, silent) {
     if (!currentProject) { toast('请先选择项目', 'warning'); return Promise.reject(); }
+    const pipelineCmd = isPipelineControlMessage(message);
+    if (pipelineCmd) {
+      const box = document.getElementById('wb-chat-messages');
+      if (!silent && box) {
+        box.innerHTML += `<div class="wb-chat-msg user">${escapeHtml(message)}</div>`;
+        box.scrollTop = box.scrollHeight;
+      }
+      if (!episodePipelineActive && pipelineCmd === 'pause') {
+        appendChatMessage('assistant', '当前没有正在执行的流水线');
+        return Promise.resolve({});
+      }
+      if (sendPipelineControl(pipelineCmd)) {
+        if (pipelineCmd === 'pause') {
+          episodePipelinePaused = true;
+          setPipelineControlsVisible(true, true);
+        } else {
+          episodePipelinePaused = false;
+          setPipelineControlsVisible(true, false);
+        }
+      } else {
+        toast('WebSocket 未连接', 'error');
+      }
+      return Promise.resolve({});
+    }
     const box = document.getElementById('wb-chat-messages');
     if (!silent && box) {
       box.innerHTML += `<div class="wb-chat-msg user">${escapeHtml(message)}</div>`;
@@ -2681,6 +2923,20 @@
     if (!msg) return;
     input.value = '';
     sendChat(msg).catch(() => toast('发送失败', 'error'));
+  });
+
+  document.getElementById('btn-run-episode-pipeline').addEventListener('click', function () {
+    runEpisodePipeline(this);
+  });
+  document.getElementById('btn-pipeline-pause').addEventListener('click', () => {
+    sendPipelineControl('pause');
+    episodePipelinePaused = true;
+    setPipelineControlsVisible(true, true);
+  });
+  document.getElementById('btn-pipeline-resume').addEventListener('click', () => {
+    sendPipelineControl('resume');
+    episodePipelinePaused = false;
+    setPipelineControlsVisible(true, false);
   });
 
   document.getElementById('wb-chat-input').addEventListener('keydown', (e) => {

@@ -21,14 +21,14 @@ type ChatActionIntent struct {
 }
 
 var allowedChatActions = map[string]struct{}{
-	"analyze_events":       {},
-	"split_episodes":       {},
-	"generate_skeleton":    {},
-	"generate_strategy":    {},
-	"generate_script":      {},
-	"generate_storyboard":  {},
-	"extract_assets":       {},
-	"generate_shot_image":  {},
+	"analyze_events":      {},
+	"split_episodes":      {},
+	"generate_skeleton":   {},
+	"generate_strategy":   {},
+	"generate_script":     {},
+	"generate_storyboard": {},
+	"extract_assets":      {},
+	"generate_shot_image": {},
 }
 
 // Allowed reports whether the action is in the whitelist.
@@ -360,9 +360,9 @@ func ChatActionRulesText() string {
 仅以下 8 个动作可被系统执行（必须拼写完全一致）：
 - analyze_events — 分析已导入原文事件
 - split_episodes — AI 自动分集
-- generate_skeleton — 生成/重新生成故事骨架
-- generate_strategy — 生成/重新生成改编策略
-- generate_script — 生成/重新生成剧本
+- generate_skeleton — 生成故事骨架
+- generate_strategy — 生成改编策略
+- generate_script — 生成剧本
 - generate_storyboard — 从剧本生成分镜
 - extract_assets — 从剧本提取资产
 - generate_shot_image — 为指定镜号生成图片（SHOT:镜号 或 ACTION:generate_shot_image:镜号）

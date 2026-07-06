@@ -15,26 +15,29 @@ import (
 
 // ShotClip is one generated video version for a storyboard shot.
 type ShotClip struct {
-	ID             string  `json:"id"`
-	ProjectID      string  `json:"project_id"`
-	EpisodeID      string  `json:"episode_id"`
-	ShotNumber     int     `json:"shot_number"`
-	Version        int     `json:"version"`
-	Prompt         string  `json:"prompt,omitempty"`
-	SourceImageURL string  `json:"source_image_url,omitempty"`
-	FileURL        string  `json:"file_url,omitempty"`
-	Duration       float64 `json:"duration"`
-	Status         string  `json:"status"`
-	Source         string  `json:"source,omitempty"` // ai | fallback
-	IsSelected     bool    `json:"is_selected"`
-	CreatedAt      string  `json:"created_at,omitempty"`
+	ID              string  `json:"id"`
+	ProjectID       string  `json:"project_id"`
+	EpisodeID       string  `json:"episode_id"`
+	ShotNumber      int     `json:"shot_number"`
+	Version         int     `json:"version"`
+	Prompt          string  `json:"prompt,omitempty"`
+	SourceImageURL  string  `json:"source_image_url,omitempty"`
+	FileURL         string  `json:"file_url,omitempty"`
+	Duration        float64 `json:"duration"`
+	Status          string  `json:"status"`
+	Source          string  `json:"source,omitempty"` // ai | fallback
+	IsSelected      bool    `json:"is_selected"`
+	CoherenceScore  float64 `json:"coherence_score,omitempty"`
+	CoherenceJSON   string  `json:"coherence_json,omitempty"`
+	CreatedAt       string  `json:"created_at,omitempty"`
 }
 
 // ListShotClips returns all clip versions for a project episode.
 func ListShotClips(db *sql.DB, projectID, episodeID string) ([]ShotClip, error) {
 	rows, err := db.Query(`
 		SELECT id, project_id, episode_id, shot_number, version, prompt, source_image_url,
-		       file_url, duration, status, COALESCE(source, 'ai'), is_selected, created_at
+		       file_url, duration, status, COALESCE(source, 'ai'), is_selected,
+		       COALESCE(coherence_score, 0), COALESCE(coherence_json, ''), created_at
 		FROM o_shot_clip
 		WHERE project_id = ? AND episode_id = ?
 		ORDER BY shot_number ASC, version ASC`, projectID, episodeID)
@@ -49,7 +52,8 @@ func ListShotClips(db *sql.DB, projectID, episodeID string) ([]ShotClip, error) 
 		var selected int
 		var createdAt time.Time
 		if err := rows.Scan(&c.ID, &c.ProjectID, &c.EpisodeID, &c.ShotNumber, &c.Version,
-			&c.Prompt, &c.SourceImageURL, &c.FileURL, &c.Duration, &c.Status, &c.Source, &selected, &createdAt); err != nil {
+			&c.Prompt, &c.SourceImageURL, &c.FileURL, &c.Duration, &c.Status, &c.Source, &selected,
+			&c.CoherenceScore, &c.CoherenceJSON, &createdAt); err != nil {
 			continue
 		}
 		c.IsSelected = selected == 1
@@ -63,6 +67,8 @@ func ListShotClips(db *sql.DB, projectID, episodeID string) ([]ShotClip, error) 
 type ShotClipOptions struct {
 	// ContinuityImageURL is the previous clip's last frame (Agnes CDN). When set, used as I2V input.
 	ContinuityImageURL string
+	// Versions generates multiple AI versions and auto-selects the highest coherence score (max 2).
+	Versions int
 }
 
 // GenerateShotClip creates a new video version for one storyboard shot.
@@ -82,7 +88,8 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 	}
 
 	stylePrompt := lookupArtStylePrompt(db, artStyle)
-	prompt, negativePrompt := buildShotVideoPrompt(shot, artStyle, stylePrompt)
+	styleAnchor := LoadProjectStyleAnchor(db, projectID)
+	prompt, negativePrompt := buildShotVideoPrompt(shot, artStyle, stylePrompt, styleAnchor)
 	logger.CtxTrace(ctx, "shot video prompt shot=%d prompt=%s", shotNumber, prompt)
 
 	width, height := videoSizeForRatio(videoRatio)
@@ -99,10 +106,66 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 		return nil, fmt.Errorf("请先生成第 %d 镜图片后再生成视频", shotNumber)
 	}
 
+	duration := ResolveShotVideoDuration(shot.Duration)
+
 	version, err := nextClipVersion(db, projectID, episodeID, shotNumber)
 	if err != nil {
 		return nil, err
 	}
+
+	versions := 1
+	if opts != nil && opts.Versions > 1 {
+		versions = opts.Versions
+		if versions > 2 {
+			versions = 2
+		}
+	}
+
+	var candidates []*ShotClip
+	for vi := 0; vi < versions; vi++ {
+		clip, genErr := generateOneShotClip(ctx, db, v, outputDir, projectID, episodeID, shotNumber, shot,
+			prompt, negativePrompt, imageInput, videoModel, width, height, duration, version+vi)
+		if genErr != nil {
+			return nil, genErr
+		}
+		candidates = append(candidates, clip)
+	}
+
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("AI 图生视频未返回视频结果，请稍后重试")
+	}
+
+	best, score, _ := SelectBestScoredClip(ctx, outputDir, derefClips(candidates), shot)
+	if best == nil {
+		best = candidates[len(candidates)-1]
+	}
+
+	// Mark best version selected; demote others.
+	_, _ = db.Exec(`UPDATE o_shot_clip SET is_selected = 0 WHERE project_id = ? AND episode_id = ? AND shot_number = ?`,
+		projectID, episodeID, shotNumber)
+	_, _ = db.Exec(`UPDATE o_shot_clip SET is_selected = 1 WHERE id = ?`, best.ID)
+	if score != nil {
+		_, _ = db.Exec(`UPDATE o_shot_clip SET coherence_score = ?, coherence_json = ? WHERE id = ?`,
+			score.Total, CoherenceScoreJSON(score), best.ID)
+		best.CoherenceScore = score.Total
+		best.CoherenceJSON = CoherenceScoreJSON(score)
+	}
+	best.IsSelected = true
+	logger.CtxTrace(ctx, "shot video done shot=%d version=%d coherence=%.1f", shotNumber, best.Version, best.CoherenceScore)
+	return best, nil
+}
+
+func derefClips(ptrs []*ShotClip) []ShotClip {
+	out := make([]ShotClip, len(ptrs))
+	for i, p := range ptrs {
+		out[i] = *p
+	}
+	return out
+}
+
+func generateOneShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputDir, projectID, episodeID string,
+	shotNumber int, shot *storyboardShot, prompt, negativePrompt, imageInput, videoModel string,
+	width, height int, duration float64, version int) (*ShotClip, error) {
 
 	clipID := fmt.Sprintf("clip_%d", time.Now().UnixNano())
 	clipDir := filepath.Join(outputDir, "clips", projectID, episodeID)
@@ -110,60 +173,31 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 		return nil, err
 	}
 	localFile := filepath.Join(clipDir, fmt.Sprintf("shot_%03d_v%d.mp4", shotNumber, version))
-	duration := ResolveShotVideoDuration(shot.Duration)
 
-	var fileURL string
-	var source string
-	var apiErr error
-	if v != nil && imageInput != "" {
-		resp, err := v.VideoRequest(ctx, videoModel, adapter.VideoParams{
-			Prompt:   prompt,
-			ImageURL: imageInput,
-			Model:    videoModel,
-			Duration: float32(duration),
-			Width:    width,
-			Height:   height,
-			Negative: negativePrompt,
-		})
-		if err == nil && resp != nil && resp.VideoURL != "" {
-			if dlErr := downloadFile(ctx, resp.VideoURL, localFile); dlErr != nil {
-				apiErr = dlErr
-			logger.CtxError(ctx, dlErr, "agnes video download failed shot=%d", shotNumber)
-			} else {
-				fileURL = clipPublicURL(projectID, episodeID, shotNumber, version)
-				source = "ai"
-			}
-		} else if err != nil {
-			apiErr = err
-			logger.CtxError(ctx, err, "agnes video request failed shot=%d", shotNumber)
-		}
-	} else if imageInput == "" && shot.ImageURL != "" {
-		apiErr = fmt.Errorf("缺少 Agnes 图片远程地址（24h URL），请重新生成该分镜图片后再生成视频")
-		logger.CtxTrace(ctx, "shot video missing remote image url shot=%d", shotNumber)
-	}
-	if fileURL == "" {
-		if apiErr != nil {
-			return nil, apiErr
-		}
-		if imageInput == "" {
-			return nil, fmt.Errorf("请先生成第 %d 镜图片后再生成视频", shotNumber)
-		}
-		return nil, fmt.Errorf("AI 图生视频未返回视频结果，请稍后重试")
+	if v == nil || imageInput == "" {
+		return nil, fmt.Errorf("请先生成第 %d 镜图片后再生成视频", shotNumber)
 	}
 
-	_, _ = db.Exec(`UPDATE o_shot_clip SET is_selected = 0 WHERE project_id = ? AND episode_id = ? AND shot_number = ?`,
-		projectID, episodeID, shotNumber)
-
-	isFirst, _ := isFirstClipVersion(db, projectID, episodeID, shotNumber)
-	selected := 0
-	if isFirst {
-		selected = 1
+	err := RequestShotVideoWithRetry(ctx, v, videoModel, adapter.VideoParams{
+		Prompt:   prompt,
+		ImageURL: imageInput,
+		Model:    videoModel,
+		Duration: float32(duration),
+		Width:    width,
+		Height:   height,
+		Negative: negativePrompt,
+	}, localFile)
+	if err != nil {
+		return nil, err
 	}
+
+	fileURL := clipPublicURL(projectID, episodeID, shotNumber, version)
+	source := "ai"
 
 	_, err = db.Exec(`
 		INSERT INTO o_shot_clip (id, project_id, episode_id, shot_number, version, prompt, source_image_url, file_url, duration, status, source, is_selected)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?)`,
-		clipID, projectID, episodeID, shotNumber, version, prompt, shot.ImageURL, fileURL, duration, source, selected)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, 0)`,
+		clipID, projectID, episodeID, shotNumber, version, prompt, shot.ImageURL, fileURL, duration, source)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +205,7 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 	return &ShotClip{
 		ID: clipID, ProjectID: projectID, EpisodeID: episodeID, ShotNumber: shotNumber,
 		Version: version, Prompt: prompt, SourceImageURL: shot.ImageURL, FileURL: fileURL,
-		Duration: duration, Status: "ready", Source: source, IsSelected: isFirst,
+		Duration: duration, Status: "ready", Source: source,
 	}, nil
 }
 
@@ -245,6 +279,9 @@ func loadStoryboardShot(db *sql.DB, projectID, episodeID string, shotNumber int)
 				Prompt:         it.Prompt,
 				Camera:         it.Camera,
 				Duration:       it.Duration,
+				Lighting:       it.Lighting,
+				ActionContinue: it.ActionContinue,
+				Transition:     it.Transition,
 				ImageURL:       it.ImageURL,
 				ImageRemoteURL: it.ImageRemoteURL,
 			}, nil
@@ -259,6 +296,9 @@ type storyboardShot struct {
 	Prompt         string
 	Camera         string
 	Duration       float64
+	Lighting       string
+	ActionContinue string
+	Transition     string
 	ImageURL       string
 	ImageRemoteURL string
 }

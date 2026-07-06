@@ -122,6 +122,9 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 		total := len(indices)
 		for seq, idx := range indices {
 			item := t.Storyboard[idx]
+			if err := service.WaitIfPaused(ctx); err != nil {
+				return err
+			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -129,6 +132,9 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 			}
 
 			progress := 30 + float32(seq+1)/float32(total)*50
+			localPct := float32(seq) / float32(total) * 100
+			service.ReportStepProgress(ctx, localPct,
+				fmt.Sprintf("正在生成第 %d 镜图片 (%d/%d)", item.ShotNumber, seq+1, total))
 			t.UpdateProgress(progress)
 			p.broadcast(t, fmt.Sprintf("生成中 (%d/%d)", seq+1, total), progress, map[string]interface{}{
 				"current_shot": seq + 1,
@@ -167,6 +173,9 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 				"total_shots":  total,
 				"shot":         t.Storyboard[idx],
 			})
+			donePct := float32(seq+1) / float32(total) * 100
+			service.ReportStepProgress(ctx, donePct,
+				fmt.Sprintf("第 %d 镜图片完成 (%d/%d)", item.ShotNumber, seq+1, total))
 		}
 
 		if mode == "images" {
@@ -292,22 +301,13 @@ func (p *Pipeline) genImage(ctx context.Context, t *task.Task, item task.Storybo
 	if p.db != nil && t.ProjectID != "" {
 		refURL, assetPrompt, _ = service.ShotImageParams(p.db, t.ProjectID, item)
 	}
-	prompt := service.BuildShotImagePrompt(item, t.Style, service.ResolutionToVideoRatio(t.Resolution), assetPrompt)
+	prompt := service.BuildShotImagePrompt(item, t.Style, service.ResolutionToVideoRatio(t.Resolution), assetPrompt,
+		service.LoadProjectStyleAnchor(p.db, t.ProjectID))
 
-	resp, err := p.requestShotImage(ctx, t, prompt, refURL)
-	if err != nil && service.IsContentPolicyViolation(err) {
-		logger.CtxTrace(ctx, "genImage shot=%d policy block, retry strict sanitize", item.ShotNumber)
-		strict := service.SanitizeImagePromptForPolicy(prompt, service.SanitizeLevelStrict)
-		resp, err = p.requestShotImage(ctx, t, strict, "")
-	}
-	if err != nil && service.IsContentPolicyViolation(err) {
-		logger.CtxTrace(ctx, "genImage shot=%d policy block, retry fallback prompt", item.ShotNumber)
-		fallback := service.BuildFallbackSafeShotPrompt(item, t.Style, service.ResolutionToVideoRatio(t.Resolution))
-		resp, err = p.requestShotImage(ctx, t, fallback, "")
-	}
+	resp, err := service.RequestShotImageWithRetry(ctx, p.adapter, p.imageModel, resToAspect(t.Resolution), prompt, refURL)
 	if err != nil {
 		if service.IsContentPolicyViolation(err) {
-			logger.CtxError(ctx, err, "genImage shot=%d policy blocked", item.ShotNumber)
+			logger.CtxError(ctx, err, "genImage shot=%d policy blocked after retries", item.ShotNumber)
 			return "", fmt.Errorf("%s: %w", service.UserFacingImagePolicyMessage(item.ShotNumber), err)
 		}
 		logger.CtxError(ctx, err, "genImage shot=%d failed", item.ShotNumber)
@@ -338,24 +338,6 @@ func (p *Pipeline) genImage(ctx context.Context, t *task.Task, item task.Storybo
 		logger.CtxTrace(ctx, "genImage shot=%d saved local=%s (no image_remote_url, base64 only)", item.ShotNumber, localPath)
 	}
 	return remoteURL, nil
-}
-
-func (p *Pipeline) requestShotImage(ctx context.Context, t *task.Task, prompt, refURL string) (*adapter.ImageResponse, error) {
-	resp, err := p.adapter.ImageRequest(ctx, p.imageModel, adapter.ImageParams{
-		Prompt:            prompt,
-		Model:             p.imageModel,
-		AspectRatio:       resToAspect(t.Resolution),
-		ReferenceImageURL: refURL,
-	})
-	if err != nil && refURL != "" && !service.IsContentPolicyViolation(err) {
-		logger.CtxTrace(ctx, "image request reference failed, fallback text-only: %v", err)
-		resp, err = p.adapter.ImageRequest(ctx, p.imageModel, adapter.ImageParams{
-			Prompt:      prompt,
-			Model:       p.imageModel,
-			AspectRatio: resToAspect(t.Resolution),
-		})
-	}
-	return resp, err
 }
 
 func parseStoryboardText(text, resolution string) []task.StoryboardItem {

@@ -26,6 +26,7 @@ var allowedWorkflowActions = map[string]bool{
 	"batch_generate_shot_images": true,
 	"generate_shot_video":        true,
 	"batch_generate_shot_videos": true,
+	"run_episode_pipeline":       true,
 	"delete_shot_clip":           true,
 }
 
@@ -39,6 +40,7 @@ var workflowNeedsEpisode = map[string]bool{
 	"batch_generate_shot_images": true,
 	"generate_shot_video":        true,
 	"batch_generate_shot_videos": true,
+	"run_episode_pipeline":       true,
 }
 
 // WorkflowService handles WebSocket-triggered project workflow steps.
@@ -144,6 +146,10 @@ func (wfs *WorkflowService) runWorkflow(cm *ConnManager, userID string, req *WSR
 	})
 
 	switch action {
+	case "run_episode_pipeline":
+		out, err := wfs.runEpisodePipeline(ctx, cm, userID, req, logID)
+		wfs.finishEpisodePipeline(cm, req, logID, out, err)
+		return
 	case "batch_generate_shot_images":
 		out, err := wfs.runBatchImages(ctx, cm, userID, req)
 		wfs.finishWorkflow(cm, req, logID, action, out, err)
@@ -207,6 +213,170 @@ type workflowOutcome struct {
 	reply string
 	work  interface{}
 	extra map[string]interface{}
+}
+
+func (wfs *WorkflowService) runEpisodePipeline(ctx context.Context, cm *ConnManager, userID string, req *WSRequest, logID string) (workflowOutcome, error) {
+	if req.EpisodeID == "" {
+		return workflowOutcome{}, fmt.Errorf("请先选择一集")
+	}
+
+	pending, skipped, err := service.PlanEpisodePipeline(wfs.DB, req.ProjectID, req.EpisodeID)
+	if err != nil {
+		return workflowOutcome{}, err
+	}
+	if len(pending) == 0 {
+		return workflowOutcome{
+			reply: "该分集后续流程已全部完成，无需重复执行",
+			extra: map[string]interface{}{"steps_skipped": service.EpisodeStepIDs(skipped)},
+		}, nil
+	}
+
+	gate := service.NewPauseGate()
+	pipelineTimeout := service.EpisodePipelineTimeout(len(pending))
+	runCtx, cancel := context.WithTimeout(context.Background(), pipelineTimeout)
+	run := &service.EpisodePipelineRun{
+		ID:        logID,
+		ProjectID: req.ProjectID,
+		EpisodeID: req.EpisodeID,
+		UserID:    userID,
+		Gate:      gate,
+		Cancel:    cancel,
+	}
+	if err := service.EpisodePipelines.Register(run); err != nil {
+		cancel()
+		return workflowOutcome{}, err
+	}
+	defer func() {
+		cancel()
+		service.EpisodePipelines.Unregister(req.ProjectID, req.EpisodeID)
+	}()
+
+	runCtx = service.WithPauseGate(runCtx, gate)
+	runCtx = service.WithProgress(runCtx, func(step string, progress float32, message string) {
+		cm.Broadcast(WSResponse{
+			Code: 0, Msg: message, Step: "chat_progress", Progress: progress,
+			Data: MustMarshalJSON(map[string]interface{}{
+				"log_id": logID, "project_id": req.ProjectID, "episode_id": req.EpisodeID,
+				"action": step, "pipeline": true,
+			}),
+		})
+		wfs.broadcastEpisodePipeline(cm, req, logID, "running", progress, message)
+	})
+	wfs.broadcastEpisodePipeline(cm, req, logID, "running", 2,
+		fmt.Sprintf("开始执行分集流水线（待执行 %d 步）", len(pending)))
+
+	deps := service.EpisodePipelineDeps{
+		DB:          wfs.DB,
+		Vendor:      wfs.resolveVendor(),
+		SkillMgr:    wfs.SkillMgr,
+		Queue:       wfs.Queue,
+		Pipeline:    wfs.Pipeline,
+		OutputDir:   wfs.OutputDir,
+		TaskTimeout: wfs.Timeout,
+	}
+	result, err := service.RunEpisodePipeline(runCtx, deps, userID, req.ProjectID, req.EpisodeID)
+	if err != nil {
+		if runCtx.Err() == context.Canceled {
+			return workflowOutcome{reply: "流水线已取消"}, context.Canceled
+		}
+		return workflowOutcome{}, err
+	}
+
+	reply := fmt.Sprintf("分集流水线完成：执行 %d 步", len(result.StepsRun))
+	if len(result.StepsSkip) > 0 {
+		reply += fmt.Sprintf("，跳过 %d 步", len(result.StepsSkip))
+	}
+	return workflowOutcome{
+		reply: reply,
+		extra: map[string]interface{}{
+			"pipeline_result": result,
+			"steps_run":       result.StepsRun,
+			"steps_skipped":   result.StepsSkip,
+		},
+	}, nil
+}
+
+func (wfs *WorkflowService) finishEpisodePipeline(cm *ConnManager, req *WSRequest, logID string, out workflowOutcome, err error) {
+	if err != nil {
+		if err == context.Canceled {
+			wfs.broadcastEpisodePipeline(cm, req, logID, "cancelled", 0, out.reply)
+			return
+		}
+		wfs.broadcastEpisodePipeline(cm, req, logID, "error", 0, service.UserMessageWithLogID(err, logID))
+		cm.Broadcast(WSResponse{
+			Code: 1, Msg: service.UserMessageWithLogID(err, logID), Step: "workflow_error", Progress: 0,
+			Data: MustMarshalJSON(map[string]interface{}{
+				"log_id": logID, "project_id": req.ProjectID, "action": "run_episode_pipeline",
+			}),
+		})
+		return
+	}
+	wfs.broadcastEpisodePipeline(cm, req, logID, "done", 100, out.reply)
+	data := map[string]interface{}{
+		"log_id":     logID,
+		"project_id": req.ProjectID,
+		"action":     "run_episode_pipeline",
+		"reply":      out.reply,
+	}
+	for k, v := range out.extra {
+		data[k] = v
+	}
+	cm.Broadcast(WSResponse{
+		Code: 0, Msg: out.reply, Step: "workflow_done", Progress: 100,
+		Data: MustMarshalJSON(data),
+	})
+}
+
+func (wfs *WorkflowService) broadcastEpisodePipeline(cm *ConnManager, req *WSRequest, logID, state string, progress float32, message string) {
+	if cm == nil {
+		return
+	}
+	cm.Broadcast(WSResponse{
+		Code: 0, Msg: message, Step: "episode_pipeline", Progress: progress,
+		Data: MustMarshalJSON(map[string]interface{}{
+			"log_id":      logID,
+			"project_id":  req.ProjectID,
+			"episode_id":  req.EpisodeID,
+			"state":       state,
+			"pipeline":    true,
+		}),
+	})
+}
+
+func (wfs *WorkflowService) HandlePauseEpisodePipeline(cm *ConnManager, req *WSRequest) {
+	if req.ProjectID == "" || req.EpisodeID == "" {
+		cm.Broadcast(WSResponse{Code: 1, Msg: "请先选择项目与分集", Step: "workflow_error"})
+		return
+	}
+	if err := service.EpisodePipelines.PauseRun(req.ProjectID, req.EpisodeID); err != nil {
+		cm.Broadcast(WSResponse{Code: 1, Msg: err.Error(), Step: "workflow_error"})
+		return
+	}
+	wfs.broadcastEpisodePipeline(cm, req, "", "paused", 0, "流水线已暂停，发送「继续」恢复执行")
+	cm.Broadcast(WSResponse{
+		Code: 0, Msg: "已暂停", Step: "chat_progress", Progress: 0,
+		Data: MustMarshalJSON(map[string]interface{}{
+			"project_id": req.ProjectID, "episode_id": req.EpisodeID, "action": "episode_pipeline_paused",
+		}),
+	})
+}
+
+func (wfs *WorkflowService) HandleResumeEpisodePipeline(cm *ConnManager, req *WSRequest) {
+	if req.ProjectID == "" || req.EpisodeID == "" {
+		cm.Broadcast(WSResponse{Code: 1, Msg: "请先选择项目与分集", Step: "workflow_error"})
+		return
+	}
+	if err := service.EpisodePipelines.ResumeRun(req.ProjectID, req.EpisodeID); err != nil {
+		cm.Broadcast(WSResponse{Code: 1, Msg: err.Error(), Step: "workflow_error"})
+		return
+	}
+	wfs.broadcastEpisodePipeline(cm, req, "", "running", 0, "流水线已继续")
+	cm.Broadcast(WSResponse{
+		Code: 0, Msg: "已继续", Step: "chat_progress", Progress: 0,
+		Data: MustMarshalJSON(map[string]interface{}{
+			"project_id": req.ProjectID, "episode_id": req.EpisodeID, "action": "episode_pipeline_resumed",
+		}),
+	})
 }
 
 func (wfs *WorkflowService) finishWorkflow(cm *ConnManager, req *WSRequest, logID, action string, out workflowOutcome, err error) {
@@ -274,7 +444,7 @@ func (wfs *WorkflowService) runBatchImages(ctx context.Context, cm *ConnManager,
 	wfs.Queue.Submit(tk, func(runCtx context.Context, t *task.Task) error {
 		runCtx = logger.WithID(runCtx, t.ID)
 		if err := wfs.Pipeline.Execute(runCtx, t); err != nil {
-			wfs.broadcastTaskUpdate(cm, t, service.UserMessageWithLogID(err, t.ID))
+			wfs.broadcastTaskUpdate(cm, t, service.MarkTaskFailed(t, err))
 			return err
 		}
 		if t.ProjectID != "" && len(t.Storyboard) > 0 {
@@ -370,25 +540,18 @@ func (wfs *WorkflowService) submitSequentialShotVideoTask(ctx context.Context, c
 		wfs.broadcastTaskUpdate(cm, t, fmt.Sprintf("连贯视频生成中（共 %d 镜，按镜号串行 + 末帧继承）", len(shots)))
 
 		outcome, err := service.GenerateShotClipsSequential(runCtx, wfs.DB, wfs.resolveVendor(), wfs.OutputDir, projectID, episodeID, shots)
-		if outcome != nil && len(outcome.Clips) > 0 {
-			t.UpdateProgress(100)
-			t.SetState(task.StateDone, t.Title)
-			msg := fmt.Sprintf("视频生成完成（成功 %d 镜）", len(outcome.Clips))
-			if len(outcome.Failed) > 0 {
-				msg = fmt.Sprintf("部分完成：成功 %d 镜，失败 %d 镜（可单独重试失败镜号）", len(outcome.Clips), len(outcome.Failed))
-			}
-			wfs.broadcastTaskUpdate(cm, t, msg)
-			logger.CtxTrace(runCtx, "sequential shot video done ok=%d failed=%d", len(outcome.Clips), len(outcome.Failed))
-			if err != nil {
-				logger.CtxTrace(runCtx, "sequential shot video partial: %v", err)
-			}
-			return nil
-		}
 		if err != nil {
-			wfs.broadcastTaskUpdate(cm, t, service.UserMessageWithLogID(err, t.ID))
+			wfs.broadcastTaskUpdate(cm, t, service.MarkTaskFailed(t, err))
 			return err
 		}
-		return fmt.Errorf("批量视频未生成任何片段")
+		if outcome == nil || len(outcome.Clips) == 0 {
+			return fmt.Errorf("批量视频未生成任何片段")
+		}
+		t.UpdateProgress(100)
+		t.SetState(task.StateDone, t.Title)
+		wfs.broadcastTaskUpdate(cm, t, fmt.Sprintf("视频生成完成（%d 镜）", len(outcome.Clips)))
+		logger.CtxTrace(runCtx, "sequential shot video done clips=%d", len(outcome.Clips))
+		return nil
 	})
 	return tk, nil
 }
@@ -412,7 +575,7 @@ func (wfs *WorkflowService) submitShotVideoTask(ctx context.Context, cm *ConnMan
 
 		clip, err := service.GenerateShotClip(runCtx, wfs.DB, wfs.resolveVendor(), wfs.OutputDir, projectID, episodeID, shotNum, nil)
 		if err != nil {
-			wfs.broadcastTaskUpdate(cm, t, service.UserMessageWithLogID(err, t.ID))
+			wfs.broadcastTaskUpdate(cm, t, service.MarkTaskFailed(t, err))
 			return err
 		}
 		t.UpdateProgress(100)

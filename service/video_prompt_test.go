@@ -25,7 +25,7 @@ func TestBuildShotVideoPrompt_motionFirst(t *testing.T) {
 		Camera:      "推镜 dolly in",
 		Prompt:      "Unreal Engine 5 render, Octane, long static render tags...",
 	}
-	pos, neg := buildShotVideoPrompt(shot, "3D动漫", "")
+	pos, neg := buildShotVideoPrompt(shot, "3D动漫", "", "")
 	if !strings.Contains(pos, "石昊") {
 		t.Fatalf("description missing: %q", pos)
 	}

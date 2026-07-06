@@ -3,34 +3,20 @@ package service
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"toonflow/adapter"
 	"toonflow/logger"
 )
 
-const (
-	perShotVideoTimeout = 25 * time.Minute
-	betweenShotCooldown = 12 * time.Second
-	maxRetriesPerShot   = 3
-	retryBackoffBase    = 8 * time.Second
-)
+const betweenShotCooldown = 12 * time.Second
 
 // BatchVideoOutcome is the result of a sequential batch video run.
 type BatchVideoOutcome struct {
-	Clips  []*ShotClip
-	Failed []BatchVideoFailure
-}
-
-// BatchVideoFailure records one shot that could not be generated.
-type BatchVideoFailure struct {
-	ShotNumber int    `json:"shot_number"`
-	Error      string `json:"error"`
+	Clips []*ShotClip
 }
 
 // BatchVideoTaskTimeout returns a task timeout sized for N sequential Agnes video jobs.
@@ -38,78 +24,28 @@ func BatchVideoTaskTimeout(shotCount int) time.Duration {
 	if shotCount <= 0 {
 		shotCount = 1
 	}
-	d := time.Duration(shotCount) * perShotVideoTimeout
+	d := time.Duration(shotCount) * 25 * time.Minute
 	if d < 30*time.Minute {
 		d = 30 * time.Minute
 	}
-	const maxBatch = 3 * time.Hour
+	const maxBatch = 12 * time.Hour
 	if d > maxBatch {
 		d = maxBatch
 	}
 	return d
 }
 
-func isRetryableVideoErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "429") ||
-		strings.Contains(msg, "timeout") ||
-		strings.Contains(msg, "timed out") ||
-		strings.Contains(msg, "download failed") ||
-		strings.Contains(msg, "connection reset") ||
-		strings.Contains(msg, "connection refused") ||
-		strings.Contains(msg, "temporarily unavailable") ||
-		errors.Is(err, context.DeadlineExceeded)
-}
-
-func generateShotClipWithRetry(ctx context.Context, db *sql.DB, v adapter.Vendor, outputDir, projectID, episodeID string, shotNumber int, continuityURL string) (*ShotClip, error) {
-	type attempt struct {
-		continuity string
-		label      string
-	}
-	tries := []attempt{{continuity: continuityURL, label: "continuity"}}
+func generateShotClipUntilSuccess(ctx context.Context, db *sql.DB, v adapter.Vendor, outputDir, projectID, episodeID string, shotNumber int, continuityURL string) (*ShotClip, error) {
+	var opts *ShotClipOptions
 	if continuityURL != "" {
-		tries = append(tries, attempt{continuity: "", label: "storyboard"})
+		opts = &ShotClipOptions{ContinuityImageURL: continuityURL, Versions: 2}
+	} else {
+		opts = &ShotClipOptions{Versions: 2}
 	}
-
-	var lastErr error
-	for ti, att := range tries {
-		for retry := 0; retry < maxRetriesPerShot; retry++ {
-			if retry > 0 || ti > 0 {
-				wait := retryBackoffBase * time.Duration(retry+1)
-				logger.CtxTrace(ctx, "shot video retry shot=%d mode=%s retry=%d wait=%s", shotNumber, att.label, retry+1, wait)
-				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				case <-time.After(wait):
-				}
-			}
-
-			shotCtx, cancel := context.WithTimeout(ctx, perShotVideoTimeout)
-			var opts *ShotClipOptions
-			if att.continuity != "" {
-				opts = &ShotClipOptions{ContinuityImageURL: att.continuity}
-			}
-			clip, err := GenerateShotClip(shotCtx, db, v, outputDir, projectID, episodeID, shotNumber, opts)
-			cancel()
-			if err == nil {
-				if ti > 0 {
-					logger.CtxTrace(ctx, "shot video ok shot=%d fallback=%s", shotNumber, att.label)
-				}
-				return clip, nil
-			}
-			lastErr = err
-			if !isRetryableVideoErr(err) {
-				break
-			}
-		}
-	}
-	return nil, lastErr
+	return GenerateShotClip(ctx, db, v, outputDir, projectID, episodeID, shotNumber, opts)
 }
 
-// GenerateShotClipsSequential generates clips in shot order with cooldown, retry, and continuity fallback.
+// GenerateShotClipsSequential generates clips in shot order; each镜阶梯重试直到成功。
 func GenerateShotClipsSequential(ctx context.Context, db *sql.DB, v adapter.Vendor, outputDir, projectID, episodeID string, shotNumbers []int) (*BatchVideoOutcome, error) {
 	ordered := SortShotNumbers(shotNumbers)
 	if len(ordered) == 0 {
@@ -124,33 +60,39 @@ func GenerateShotClipsSequential(ctx context.Context, db *sql.DB, v adapter.Vend
 
 	outcome := &BatchVideoOutcome{}
 	var continuityURL string
+	total := len(ordered)
 
 	for i, shotNum := range ordered {
+		if err := WaitIfPaused(ctx); err != nil {
+			return outcome, err
+		}
 		if i > 0 {
 			logger.CtxTrace(ctx, "batch video cooldown %s before shot=%d", betweenShotCooldown, shotNum)
 			select {
 			case <-ctx.Done():
-				return outcome, fmt.Errorf("任务已取消（已完成 %d/%d 镜）", len(outcome.Clips), len(ordered))
+				return outcome, fmt.Errorf("任务已取消（已完成 %d/%d 镜）", len(outcome.Clips), total)
 			case <-time.After(betweenShotCooldown):
 			}
 		}
+
+		localPct := float32(i) / float32(total) * 100
+		ReportStepProgress(ctx, localPct,
+			fmt.Sprintf("正在生成第 %d 镜视频 (%d/%d)", shotNum, i+1, total))
 
 		cont := ""
 		if i > 0 && continuityURL != "" {
 			cont = continuityURL
 		}
 
-		clip, err := generateShotClipWithRetry(ctx, db, v, outputDir, projectID, episodeID, shotNum, cont)
+		clip, err := generateShotClipUntilSuccess(ctx, db, v, outputDir, projectID, episodeID, shotNum, cont)
 		if err != nil {
 			logger.CtxError(ctx, err, "batch video failed shot=%d", shotNum)
-			outcome.Failed = append(outcome.Failed, BatchVideoFailure{
-				ShotNumber: shotNum,
-				Error:      UserMessage(err),
-			})
-			continuityURL = ""
-			continue
+			return outcome, fmt.Errorf("第 %d 镜视频生成失败: %w", shotNum, err)
 		}
 		outcome.Clips = append(outcome.Clips, clip)
+		donePct := float32(i+1) / float32(total) * 100
+		ReportStepProgress(ctx, donePct,
+			fmt.Sprintf("第 %d 镜视频完成 (%d/%d)", shotNum, i+1, total))
 
 		local, ok := publicURLToLocal(outputDir, clip.FileURL)
 		if !ok {
@@ -167,10 +109,7 @@ func GenerateShotClipsSequential(ctx context.Context, db *sql.DB, v adapter.Vend
 	}
 
 	if len(outcome.Clips) == 0 {
-		return outcome, fmt.Errorf("批量视频全部失败，请稍后分批重试（建议每次 3～4 镜）")
-	}
-	if len(outcome.Failed) > 0 {
-		return outcome, fmt.Errorf("部分分镜失败（成功 %d，失败 %d）", len(outcome.Clips), len(outcome.Failed))
+		return outcome, fmt.Errorf("批量视频未生成任何片段")
 	}
 	return outcome, nil
 }

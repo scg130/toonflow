@@ -158,7 +158,9 @@ func (db *DB) migrate() error {
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`)
-	db.Exec(`ALTER TABLE o_shot_clip ADD COLUMN source TEXT DEFAULT 'ai'`)
+	db.Exec(`ALTER TABLE o_project ADD COLUMN style_anchor TEXT DEFAULT ''`)
+	db.Exec(`ALTER TABLE o_shot_clip ADD COLUMN coherence_score REAL DEFAULT 0`)
+	db.Exec(`ALTER TABLE o_shot_clip ADD COLUMN coherence_json TEXT DEFAULT ''`)
 	db.Exec(`CREATE TABLE IF NOT EXISTS o_chat_message (
 		id TEXT PRIMARY KEY,
 		project_id TEXT NOT NULL,

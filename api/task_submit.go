@@ -29,7 +29,7 @@ func (r *Router) submitShotVideoTask(userID, projectID, episodeID string, shotNu
 		clip, err := service.GenerateShotClip(ctx, r.db.DB, r.resolveVendor(), r.outputDir, projectID, episodeID, shotNum, nil)
 		if err != nil {
 			logger.CtxError(ctx, err, "shot video task failed shot=%d", shotNum)
-			r.broadcastTaskUpdate(tk, service.UserMessageWithLogID(err, tk.ID))
+			r.broadcastTaskUpdate(tk, service.MarkTaskFailed(tk, err))
 			return err
 		}
 		tk.UpdateProgress(100)
@@ -80,7 +80,7 @@ func (r *Router) submitImageGenerationTask(userID, projectID, episodeID string, 
 		ctx = logger.WithID(ctx, tk.ID)
 		err := r.pipeline.Execute(ctx, tk)
 		if err != nil {
-			r.broadcastTaskUpdate(tk, service.UserMessageWithLogID(err, tk.ID))
+			r.broadcastTaskUpdate(tk, service.MarkTaskFailed(tk, err))
 			return err
 		}
 		if tk.ProjectID != "" && len(tk.Storyboard) > 0 {

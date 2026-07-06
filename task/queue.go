@@ -91,10 +91,15 @@ func (q *Queue) Submit(t *Task, fn func(context.Context, *Task) error) {
 		}()
 
 		if err := fn(t.Context(), t); err != nil {
-			if t.IsTimeout() {
-				t.SetError("task timed out")
-			} else {
-				t.SetError(err.Error())
+			t.mu.RLock()
+			alreadyFailed := t.State == StateError
+			t.mu.RUnlock()
+			if !alreadyFailed {
+				if t.IsTimeout() {
+					t.SetError("task timed out")
+				} else {
+					t.SetError(err.Error())
+				}
 			}
 		}
 	}()

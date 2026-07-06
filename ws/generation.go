@@ -121,9 +121,18 @@ func (gs *GenerationService) handleStartGenerate(cm *ConnManager, userID string,
 		err := gs.Pipeline.Execute(ctx, tk)
 		if err != nil {
 			logger.CtxError(ctx, err, "ws generate failed task=%s mode=%s", tk.ID, tk.Mode)
+			msg := service.MarkTaskFailed(tk, err)
 			cm.Broadcast(WSResponse{
-				Code: 1, Msg: service.UserMessageWithLogID(err, tk.ID), Step: "error", Progress: tk.Progress,
-				Data: MustMarshalJSON(map[string]string{"task_id": tk.ID}),
+				Code: 0, Msg: msg, Step: string(task.StateError), Progress: tk.Progress,
+				Data: MustMarshalJSON(map[string]interface{}{
+					"task_id":     tk.ID,
+					"task_update": true,
+					"title":       tk.Title,
+					"state":       task.StateError,
+					"mode":        tk.Mode,
+					"project_id":  tk.ProjectID,
+					"episode_id":  tk.EpisodeID,
+				}),
 			})
 			return err
 		}

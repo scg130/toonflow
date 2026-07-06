@@ -22,13 +22,9 @@ func GenerateImages(ctx context.Context, items []task.StoryboardItem, style, res
 		default:
 		}
 
-		prompt := BuildShotImagePrompt(item, style, ResolutionToVideoRatio(resolution), "")
+		prompt := BuildShotImagePrompt(item, style, ResolutionToVideoRatio(resolution), "", "")
 
-		resp, err := v.ImageRequest(ctx, adapter.DefaultImageModel, adapter.ImageParams{
-			Prompt:      prompt,
-			Model:       adapter.DefaultImageModel,
-			AspectRatio: resToAspect(resolution),
-		})
+		resp, err := RequestShotImageWithRetry(ctx, v, adapter.DefaultImageModel, resToAspect(resolution), prompt, "")
 		if err != nil {
 			return artifacts, fmt.Errorf("shot %d: %w", item.ShotNumber, err)
 		}

@@ -50,7 +50,7 @@ func SanitizeImagePromptForPolicy(prompt string, level int) string {
 	return s
 }
 
-// BuildFallbackSafeShotPrompt is a last-resort prompt when policy still blocks generation.
+// BuildFallbackSafeShotPrompt is deprecated; image generation uses tiered prompt sanitize retries instead.
 func BuildFallbackSafeShotPrompt(item task.StoryboardItem, style, videoRatio string) string {
 	scene := SanitizeImagePromptForPolicy(strings.TrimSpace(item.Scene), SanitizeLevelStrict)
 	if scene == "" {

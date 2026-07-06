@@ -211,6 +211,18 @@ func handleAction(cm *ConnManager, conn *websocket.Conn, req *WSRequest) {
 		} else {
 			cm.Broadcast(WSResponse{Code: 1, Msg: "workflow service unavailable", Step: "workflow_error"})
 		}
+	case "pause_episode_pipeline":
+		if cm.workflow != nil {
+			cm.workflow.HandlePauseEpisodePipeline(cm, req)
+		} else {
+			cm.Broadcast(WSResponse{Code: 1, Msg: "workflow service unavailable", Step: "workflow_error"})
+		}
+	case "resume_episode_pipeline":
+		if cm.workflow != nil {
+			cm.workflow.HandleResumeEpisodePipeline(cm, req)
+		} else {
+			cm.Broadcast(WSResponse{Code: 1, Msg: "workflow service unavailable", Step: "workflow_error"})
+		}
 	default:
 		cm.Broadcast(WSResponse{
 			Code: 1, Msg: fmt.Sprintf("unknown action: %s", req.Action), Step: "error",

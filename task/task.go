@@ -59,12 +59,15 @@ type Task struct {
 
 // StoryboardItem represents a single shot in the storyboard.
 type StoryboardItem struct {
-	ShotNumber  int     `json:"shot_number"`
-	Scene       string  `json:"scene"`
-	Description string  `json:"description"`
-	Camera      string  `json:"camera"`
-	Duration    float64 `json:"duration"`
+	ShotNumber     int     `json:"shot_number"`
+	Scene          string  `json:"scene"`
+	Description    string  `json:"description"`
+	Camera         string  `json:"camera"`
+	Duration       float64 `json:"duration"`
 	Prompt         string  `json:"prompt"`
+	Lighting       string  `json:"lighting,omitempty"`        // 光照参数，全剧统一
+	ActionContinue string  `json:"action_continue,omitempty"` // 承接上镜动作节点
+	Transition     string  `json:"transition,omitempty"`      // 与下镜衔接方式
 	AssetIDs       []int   `json:"asset_ids,omitempty"`
 	ImageURL       string  `json:"image_url,omitempty"`
 	ImageRemoteURL string  `json:"image_remote_url,omitempty"` // Agnes CDN, e.g. platform-outputs.agnes-ai.space (~24h)

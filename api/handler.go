@@ -477,6 +477,7 @@ func (r *Router) projectsCreateHandler(c *gin.Context) {
 		c.AbortWithError(http.StatusInternalServerError, err)
 		return
 	}
+	_, _ = service.RefreshProjectStyleAnchor(r.db.DB, id)
 
 	c.JSON(http.StatusCreated, gin.H{"id": id, "name": proj.Name, "status": "draft"})
 }
@@ -564,6 +565,7 @@ func (r *Router) projectUpdateHandler(c *gin.Context) {
 		c.AbortWithError(http.StatusInternalServerError, err)
 		return
 	}
+	_, _ = service.RefreshProjectStyleAnchor(r.db.DB, id)
 	c.JSON(http.StatusOK, gin.H{"id": id, "status": "ok"})
 }
 
