@@ -3,8 +3,8 @@ package service
 import "sort"
 
 const (
-	DefaultShotDurationSec = 2.5
-	MinShotDurationSec     = 2.0
+	DefaultShotDurationSec = 4.0
+	MinShotDurationSec     = 3.0
 	MaxShotDurationSec     = 5.0
 )
 

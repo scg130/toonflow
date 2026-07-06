@@ -8,7 +8,7 @@ func TestResolveShotVideoDuration(t *testing.T) {
 	}{
 		{0, DefaultShotDurationSec},
 		{1.5, MinShotDurationSec},
-		{2.5, 2.5},
+		{2.5, MinShotDurationSec},
 		{4.3, 4.5},
 		{6, MaxShotDurationSec},
 	}
