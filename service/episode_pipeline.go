@@ -301,7 +301,14 @@ func runEpisodeBatchImages(ctx context.Context, deps EpisodePipelineDeps, userID
 	tk.UserID = userID
 	tk.Mode = "images"
 	tk.EpisodeID = episodeID
-	tk.GenerateShots = shots
+	needShots, err := shotsNeedingImages(deps.DB, projectID, episodeID)
+	if err != nil {
+		return err
+	}
+	if len(needShots) == 0 {
+		return nil
+	}
+	tk.GenerateShots = needShots
 	tk.Storyboard = items
 	EnrichTaskMeta(deps.DB, tk)
 	tk.SetState(task.StateWaiting, tk.Title)

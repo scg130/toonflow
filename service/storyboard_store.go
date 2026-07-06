@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"toonflow/task"
 )
@@ -52,4 +53,35 @@ func UpdateStoryboardShotMedia(db *sql.DB, projectID, episodeID string, shotNumb
 		return fmt.Errorf("shot %d not found", shotNumber)
 	}
 	return SaveStoryboardItems(db, projectID, episodeID, items)
+}
+
+// ShotHasImage reports whether a storyboard shot already has generated image media.
+func ShotHasImage(it task.StoryboardItem) bool {
+	return strings.TrimSpace(it.ImageURL) != "" || strings.TrimSpace(it.ImageRemoteURL) != ""
+}
+
+// MergeShotMediaFromStore copies image fields for one shot from DB into dst.
+func MergeShotMediaFromStore(db *sql.DB, projectID, episodeID string, shotNumber int, dst *task.StoryboardItem) {
+	if db == nil || dst == nil || shotNumber <= 0 {
+		return
+	}
+	items, err := LoadStoryboardItems(db, projectID, episodeID)
+	if err != nil {
+		return
+	}
+	for _, it := range items {
+		if it.ShotNumber != shotNumber {
+			continue
+		}
+		if it.ImageURL != "" {
+			dst.ImageURL = it.ImageURL
+		}
+		if it.ImageRemoteURL != "" {
+			dst.ImageRemoteURL = it.ImageRemoteURL
+		}
+		if len(it.AssetIDs) > 0 && len(dst.AssetIDs) == 0 {
+			dst.AssetIDs = it.AssetIDs
+		}
+		return
+	}
 }

@@ -219,7 +219,7 @@ func handleAction(cm *ConnManager, conn *websocket.Conn, req *WSRequest) {
 		}
 	case "resume_episode_pipeline":
 		if cm.workflow != nil {
-			cm.workflow.HandleResumeEpisodePipeline(cm, req)
+			cm.workflow.HandleResumeEpisodePipeline(cm, userID, req)
 		} else {
 			cm.Broadcast(WSResponse{Code: 1, Msg: "workflow service unavailable", Step: "workflow_error"})
 		}

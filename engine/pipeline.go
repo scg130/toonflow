@@ -131,6 +131,25 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 			default:
 			}
 
+			if p.db != nil && t.ProjectID != "" && t.EpisodeID != "" {
+				service.MergeShotMediaFromStore(p.db, t.ProjectID, t.EpisodeID, item.ShotNumber, &t.Storyboard[idx])
+				item = t.Storyboard[idx]
+			}
+			if service.ShotHasImage(item) {
+				progress := 30 + float32(seq+1)/float32(total)*50
+				localPct := float32(seq+1) / float32(total) * 100
+				skipMsg := fmt.Sprintf("第 %d 镜已有图片，跳过 (%d/%d)", item.ShotNumber, seq+1, total)
+				service.ReportStepProgress(ctx, localPct, skipMsg)
+				t.UpdateProgress(progress)
+				p.broadcast(t, skipMsg, progress, map[string]interface{}{
+					"current_shot": seq + 1,
+					"total_shots":  total,
+					"shot":         t.Storyboard[idx],
+					"skipped":      true,
+				})
+				continue
+			}
+
 			progress := 30 + float32(seq+1)/float32(total)*50
 			localPct := float32(seq) / float32(total) * 100
 			service.ReportStepProgress(ctx, localPct,

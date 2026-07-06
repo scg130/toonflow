@@ -11,6 +11,7 @@ import (
 // PipelineUIState is persisted pipeline progress for one episode (UI restore).
 type PipelineUIState struct {
 	EpisodeID   string   `json:"episode_id"`
+	Active      bool     `json:"active"`
 	Paused      bool     `json:"paused"`
 	Done        bool     `json:"done"`
 	Progress    float32  `json:"progress"`
@@ -132,6 +133,10 @@ func ListPipelineUIStates(db *sql.DB, projectID string) ([]PipelineUIState, erro
 	out := make([]PipelineUIState, 0, len(byEpisode))
 	for epID, st := range byEpisode {
 		active := EpisodePipelines.Get(projectID, epID) != nil
+		st.Active = active
+		if !active {
+			st.Paused = false
+		}
 		if len(st.Lines) == 0 && !active {
 			continue
 		}

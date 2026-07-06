@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"toonflow/adapter"
@@ -387,12 +388,29 @@ func (wfs *WorkflowService) HandlePauseEpisodePipeline(cm *ConnManager, req *WSR
 	})
 }
 
-func (wfs *WorkflowService) HandleResumeEpisodePipeline(cm *ConnManager, req *WSRequest) {
+func (wfs *WorkflowService) HandleResumeEpisodePipeline(cm *ConnManager, userID string, req *WSRequest) {
 	if req.ProjectID == "" || req.EpisodeID == "" {
 		cm.Broadcast(WSResponse{Code: 1, Msg: "请先选择项目与分集", Step: "workflow_error"})
 		return
 	}
 	if err := service.EpisodePipelines.ResumeRun(req.ProjectID, req.EpisodeID); err != nil {
+		if strings.Contains(err.Error(), "没有正在执行的流水线") {
+			if wfs.restartEpisodePipelineFromResume(cm, userID, req) {
+				return
+			}
+			pending, _, planErr := service.PlanEpisodePipeline(wfs.DB, req.ProjectID, req.EpisodeID)
+			if planErr == nil && len(pending) == 0 {
+				_ = service.FinalizePipelineUIState(wfs.DB, req.ProjectID, req.EpisodeID, "✅ 该分集流水线已全部完成")
+				cm.Broadcast(WSResponse{
+					Code: 0, Msg: "该分集流水线已全部完成", Step: "episode_pipeline", Progress: 100,
+					Data: MustMarshalJSON(map[string]interface{}{
+						"project_id": req.ProjectID, "episode_id": req.EpisodeID,
+						"state": "done", "pipeline": true,
+					}),
+				})
+				return
+			}
+		}
 		cm.Broadcast(WSResponse{
 			Code: 1, Msg: err.Error(), Step: "workflow_error", Progress: 0,
 			Data: MustMarshalJSON(map[string]interface{}{
@@ -410,6 +428,39 @@ func (wfs *WorkflowService) HandleResumeEpisodePipeline(cm *ConnManager, req *WS
 			"project_id": req.ProjectID, "episode_id": req.EpisodeID, "action": "episode_pipeline_resumed",
 		}),
 	})
+}
+
+// restartEpisodePipelineFromResume starts a new pipeline run when the in-memory run is gone but work remains.
+func (wfs *WorkflowService) restartEpisodePipelineFromResume(cm *ConnManager, userID string, req *WSRequest) bool {
+	if wfs == nil || userID == "" || !wfs.ownsProject(userID, req.ProjectID) {
+		return false
+	}
+	if service.EpisodePipelines.Get(req.ProjectID, req.EpisodeID) != nil {
+		return false
+	}
+	pending, _, err := service.PlanEpisodePipeline(wfs.DB, req.ProjectID, req.EpisodeID)
+	if err != nil || len(pending) == 0 {
+		return false
+	}
+	logID := fmt.Sprintf("wf_%d", time.Now().UnixNano())
+	_ = service.SetPipelineUIPaused(wfs.DB, req.ProjectID, req.EpisodeID, false)
+	_ = service.AppendPipelineUIProgress(wfs.DB, req.ProjectID, req.EpisodeID, 2,
+		fmt.Sprintf("▶ 流水线已从断点恢复（待执行 %d 步）", len(pending)))
+	cm.Broadcast(WSResponse{
+		Code: 0, Msg: "流水线已从断点恢复", Step: "waiting", Progress: 2,
+		Data: MustMarshalJSON(map[string]interface{}{
+			"log_id": logID, "project_id": req.ProjectID, "episode_id": req.EpisodeID,
+			"action": "run_episode_pipeline",
+		}),
+	})
+	cm.Broadcast(WSResponse{
+		Code: 0, Msg: "流水线已从断点恢复", Step: "chat_progress", Progress: 2,
+		Data: MustMarshalJSON(map[string]interface{}{
+			"project_id": req.ProjectID, "episode_id": req.EpisodeID, "action": "episode_pipeline_resumed",
+		}),
+	})
+	go wfs.runWorkflow(cm, userID, req, logID, "run_episode_pipeline")
+	return true
 }
 
 func (wfs *WorkflowService) finishWorkflow(cm *ConnManager, req *WSRequest, logID, action string, out workflowOutcome, err error) {

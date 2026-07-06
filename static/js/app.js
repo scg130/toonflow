@@ -425,7 +425,8 @@
       const stalePipeline = errText.includes('没有正在执行的流水线');
       if (stalePipeline) {
         clearEpisodePipelineUI();
-        pushPipelineStatusLine('⚠️ 流水线已结束，控制条已重置');
+        syncActivePipelinesFromServer();
+        pushPipelineStatusLine('⚠️ 流水线进程已结束；若仍有未完成步骤，请点「继续」或重新一键执行');
         setStatus('就绪');
         return;
       }
@@ -498,7 +499,10 @@
         const epId = msg.data.episode_id;
         if (epId) {
           markPipelineEpisode(epId, false);
-          pushPipelineStatusLine('▶ 流水线已继续', epId);
+          const resumeMsg = (msg.msg || '').includes('断点恢复')
+            ? ('▶ ' + (msg.msg || '流水线已从断点恢复'))
+            : '▶ 流水线已继续';
+          pushPipelineStatusLine(resumeMsg, epId);
         }
         if (currentEpisode && currentEpisode.id === epId) {
           syncPipelineControlsForCurrentEpisode();
@@ -833,7 +837,7 @@
     sel.style.display = 'inline-block';
     sel.innerHTML = episodes.map(ep => {
       const pst = pipelineByEpisode[ep.id];
-      const badge = pst && !pst.done ? (pst.paused ? '⏸ ' : '⏳ ') : '';
+      const badge = pst && pst.active ? (pst.paused ? '⏸ ' : '⏳ ') : '';
       return `<option value="${ep.id}" ${currentEpisode && currentEpisode.id === ep.id ? 'selected' : ''}>${badge}${escapeHtml(ep.title || ('EP' + ep.episode_num))}</option>`;
     }).join('');
   }
@@ -847,7 +851,7 @@
     }
     wrap.innerHTML = episodes.map(ep => {
       const pst = pipelineByEpisode[ep.id];
-      const runBadge = pst && !pst.done ? (pst.paused ? ' <span class="ep-pipeline-badge paused">⏸ 已暂停</span>' : ' <span class="ep-pipeline-badge running">⏳ 执行中</span>') : '';
+      const runBadge = pst && pst.active ? (pst.paused ? ' <span class="ep-pipeline-badge paused">⏸ 已暂停</span>' : ' <span class="ep-pipeline-badge running">⏳ 执行中</span>') : '';
       return `
       <div class="episode-card ${currentEpisode && currentEpisode.id === ep.id ? 'active' : ''}" data-id="${ep.id}">
         <div class="episode-card-title">${escapeHtml(ep.title)}${runBadge}</div>
@@ -1003,7 +1007,7 @@
   }
 
   function isPipelineActiveRecord(st) {
-    return st && !st.done;
+    return st && !!st.active;
   }
 
   function syncActivePipelinesFromServer() {
@@ -1015,6 +1019,7 @@
         (list || []).forEach(row => {
           if (!row.episode_id) return;
           next[row.episode_id] = {
+            active: !!row.active,
             paused: !!row.paused,
             done: !!row.done,
             lines: Array.isArray(row.lines) ? row.lines.slice() : [],
@@ -1141,6 +1146,7 @@
   function markPipelineEpisode(episodeId, paused) {
     if (!episodeId) return;
     const st = ensurePipelineRecord(episodeId);
+    st.active = true;
     st.paused = !!paused;
     st.done = false;
     renderEpisodeList();
@@ -1271,6 +1277,7 @@
     markPipelineEpisode(epId, false);
     episodePipelineEpisodeId = epId;
     const st = ensurePipelineRecord(epId);
+    st.active = true;
     st.lines = ['🚀 已开始：策划 → 分镜 → 资产 → 生图 → 生视频\n（可在输入框上方暂停 / 继续）'];
     st.progress = 2;
     st.progressMsg = '流水线启动中...';
