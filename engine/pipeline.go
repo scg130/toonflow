@@ -173,6 +173,9 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 				"total_shots":  total,
 				"shot":         t.Storyboard[idx],
 			})
+			if p.db != nil && t.ProjectID != "" && t.EpisodeID != "" {
+				_ = service.UpdateStoryboardShotMedia(p.db, t.ProjectID, t.EpisodeID, item.ShotNumber, imageURL, remoteURL)
+			}
 			donePct := float32(seq+1) / float32(total) * 100
 			service.ReportStepProgress(ctx, donePct,
 				fmt.Sprintf("第 %d 镜图片完成 (%d/%d)", item.ShotNumber, seq+1, total))

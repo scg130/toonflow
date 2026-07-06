@@ -1626,7 +1626,7 @@ body {
   margin-bottom: 0;
 }
 
-.workbench-title { display: flex; align-items: center; gap: 12px; font-weight: 600; font-size: 14px; }
+.workbench-title { display: flex; align-items: center; gap: 12px; font-weight: 600; font-size: 14px; flex-wrap: wrap; }
 .wb-episode-select {
   background: var(--bg-raised);
   border: 1px solid var(--border-default);
@@ -1703,10 +1703,6 @@ body {
   flex-shrink: 0;
 }
 
-#btn-run-episode-pipeline {
-  white-space: nowrap;
-}
-
 .wb-chat-progress {
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
@@ -1736,43 +1732,41 @@ body {
   line-height: 1.4;
 }
 
-.wb-chat-msg.pipeline-progress-log {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-left: 3px solid var(--accent-blue, #6366f1);
-  font-size: 12px;
-  line-height: 1.5;
-  max-height: 220px;
-  overflow-y: auto;
-}
-
-.wb-chat-msg.pipeline-progress-log.pipeline-progress-finished {
-  border-left-color: var(--accent-green, #22c55e);
-}
-
-.pipeline-progress-title {
-  font-weight: 600;
-  margin-bottom: 6px;
-  color: var(--text-primary);
-}
-
-.pipeline-progress-line {
+.wb-chat-msg.assistant.pipeline-status {
+  white-space: pre-wrap;
+  line-height: 1.55;
+  font-size: 13px;
   color: var(--text-secondary);
-  padding: 2px 0;
+  border-left: 2px solid var(--accent-indigo, #6366f1);
 }
 
-.pipeline-progress-line.active {
-  color: var(--accent-blue, #6366f1);
-}
-
-.pipeline-progress-line.done {
-  color: var(--text-muted, #9ca3af);
+.wb-chat-msg.assistant.pipeline-status.pipeline-status-done {
+  color: var(--text-primary);
+  border-left-color: var(--accent-green, #22c55e);
 }
 
 .wb-pipeline-controls {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  border-radius: var(--radius);
+}
+
+.wb-pipeline-controls-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-indigo, #6366f1);
+  white-space: nowrap;
+}
+
+.wb-pipeline-controls-btns {
+  display: flex;
   gap: 8px;
-  margin-top: 8px;
+  flex-shrink: 0;
 }
 
 .wb-chat-messages {
@@ -1909,14 +1903,6 @@ body {
   border-radius: var(--radius);
 }
 
-.planning-pipeline-bar {
-  display: flex;
-  justify-content: flex-end;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border-subtle);
-  flex-shrink: 0;
-}
-
 .planning-body {
   flex: 1;
   overflow: auto;
@@ -1945,6 +1931,24 @@ body {
 .episode-card-title { font-weight: 600; margin-bottom: 6px; }
 .episode-card-meta { font-size: 12px; color: var(--text-secondary); }
 .episode-card-actions { margin-top: 10px; }
+
+.ep-pipeline-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.ep-pipeline-badge.running {
+  color: var(--accent-indigo, #6366f1);
+  background: rgba(99, 102, 241, 0.15);
+}
+.ep-pipeline-badge.paused {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.15);
+}
 
 .modal-lg { max-width: 640px; width: 90%; }
 

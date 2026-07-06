@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI-VIDEO · 短剧 AI 创作平台</title>
-<link rel="stylesheet" href="/static/css/style.css?v=20260703c">
+<link rel="stylesheet" href="/static/css/style.css?v=20260706c">
 </head>
 <body>
 <div id="app">
@@ -71,18 +71,22 @@
         <aside class="wb-chat-panel">
           <div class="wb-chat-header">
             <span class="wb-chat-header-title">AI 创作助手</span>
+            <button class="btn btn-sm btn-outline" id="btn-wb-chat-clear" type="button" title="清除本集本地聊天记录">清除记录</button>
           </div>
           <div id="wb-chat-progress" class="wb-chat-progress" style="display:none;">
             <div class="wb-chat-progress-bar"><div id="wb-chat-progress-fill"></div></div>
             <div id="wb-chat-progress-text" class="wb-chat-progress-text"></div>
-            <div id="wb-pipeline-controls" class="wb-pipeline-controls" style="display:none;">
-              <button class="btn btn-sm btn-outline" id="btn-pipeline-pause" type="button">暂停</button>
-              <button class="btn btn-sm btn-primary" id="btn-pipeline-resume" type="button" style="display:none;">继续</button>
-            </div>
           </div>
           <div id="wb-chat-messages" class="wb-chat-messages"></div>
           <div class="wb-chat-input-area">
-            <textarea id="wb-chat-input" rows="2" placeholder="描述你想做什么，例如：帮我分析原文并自动分集"></textarea>
+            <div id="wb-pipeline-controls" class="wb-pipeline-controls" style="display:none;">
+              <span class="wb-pipeline-controls-label">⏳ 流水线执行中</span>
+              <div class="wb-pipeline-controls-btns">
+                <button class="btn btn-sm btn-outline" id="btn-pipeline-pause" type="button">⏸ 暂停</button>
+                <button class="btn btn-sm btn-primary" id="btn-pipeline-resume" type="button" style="display:none;">▶ 继续</button>
+              </div>
+            </div>
+            <textarea id="wb-chat-input" rows="2" placeholder="描述你想做什么；流水线运行中可点下方暂停/继续，或发送「暂停」「继续」"></textarea>
             <button class="btn btn-primary btn-sm" id="btn-wb-chat-send">发送</button>
           </div>
         </aside>
@@ -110,11 +114,8 @@
               <button class="planning-tab" data-plan="script">剧本</button>
             </div>
             <div id="planning-content" class="planning-content">
-              <div class="planning-pipeline-bar">
-                <button class="btn btn-sm btn-primary" id="btn-run-episode-pipeline" type="button" title="从当前进度自动执行：策划 → 分镜 → 资产 → 生图 → 生视频">一键执行后续流程</button>
-              </div>
               <div id="planning-body" class="planning-body">
-                <div class="empty-state-sm"><p>在左侧对话中让 AI 生成，或点击快捷指令；就绪后可点上方「一键执行后续流程」</p></div>
+                <div class="empty-state-sm"><p>在左侧对话中让 AI 生成，或点击快捷指令</p></div>
               </div>
             </div>
             <div class="planning-actions">
@@ -593,6 +594,6 @@
   </div>
 </div>
 
-<script src="/static/js/app.js?v=20260703d"></script>
+<script src="/static/js/app.js?v=20260706h"></script>
 </body>
 </html>

@@ -30,13 +30,14 @@ var episodePipelineOrder = []EpisodePipelineStep{
 
 // EpisodePipelineDeps holds services needed to run the full episode flow.
 type EpisodePipelineDeps struct {
-	DB         *sql.DB
-	Vendor     adapter.Vendor
-	SkillMgr   *skill.Manager
-	Queue      *task.Queue
-	Pipeline   interface{ Execute(context.Context, *task.Task) error }
-	OutputDir  string
+	DB          *sql.DB
+	Vendor      adapter.Vendor
+	SkillMgr    *skill.Manager
+	Queue       *task.Queue
+	Pipeline    interface{ Execute(context.Context, *task.Task) error }
+	OutputDir   string
 	TaskTimeout time.Duration
+	NotifyTask  func(t *task.Task, msg string)
 }
 
 // EpisodePipelineResult summarizes a completed run.
@@ -79,12 +80,33 @@ func episodeStepDone(db *sql.DB, projectID, episodeID, stepID string) (bool, err
 		items, err := LoadStoryboardItems(db, projectID, episodeID)
 		return err == nil && len(items) > 0, err
 	case "extract_assets":
+		items, err := LoadStoryboardItems(db, projectID, episodeID)
+		if err != nil {
+			return false, err
+		}
+		if len(items) == 0 {
+			return true, nil // 尚无分镜，待分镜生成后再执行
+		}
 		n, err := CountProjectAssets(db, projectID)
 		return n > 0, err
 	case "batch_generate_shot_images":
+		items, err := LoadStoryboardItems(db, projectID, episodeID)
+		if err != nil {
+			return false, err
+		}
+		if len(items) == 0 {
+			return true, nil
+		}
 		need, err := shotsNeedingImages(db, projectID, episodeID)
 		return len(need) == 0, err
 	case "batch_generate_shot_videos":
+		items, err := LoadStoryboardItems(db, projectID, episodeID)
+		if err != nil {
+			return false, err
+		}
+		if len(items) == 0 {
+			return true, nil
+		}
 		need, err := shotsNeedingVideos(db, projectID, episodeID)
 		return len(need) == 0, err
 	default:
@@ -154,6 +176,7 @@ func shotsNeedingVideos(db *sql.DB, projectID, episodeID string) ([]int, error) 
 }
 
 // RunEpisodePipeline executes all pending steps for one episode sequentially.
+// After each step it re-plans so later steps (e.g. batch images) see updated storyboard state.
 func RunEpisodePipeline(ctx context.Context, deps EpisodePipelineDeps, userID, projectID, episodeID string) (*EpisodePipelineResult, error) {
 	if deps.DB == nil || deps.Vendor == nil {
 		return nil, fmt.Errorf("pipeline dependencies unavailable")
@@ -162,48 +185,51 @@ func RunEpisodePipeline(ctx context.Context, deps EpisodePipelineDeps, userID, p
 		return nil, fmt.Errorf("请先选择一集")
 	}
 
-	pending, skipped, err := PlanEpisodePipeline(deps.DB, projectID, episodeID)
-	if err != nil {
-		return nil, err
-	}
-	if len(pending) == 0 {
-		return &EpisodePipelineResult{StepsSkip: stepIDs(skipped)}, nil
-	}
-
-	result := &EpisodePipelineResult{
-		StepsSkip: stepIDs(skipped),
-	}
+	result := &EpisodePipelineResult{}
 	agent := &AgentChat{DB: deps.DB, Vendor: deps.Vendor, SkillMgr: deps.SkillMgr}
-	total := len(pending)
+	ran := map[string]bool{}
 
-	for i, step := range pending {
+	for pass := 0; pass < len(episodePipelineOrder)+2; pass++ {
 		if err := WaitIfPaused(ctx); err != nil {
 			return result, err
 		}
 
-		basePct := float32(i) / float32(total) * 100
-		stepPct := 100 / float32(total)
-		ReportProgress(ctx, step.ID, basePct+stepPct*0.1,
-			fmt.Sprintf("[%d/%d] %s — 准备中...", i+1, total, step.Label))
+		pending, skipped, err := PlanEpisodePipeline(deps.DB, projectID, episodeID)
+		if err != nil {
+			return result, err
+		}
+		result.StepsSkip = stepIDs(skipped)
+		if len(pending) == 0 {
+			break
+		}
+
+		step := pending[0]
+		if ran[step.ID] {
+			return result, fmt.Errorf("%s未能推进流水线，请检查后重试", step.Label)
+		}
+
+		total := len(pending)
+		ReportProgress(ctx, step.ID, float32(pass)*12,
+			fmt.Sprintf("[待执行 %d 步] %s — 准备中...", total, step.Label))
 
 		var runErr error
 		switch step.ID {
 		case "generate_skeleton", "generate_strategy", "generate_script", "generate_storyboard", "extract_assets":
-			intent := &ChatActionIntent{Type: step.ID}
-			ReportProgress(ctx, step.ID, basePct+stepPct*0.3,
-				fmt.Sprintf("[%d/%d] 正在%s...", i+1, total, step.Label))
-			_, _, runErr = agent.executeAction(ctx, userID, projectID, episodeID, "general", intent, step.Label)
+			ReportProgress(ctx, step.ID, float32(pass)*12+5,
+				fmt.Sprintf("正在%s...", step.Label))
+			_, _, runErr = agent.executeAction(ctx, userID, projectID, episodeID, "general", intentForStep(step.ID), step.Label)
 		case "batch_generate_shot_images":
 			shots, err := shotsNeedingImages(deps.DB, projectID, episodeID)
 			if err != nil {
 				return result, err
 			}
 			if len(shots) == 0 {
+				ran[step.ID] = true
 				continue
 			}
-			ReportProgress(ctx, step.ID, basePct+stepPct*0.2,
-				fmt.Sprintf("[%d/%d] 批量生图（%d 镜）...", i+1, total, len(shots)))
-			stepCtx := WithStepProgress(ctx, step.ID, basePct+stepPct*0.2, stepPct*0.7)
+			ReportProgress(ctx, step.ID, float32(pass)*12+5,
+				fmt.Sprintf("批量生图（%d 镜）...", len(shots)))
+			stepCtx := WithStepProgress(ctx, step.ID, float32(pass)*12+5, 10)
 			runErr = runEpisodeBatchImages(stepCtx, deps, userID, projectID, episodeID, shots)
 			if runErr == nil {
 				result.ShotImages = len(shots)
@@ -214,11 +240,12 @@ func RunEpisodePipeline(ctx context.Context, deps EpisodePipelineDeps, userID, p
 				return result, err
 			}
 			if len(shots) == 0 {
+				ran[step.ID] = true
 				continue
 			}
-			ReportProgress(ctx, step.ID, basePct+stepPct*0.2,
-				fmt.Sprintf("[%d/%d] 串行生视频（%d 镜）...", i+1, total, len(shots)))
-			stepCtx := WithStepProgress(ctx, step.ID, basePct+stepPct*0.2, stepPct*0.7)
+			ReportProgress(ctx, step.ID, float32(pass)*12+5,
+				fmt.Sprintf("串行生视频（%d 镜）...", len(shots)))
+			stepCtx := WithStepProgress(ctx, step.ID, float32(pass)*12+5, 10)
 			var outcome *BatchVideoOutcome
 			outcome, runErr = GenerateShotClipsSequential(stepCtx, deps.DB, deps.Vendor, deps.OutputDir, projectID, episodeID, shots)
 			if outcome != nil {
@@ -231,13 +258,18 @@ func RunEpisodePipeline(ctx context.Context, deps EpisodePipelineDeps, userID, p
 		if runErr != nil {
 			return result, fmt.Errorf("%s失败: %w", step.Label, runErr)
 		}
+		ran[step.ID] = true
 		result.StepsRun = append(result.StepsRun, step.ID)
-		ReportProgress(ctx, step.ID, basePct+stepPct,
-			fmt.Sprintf("[%d/%d] %s 完成", i+1, total, step.Label))
+		ReportProgress(ctx, step.ID, float32(pass)*12+10,
+			fmt.Sprintf("%s 完成", step.Label))
 	}
 
 	ReportProgress(ctx, "episode_pipeline", 100, "分集流水线全部完成")
 	return result, nil
+}
+
+func intentForStep(stepID string) *ChatActionIntent {
+	return &ChatActionIntent{Type: stepID}
 }
 
 func runEpisodeBatchImages(ctx context.Context, deps EpisodePipelineDeps, userID, projectID, episodeID string, shots []int) error {
@@ -272,11 +304,28 @@ func runEpisodeBatchImages(ctx context.Context, deps EpisodePipelineDeps, userID
 	tk.GenerateShots = shots
 	tk.Storyboard = items
 	EnrichTaskMeta(deps.DB, tk)
+	tk.SetState(task.StateWaiting, tk.Title)
+	if deps.NotifyTask != nil {
+		deps.NotifyTask(tk, "批量生图任务已接收")
+	}
 
 	done := make(chan error, 1)
 	deps.Queue.Submit(tk, func(runCtx context.Context, t *task.Task) error {
 		runCtx = InheritPipelineContext(ctx, runCtx)
+		t.SetState(task.StateDrawing, t.Title)
+		if deps.NotifyTask != nil {
+			deps.NotifyTask(t, "批量生图中")
+		}
 		err := deps.Pipeline.Execute(runCtx, t)
+		if err != nil {
+			if deps.NotifyTask != nil {
+				deps.NotifyTask(t, MarkTaskFailed(t, err))
+			}
+		} else if deps.NotifyTask != nil {
+			t.SetState(task.StateDone, t.Title)
+			t.UpdateProgress(100)
+			deps.NotifyTask(t, "批量生图完成")
+		}
 		if err == nil && t.ProjectID != "" && len(t.Storyboard) > 0 {
 			_ = SaveStoryboardItems(deps.DB, t.ProjectID, t.EpisodeID, t.Storyboard)
 		}

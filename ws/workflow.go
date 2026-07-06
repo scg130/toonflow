@@ -252,7 +252,10 @@ func (wfs *WorkflowService) runEpisodePipeline(ctx context.Context, cm *ConnMana
 	}()
 
 	runCtx = service.WithPauseGate(runCtx, gate)
+	_ = service.InitPipelineUIState(wfs.DB, req.ProjectID, req.EpisodeID,
+		"🚀 已开始：策划 → 分镜 → 资产 → 生图 → 生视频\n（可在输入框上方暂停 / 继续）")
 	runCtx = service.WithProgress(runCtx, func(step string, progress float32, message string) {
+		_ = service.AppendPipelineUIProgress(wfs.DB, req.ProjectID, req.EpisodeID, progress, message)
 		cm.Broadcast(WSResponse{
 			Code: 0, Msg: message, Step: "chat_progress", Progress: progress,
 			Data: MustMarshalJSON(map[string]interface{}{
@@ -273,6 +276,9 @@ func (wfs *WorkflowService) runEpisodePipeline(ctx context.Context, cm *ConnMana
 		Pipeline:    wfs.Pipeline,
 		OutputDir:   wfs.OutputDir,
 		TaskTimeout: wfs.Timeout,
+		NotifyTask: func(t *task.Task, msg string) {
+			wfs.broadcastTaskUpdate(cm, t, msg)
+		},
 	}
 	result, err := service.RunEpisodePipeline(runCtx, deps, userID, req.ProjectID, req.EpisodeID)
 	if err != nil {
@@ -299,24 +305,37 @@ func (wfs *WorkflowService) runEpisodePipeline(ctx context.Context, cm *ConnMana
 func (wfs *WorkflowService) finishEpisodePipeline(cm *ConnManager, req *WSRequest, logID string, out workflowOutcome, err error) {
 	if err != nil {
 		if err == context.Canceled {
+			_ = service.FinalizePipelineUIState(wfs.DB, req.ProjectID, req.EpisodeID, "⚠️ "+out.reply)
 			wfs.broadcastEpisodePipeline(cm, req, logID, "cancelled", 0, out.reply)
+			cm.Broadcast(WSResponse{
+				Code: 0, Msg: out.reply, Step: "workflow_done", Progress: 100,
+				Data: MustMarshalJSON(map[string]interface{}{
+					"log_id": logID, "project_id": req.ProjectID, "episode_id": req.EpisodeID,
+					"action": "run_episode_pipeline", "reply": out.reply,
+				}),
+			})
 			return
 		}
-		wfs.broadcastEpisodePipeline(cm, req, logID, "error", 0, service.UserMessageWithLogID(err, logID))
+		errMsg := service.UserMessageWithLogID(err, logID)
+		_ = service.FinalizePipelineUIState(wfs.DB, req.ProjectID, req.EpisodeID, "⚠️ "+errMsg)
+		wfs.broadcastEpisodePipeline(cm, req, logID, "error", 0, errMsg)
 		cm.Broadcast(WSResponse{
-			Code: 1, Msg: service.UserMessageWithLogID(err, logID), Step: "workflow_error", Progress: 0,
+			Code: 1, Msg: errMsg, Step: "workflow_error", Progress: 0,
 			Data: MustMarshalJSON(map[string]interface{}{
-				"log_id": logID, "project_id": req.ProjectID, "action": "run_episode_pipeline",
+				"log_id": logID, "project_id": req.ProjectID, "episode_id": req.EpisodeID,
+				"action": "run_episode_pipeline",
 			}),
 		})
 		return
 	}
+	_ = service.FinalizePipelineUIState(wfs.DB, req.ProjectID, req.EpisodeID, "✅ "+out.reply)
 	wfs.broadcastEpisodePipeline(cm, req, logID, "done", 100, out.reply)
 	data := map[string]interface{}{
-		"log_id":     logID,
-		"project_id": req.ProjectID,
-		"action":     "run_episode_pipeline",
-		"reply":      out.reply,
+		"log_id":      logID,
+		"project_id":  req.ProjectID,
+		"episode_id":  req.EpisodeID,
+		"action":      "run_episode_pipeline",
+		"reply":       out.reply,
 	}
 	for k, v := range out.extra {
 		data[k] = v
@@ -349,9 +368,16 @@ func (wfs *WorkflowService) HandlePauseEpisodePipeline(cm *ConnManager, req *WSR
 		return
 	}
 	if err := service.EpisodePipelines.PauseRun(req.ProjectID, req.EpisodeID); err != nil {
-		cm.Broadcast(WSResponse{Code: 1, Msg: err.Error(), Step: "workflow_error"})
+		cm.Broadcast(WSResponse{
+			Code: 1, Msg: err.Error(), Step: "workflow_error", Progress: 0,
+			Data: MustMarshalJSON(map[string]interface{}{
+				"project_id": req.ProjectID, "episode_id": req.EpisodeID,
+				"action": "episode_pipeline_control",
+			}),
+		})
 		return
 	}
+	_ = service.SetPipelineUIPaused(wfs.DB, req.ProjectID, req.EpisodeID, true)
 	wfs.broadcastEpisodePipeline(cm, req, "", "paused", 0, "流水线已暂停，发送「继续」恢复执行")
 	cm.Broadcast(WSResponse{
 		Code: 0, Msg: "已暂停", Step: "chat_progress", Progress: 0,
@@ -367,9 +393,16 @@ func (wfs *WorkflowService) HandleResumeEpisodePipeline(cm *ConnManager, req *WS
 		return
 	}
 	if err := service.EpisodePipelines.ResumeRun(req.ProjectID, req.EpisodeID); err != nil {
-		cm.Broadcast(WSResponse{Code: 1, Msg: err.Error(), Step: "workflow_error"})
+		cm.Broadcast(WSResponse{
+			Code: 1, Msg: err.Error(), Step: "workflow_error", Progress: 0,
+			Data: MustMarshalJSON(map[string]interface{}{
+				"project_id": req.ProjectID, "episode_id": req.EpisodeID,
+				"action": "episode_pipeline_control",
+			}),
+		})
 		return
 	}
+	_ = service.SetPipelineUIPaused(wfs.DB, req.ProjectID, req.EpisodeID, false)
 	wfs.broadcastEpisodePipeline(cm, req, "", "running", 0, "流水线已继续")
 	cm.Broadcast(WSResponse{
 		Code: 0, Msg: "已继续", Step: "chat_progress", Progress: 0,

@@ -170,6 +170,17 @@ func (db *DB) migrate() error {
 		action_json TEXT DEFAULT '',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`)
+	db.Exec(`CREATE TABLE IF NOT EXISTS o_pipeline_ui_state (
+		project_id TEXT NOT NULL,
+		episode_id TEXT NOT NULL,
+		paused INTEGER NOT NULL DEFAULT 0,
+		done INTEGER NOT NULL DEFAULT 0,
+		progress REAL NOT NULL DEFAULT 0,
+		progress_msg TEXT DEFAULT '',
+		lines_json TEXT NOT NULL DEFAULT '[]',
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (project_id, episode_id)
+	)`)
 	db.Exec(`CREATE TABLE IF NOT EXISTS o_shot_clip (
 		id TEXT PRIMARY KEY,
 		project_id TEXT NOT NULL,

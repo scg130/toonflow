@@ -187,3 +187,27 @@ func (r *EpisodePipelineRegistry) CancelRun(projectID, episodeID string) error {
 	run.Cancel()
 	return nil
 }
+
+// ActivePipelineInfo summarizes a running episode pipeline for the UI.
+type ActivePipelineInfo struct {
+	EpisodeID string `json:"episode_id"`
+	Paused    bool   `json:"paused"`
+}
+
+// ListByProject returns active pipeline runs for a project.
+func (r *EpisodePipelineRegistry) ListByProject(projectID string) []ActivePipelineInfo {
+	if r == nil || projectID == "" {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []ActivePipelineInfo
+	for _, run := range r.runs {
+		if run == nil || run.ProjectID != projectID {
+			continue
+		}
+		paused := run.Gate != nil && run.Gate.IsPaused()
+		out = append(out, ActivePipelineInfo{EpisodeID: run.EpisodeID, Paused: paused})
+	}
+	return out
+}

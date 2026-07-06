@@ -341,6 +341,22 @@ func (r *Router) agentWorkGenerateHandler(c *gin.Context) {
 
 // ======================== AI Chat ========================
 
+func (r *Router) pipelinesListHandler(c *gin.Context) {
+	projectID, ok := r.requireProject(c)
+	if !ok {
+		return
+	}
+	list, err := service.ListPipelineUIStates(r.db.DB, projectID)
+	if err != nil {
+		c.AbortWithError(http.StatusInternalServerError, err)
+		return
+	}
+	if list == nil {
+		list = []service.PipelineUIState{}
+	}
+	c.JSON(http.StatusOK, list)
+}
+
 func (r *Router) chatListHandler(c *gin.Context) {
 	projectID, ok := r.requireProject(c)
 	if !ok {
