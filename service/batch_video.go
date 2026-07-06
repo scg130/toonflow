@@ -51,6 +51,9 @@ func GenerateShotClipsSequential(ctx context.Context, db *sql.DB, v adapter.Vend
 	if len(ordered) == 0 {
 		return nil, fmt.Errorf("请至少选择一个分镜")
 	}
+	if err := PersistStoryboardDurations(db, projectID, episodeID); err != nil {
+		return nil, err
+	}
 
 	workDir, err := os.MkdirTemp(filepath.Join(outputDir, "clips", projectID, episodeID), "chain_")
 	if err != nil {

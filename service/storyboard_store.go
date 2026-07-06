@@ -55,6 +55,15 @@ func UpdateStoryboardShotMedia(db *sql.DB, projectID, episodeID string, shotNumb
 	return SaveStoryboardItems(db, projectID, episodeID, items)
 }
 
+// PersistStoryboardDurations re-normalizes shot durations (3–5s) and writes back to DB.
+func PersistStoryboardDurations(db *sql.DB, projectID, episodeID string) error {
+	items, err := LoadStoryboardItems(db, projectID, episodeID)
+	if err != nil || len(items) == 0 {
+		return err
+	}
+	return SaveStoryboardItems(db, projectID, episodeID, items)
+}
+
 // ShotHasImage reports whether a storyboard shot already has generated image media.
 func ShotHasImage(it task.StoryboardItem) bool {
 	return strings.TrimSpace(it.ImageURL) != "" || strings.TrimSpace(it.ImageRemoteURL) != ""

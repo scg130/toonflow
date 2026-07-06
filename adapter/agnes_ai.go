@@ -544,19 +544,8 @@ func (v *AgnesAIVendor) VideoRequest(ctx interface{}, model string, params Video
 		c = context.Background()
 	}
 
-	numFrames := 49
 	frameRate := 24
-	if params.Duration > 0 {
-		numFrames = int(params.Duration * float32(frameRate))
-		if numFrames < 17 {
-			numFrames = 17
-		}
-		if numFrames > 441 {
-			numFrames = 441
-		}
-		// 8n+1 rule
-		numFrames = ((numFrames-1)/8)*8 + 1
-	}
+	numFrames := FramesForVideoDuration(params.Duration, frameRate)
 
 	type reqBody struct {
 		Model           string `json:"model"`

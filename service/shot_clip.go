@@ -107,6 +107,7 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 	}
 
 	duration := ResolveShotVideoDuration(shot.Duration)
+	logger.CtxTrace(ctx, "shot video duration shot=%d requested=%.1fs", shotNumber, duration)
 
 	version, err := nextClipVersion(db, projectID, episodeID, shotNumber)
 	if err != nil {
@@ -189,6 +190,10 @@ func generateOneShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outp
 	}, localFile)
 	if err != nil {
 		return nil, err
+	}
+
+	if probed, probeErr := probeMediaDuration(localFile); probeErr == nil && probed > 0 {
+		duration = probed
 	}
 
 	fileURL := clipPublicURL(projectID, episodeID, shotNumber, version)
