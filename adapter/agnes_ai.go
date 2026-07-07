@@ -271,10 +271,10 @@ func (v *AgnesAIVendor) ImageRequest(ctx interface{}, model string, params Image
 	}
 
 	type reqBody struct {
-		Model  string `json:"model"`
-		Prompt string `json:"prompt"`
-		Size   string `json:"size"`
-		Image  string `json:"image,omitempty"`
+		Model     string `json:"model"`
+		Prompt    string `json:"prompt"`
+		Size      string `json:"size"`
+		Image     string `json:"image,omitempty"`
 		ExtraBody struct {
 			ResponseFormat string `json:"response_format,omitempty"`
 		} `json:"extra_body,omitempty"`
@@ -596,15 +596,15 @@ func (v *AgnesAIVendor) VideoRequest(ctx interface{}, model string, params Video
 	numFrames := FramesForVideoDuration(params.Duration, frameRate)
 
 	type reqBody struct {
-		Model           string `json:"model"`
-		Prompt          string `json:"prompt"`
-		Image           string `json:"image,omitempty"`
-		Height          int    `json:"height,omitempty"`
-		Width           int    `json:"width,omitempty"`
-		NumFrames       int    `json:"num_frames,omitempty"`
-		FrameRate       int    `json:"frame_rate,omitempty"`
-		NegativePrompt  string `json:"negative_prompt,omitempty"`
-		NumInferenceSteps int  `json:"num_inference_steps,omitempty"`
+		Model             string `json:"model"`
+		Prompt            string `json:"prompt"`
+		Image             string `json:"image,omitempty"`
+		Height            int    `json:"height,omitempty"`
+		Width             int    `json:"width,omitempty"`
+		NumFrames         int    `json:"num_frames,omitempty"`
+		FrameRate         int    `json:"frame_rate,omitempty"`
+		NegativePrompt    string `json:"negative_prompt,omitempty"`
+		NumInferenceSteps int    `json:"num_inference_steps,omitempty"`
 	}
 	width := params.Width
 	height := params.Height
@@ -615,13 +615,13 @@ func (v *AgnesAIVendor) VideoRequest(ctx interface{}, model string, params Video
 		height = 768
 	}
 	body := reqBody{
-		Model:     model,
-		Prompt:    params.Prompt,
-		Height:    height,
-		Width:     width,
-		NumFrames: numFrames,
-		FrameRate: frameRate,
-		NegativePrompt: params.Negative,
+		Model:             model,
+		Prompt:            params.Prompt,
+		Height:            height,
+		Width:             width,
+		NumFrames:         numFrames,
+		FrameRate:         frameRate,
+		NegativePrompt:    params.Negative,
 		NumInferenceSteps: 45,
 	}
 	imageURL := strings.TrimSpace(params.ImageURL)
@@ -729,6 +729,7 @@ func (v *AgnesAIVendor) pollVideoResult(ctx context.Context, videoID, model stri
 
 		type pollResp struct {
 			Status             string `json:"status"`
+			URL                string `json:"url"`
 			RemixedFromVideoID string `json:"remixed_from_video_id"`
 			Error              any    `json:"error"`
 		}
@@ -736,14 +737,20 @@ func (v *AgnesAIVendor) pollVideoResult(ctx context.Context, videoID, model stri
 		if err := json.Unmarshal(raw, &result); err != nil {
 			return nil, fmt.Errorf("decode video poll resp: %w", err)
 		}
-
 		switch result.Status {
 		case "completed":
-			if result.RemixedFromVideoID == "" {
-				return nil, fmt.Errorf("agnes video completed but no url returned")
+			videoURL := result.URL
+			if videoURL == "" {
+				videoURL = result.RemixedFromVideoID
 			}
-			return &VideoResponse{VideoURL: result.RemixedFromVideoID, Model: model}, nil
+			if videoURL == "" {
+				logger.CtxInfo(ctx, "agnes video completed but no url, video_id=%s raw=%s", videoID, string(raw))
+				return nil, fmt.Errorf("agnes video completed but no url returned: %s", string(raw))
+			}
+			logger.CtxInfo(ctx, "agnes video completed video_id=%s url=%s", videoID, videoURL)
+			return &VideoResponse{VideoURL: videoURL, Model: model}, nil
 		case "failed":
+			logger.CtxInfo(ctx, "agnes video failed, video_id=%s raw=%s", videoID, string(raw))
 			return nil, fmt.Errorf("agnes video generation failed: %v", result.Error)
 		}
 

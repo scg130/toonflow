@@ -54,20 +54,35 @@ func TestSplitNarrationTextPreservesContent(t *testing.T) {
 	}
 }
 
-func TestEnsureNarrationCoverage(t *testing.T) {
-	tl := &TimelineEdit{
-		ExportSettings: &TimelineExportSettings{TrimHeadFrames: 0, TrimTailFrames: 0, DefaultTransition: "none"},
-		Tracks: []TimelineTrack{{
-			Type: "video",
-			Clips: []TimelineClip{
-				{ShotNumber: 1, Label: "第 1 镜", Start: 0, End: 3, Duration: 3},
-				{ShotNumber: 2, Label: "第 2 镜", Start: 0, End: 4, Duration: 4},
-			},
-		}},
+func TestRedistributeNarrationTiming(t *testing.T) {
+	total := 30.0
+	segs := []NarrationSegment{
+		{Text: "开场：石昊立于界海废墟。"},          // 12 runes
+		{Text: "  "},                          // empty -> dropped
+		{Text: "转折降临，黑发暴涨割裂天宇，气势惊人。"}, // longer
+		{Text: "高潮收束，一战定乾坤。"},
 	}
-	segs := []NarrationSegment{{Start: 0, End: 3, Text: "只有第一镜", ShotNum: 1}}
-	out := ensureNarrationCoverage(segs, tl, 7)
-	if len(out) < 2 {
-		t.Fatalf("expected coverage for second clip, got %d segments", len(out))
+	out := redistributeNarrationTiming(segs, total)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 non-empty segments, got %d", len(out))
+	}
+	// Continuous coverage: first starts at 0, last ends at total, no gaps.
+	if out[0].Start != 0 {
+		t.Fatalf("first segment must start at 0, got %v", out[0].Start)
+	}
+	if out[len(out)-1].End != total {
+		t.Fatalf("last segment must end at total %.1f, got %v", total, out[len(out)-1].End)
+	}
+	for i := 1; i < len(out); i++ {
+		if out[i].Start != out[i-1].End {
+			t.Fatalf("segments must be back-to-back: seg %d start %v != prev end %v", i, out[i].Start, out[i-1].End)
+		}
+		if out[i].End <= out[i].Start {
+			t.Fatalf("segment %d has non-positive duration", i)
+		}
+	}
+	// Longer text should get a larger time share than shorter text.
+	if (out[1].End - out[1].Start) <= (out[2].End - out[2].Start) {
+		t.Fatalf("longer segment should get more time than shorter one")
 	}
 }

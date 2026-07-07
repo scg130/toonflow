@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -117,16 +116,15 @@ func GenerateNarrationPlan(ctx context.Context, db *sql.DB, v adapter.Vendor, ou
 - **角色对白** = 已烧录在成片各镜中，由 TTS 配音，**旁白不得复述、引用或改写**下方列出的任何角色台词；
 - 旁白与对白是两条音轨：对白在画面里，旁白是上层解说，内容必须互补而非重复。
 
-## 时长与覆盖
+## 输出与时长（重要）
 - 只输出一个 JSON 对象 {"segments":[...]}，不要 markdown 或其它说明；
-- segments 每项字段：start (秒), end (秒), text (中文旁白), shot_number (可选镜号整数)；
-- **每个时间线视频片段必须对应一条旁白**，start/end 与该片段起止时间一致；
-- 旁白连续覆盖 0~%.1f 秒，段间空白不超过 0.2 秒；
-- 全片旁白总字数约 %d 字（按 %.1f 秒口播估算），宁可精简也要念完；
-- **必须概括本集完整故事线**（开场→发展→转折→高潮→收束），按时间线顺序分配剧情，不要只讲前半段；
+- segments 每项字段：text (中文旁白句)，shot_number 可选；**不需要你写 start/end 时间**，时间轴由系统按句子长度自动铺满 0~%.1f 秒；
+- 把整集写成**一整条连续的长旁白**，按语义/句子切成有序的多段（segments），按剧情先后排列即可；
+- 全片旁白总字数约 %d 字（按 %.1f 秒口播估算），必须写满全片、念得完，宁可精简也不要留半段空白；
+- **必须概括本集完整故事线**（开场→发展→转折→高潮→收束），从头讲到尾，不要只讲前半段；
 - 旁白风格：短剧解说、信息密度高、有悬念感，不要念镜头号/分镜/技术词。
 
-## 时间线片段（每条必须写旁白）
+## 时间线镜头（仅供了解剧情节奏，不必逐镜对应）
 %s
 
 ## 各镜角色对白（勿复述，仅供了解剧情）
@@ -165,10 +163,12 @@ func GenerateNarrationPlan(ctx context.Context, db *sql.DB, v adapter.Vendor, ou
 	if len(segments) == 0 {
 		return nil, fmt.Errorf("旁白方案为空，请重试")
 	}
-	NormalizeNarrationSegments(segments, total)
-	segments = ensureNarrationCoverage(segments, tl, total)
-	sortNarrationSegments(segments)
-	NormalizeNarrationSegments(segments, total)
+	// One continuous narration: lay the model's story commentary back-to-back to
+	// fill the whole video by sentence length (model no longer supplies timing).
+	segments = redistributeNarrationTiming(segments, total)
+	if len(segments) == 0 {
+		return nil, fmt.Errorf("旁白方案为空，请重试")
+	}
 
 	voice := voice.DefaultNarrationVoice
 	if tl.Narration != nil && strings.TrimSpace(tl.Narration.Voice) != "" {
@@ -369,68 +369,44 @@ func timelineClipWindows(tl *TimelineEdit) []clipWindow {
 	return windows
 }
 
-// ensureNarrationCoverage adds segments for timeline clips that have no narration.
-func ensureNarrationCoverage(segments []NarrationSegment, tl *TimelineEdit, total float64) []NarrationSegment {
-	windows := timelineClipWindows(tl)
-	if len(windows) == 0 {
-		return segments
-	}
-	for _, w := range windows {
-		if segmentCoversWindow(segments, w) {
+// redistributeNarrationTiming lays the model's narration out as ONE continuous
+// track filling 0~total: segments are placed back-to-back, each given a share of
+// the total duration proportional to its text length. This turns the AI story
+// commentary into a single long narration covering the whole video — no gaps and
+// no generic filler. The model's own start/end are ignored on purpose.
+func redistributeNarrationTiming(segments []NarrationSegment, total float64) []NarrationSegment {
+	kept := make([]NarrationSegment, 0, len(segments))
+	var totalWeight float64
+	for _, s := range segments {
+		txt := strings.TrimSpace(s.Text)
+		if txt == "" {
 			continue
 		}
-			text := fmt.Sprintf("镜头继续。")
-			if w.ShotNumber > 0 {
-				text = fmt.Sprintf("第 %d 镜，故事继续推进。", w.ShotNumber)
-			}
-		segments = append(segments, NarrationSegment{
-			Start:   w.Start,
-			End:     w.End,
-			Text:    text,
-			ShotNum: w.ShotNumber,
-		})
+		s.Text = txt
+		kept = append(kept, s)
+		totalWeight += float64(len([]rune(txt)))
 	}
-	return segments
-}
-
-func sortNarrationSegments(segments []NarrationSegment) {
-	sort.Slice(segments, func(i, j int) bool {
-		if segments[i].Start == segments[j].Start {
-			return segments[i].End < segments[j].End
+	if len(kept) == 0 || total <= 0 {
+		return kept
+	}
+	if totalWeight <= 0 {
+		totalWeight = float64(len(kept))
+	}
+	offset := 0.0
+	for i := range kept {
+		w := float64(len([]rune(kept[i].Text)))
+		if w <= 0 {
+			w = 1
 		}
-		return segments[i].Start < segments[j].Start
-	})
-}
-
-func segmentCoversWindow(segments []NarrationSegment, w clipWindow) bool {
-	winDur := w.End - w.Start
-	if winDur <= 0 {
-		return true
-	}
-	for _, seg := range segments {
-		if strings.TrimSpace(seg.Text) == "" {
-			continue
+		kept[i].Start = offset
+		if i == len(kept)-1 {
+			kept[i].End = total
+		} else {
+			kept[i].End = offset + total*w/totalWeight
 		}
-		overlap := min(seg.End, w.End) - max(seg.Start, w.Start)
-		if overlap >= winDur*0.5 {
-			return true
-		}
+		offset = kept[i].End
 	}
-	return false
-}
-
-func min(a, b float64) float64 {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b float64) float64 {
-	if a > b {
-		return a
-	}
-	return b
+	return kept
 }
 
 func buildTimelineClipLines(tl *TimelineEdit) string {

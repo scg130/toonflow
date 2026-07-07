@@ -179,22 +179,14 @@ func ExportTimeline(outputDir string, tl *TimelineEdit) (string, error) {
 	}
 
 	publicURL := fmt.Sprintf("/output/exports/%s/%s/%s", tl.ProjectID, tl.EpisodeID, outName)
-	hasNarration := false
-	if audioTrack != nil {
-		for _, c := range audioTrack.Clips {
-			if c.Label == "旁白配音" {
-				hasNarration = true
-				break
-			}
-		}
-	}
-	if !hasNarration {
-		tl.ExportedVideoURL = publicURL
-		if probed, err := ffmpeg.ProbeMediaDuration(outPath); err == nil && probed > 0 {
-			tl.ExportedDuration = probed
-		} else {
-			tl.ExportedDuration = TimelineExportDuration(tl)
-		}
+	// Always refresh the exported reference: the video length is identical whether or
+	// not narration audio is mixed in, so a stale narration audio track must not freeze
+	// the measured duration used for narration planning.
+	tl.ExportedVideoURL = publicURL
+	if probed, err := ffmpeg.ProbeMediaDuration(outPath); err == nil && probed > 0 {
+		tl.ExportedDuration = probed
+	} else {
+		tl.ExportedDuration = TimelineExportDuration(tl)
 	}
 	return publicURL, nil
 }

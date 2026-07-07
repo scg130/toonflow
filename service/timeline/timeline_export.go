@@ -2,6 +2,7 @@ package timeline
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -267,17 +268,73 @@ func concatTimelineParts(partFiles []string, partDurations []float64, transition
 	if len(partFiles) == 1 {
 		return fsutil.CopyFile(partFiles[0], dest)
 	}
-	useXfade := false
-	for _, t := range transitions {
-		if t != "" && !strings.EqualFold(t, "none") {
-			useXfade = true
-			break
+
+	// Group consecutive parts whose boundary is seamless ("none"/"") and hard-concat
+	// each group (butt-join). Only real scene-change boundaries become xfade
+	// crossfades between groups.
+	//
+	// Why not a single xfade chain over every part: a near-zero xfade at a continuous
+	// cut corrupts the whole chain. ffmpeg's xfade drops its second input when the
+	// offset sits within ~1 frame of the previous stream's end (which is exactly what
+	// a ~0.04s continuous cut produces), so the first such boundary collapses the
+	// accumulated stream and every later offset then exceeds it — the entire export
+	// shrinks to the first clip's length. Hard-concatenating continuous runs and only
+	// crossfading between multi-second groups keeps every xfade offset well inside its
+	// first input.
+	workDir := filepath.Dir(dest)
+	var groupFiles []string
+	var groupDurs []float64
+	var groupTrans []string // scene-change transition entering group i (len == len(groups)-1)
+	groupStart := 0
+	groupIdx := 0
+
+	flush := func(endExclusive int) error {
+		members := partFiles[groupStart:endExclusive]
+		var sum float64
+		for _, d := range partDurations[groupStart:endExclusive] {
+			sum += d
 		}
+		gf := members[0]
+		if len(members) > 1 {
+			gf = filepath.Join(workDir, fmt.Sprintf("group_%03d.mp4", groupIdx))
+			if err := concatMediaFiles(members, gf); err != nil {
+				return err
+			}
+		}
+		if probed, err := ffmpeg.ProbeMediaDuration(gf); err == nil && probed > 0 {
+			sum = probed
+		}
+		groupFiles = append(groupFiles, gf)
+		groupDurs = append(groupDurs, sum)
+		groupIdx++
+		return nil
 	}
-	if !useXfade || transDur <= 0 {
-		return concatMediaFiles(partFiles, dest)
+
+	for i := 1; i < len(partFiles); i++ {
+		trans := ""
+		if i-1 < len(transitions) {
+			trans = transitions[i-1]
+		}
+		if trans == "" || strings.EqualFold(trans, "none") {
+			continue
+		}
+		if err := flush(i); err != nil {
+			return err
+		}
+		groupTrans = append(groupTrans, trans)
+		groupStart = i
 	}
-	return concatWithXfade(partFiles, partDurations, transitions, transDur, dest)
+	if err := flush(len(partFiles)); err != nil {
+		return err
+	}
+
+	if len(groupFiles) == 1 {
+		return fsutil.CopyFile(groupFiles[0], dest)
+	}
+	if transDur <= 0 {
+		return concatMediaFiles(groupFiles, dest)
+	}
+	return xfadeGroups(groupFiles, groupDurs, groupTrans, transDur, dest)
 }
 
 func concatMediaFiles(parts []string, dest string) error {
@@ -300,36 +357,40 @@ func concatMediaFiles(parts []string, dest string) error {
 	return nil
 }
 
-func concatWithXfade(parts []string, durations []float64, transitions []string, fadeSec float64, dest string) error {
-	if len(parts) != len(durations) {
-		return fmt.Errorf("parts/durations mismatch")
+// xfadeGroups crossfades pre-concatenated, multi-second group clips together. Each
+// group is already a seamless butt-join of continuous shots, so every xfade offset
+// lands well inside its (long) first input and the chain stays stable.
+func xfadeGroups(groups []string, durations []float64, transitions []string, fadeSec float64, dest string) error {
+	if len(groups) != len(durations) {
+		return fmt.Errorf("groups/durations mismatch")
 	}
 	args := []string{"-y"}
-	for _, p := range parts {
-		args = append(args, "-i", p)
+	for _, g := range groups {
+		args = append(args, "-i", g)
 	}
 	var filters []string
 	prev := "[0:v]"
 	cumulative := durations[0]
-	for i := 1; i < len(parts); i++ {
-		trans := "fade"
+	for i := 1; i < len(groups); i++ {
+		name := "fade"
 		if i-1 < len(transitions) {
-			trans = transitions[i-1]
+			name = xfadeTransitionName(transitions[i-1])
 		}
-		// Same-scene ("none") boundaries use a near-zero xfade so continuous shots
-		// butt-join imperceptibly; real scene changes use the configured duration.
+		// Clamp the crossfade so it never eats more than a group can spare; keeps the
+		// offset a safe margin from the previous stream's end.
 		effDur := fadeSec
-		name := xfadeTransitionName(trans)
-		if trans == "" || strings.EqualFold(trans, "none") {
+		if maxFade := 0.5 * math.Min(durations[i-1], durations[i]); effDur > maxFade {
+			effDur = maxFade
+		}
+		if effDur < continuousCutDur {
 			effDur = continuousCutDur
-			name = "fade"
 		}
 		offset := cumulative - effDur
 		if offset < 0 {
 			offset = 0
 		}
 		outLabel := fmt.Sprintf("[v%02d]", i)
-		if i == len(parts)-1 {
+		if i == len(groups)-1 {
 			outLabel = "[vout]"
 		}
 		filters = append(filters, fmt.Sprintf("%s[%d:v]xfade=transition=%s:duration=%.3f:offset=%.3f%s",

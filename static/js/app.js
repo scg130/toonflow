@@ -511,7 +511,6 @@
           if (!pipelineByEpisode[epId]) markPipelineEpisode(epId, false);
           savePipelineProgress(epId, msg.msg, msg.progress);
           pushPipelineStatusLine(msg.msg || '流水线执行中…', epId);
-          if (msg.data.status) applyPipelineLiveStatus(epId, msg.data.status, msg.msg);
         }
         if (currentEpisode && epId === currentEpisode.id) {
           syncPipelineControlsForCurrentEpisode();
@@ -567,7 +566,6 @@
           markPipelineEpisode(epId, false);
           savePipelineProgress(epId, msg.msg, msg.progress);
           pushPipelineStatusLine(msg.msg || '流水线执行中...', epId);
-          if (msg.data.status) applyPipelineLiveStatus(epId, msg.data.status, msg.msg);
         }
         if (currentEpisode && currentEpisode.id === epId) {
           syncPipelineControlsForCurrentEpisode();
@@ -588,8 +586,6 @@
         } else if (epId && msg.msg) {
           pushPipelineStatusLine('⚠️ ' + msg.msg, epId);
         }
-        if (epId && pipelineByEpisode[epId]) pipelineByEpisode[epId].live = null;
-        hidePipelineLiveBox();
         clearEpisodePipelineUI(epId);
         if (currentEpisode && currentEpisode.id === epId && state === 'done') {
           updateChatProgress('', 0);
@@ -1247,7 +1243,6 @@
     if (isPipelineActiveRecord(st)) {
       updateChatProgress(st.progressMsg || st.lines[st.lines.length - 1], st.progress || 0);
     }
-    refreshPipelineLiveForCurrentEpisode();
   }
 
   let pipelineStatusEl = null;
@@ -1349,7 +1344,6 @@
       episodePipelineActive = true;
       episodePipelinePaused = st.paused;
       setPipelineControlsVisible(true, st.paused);
-      refreshPipelineLiveForCurrentEpisode();
       return;
     }
     episodePipelineActive = false;
@@ -1358,14 +1352,11 @@
       episodePipelineEpisodeId = null;
     }
     setPipelineControlsVisible(false, false);
-    refreshPipelineLiveForCurrentEpisode();
   }
 
   function clearEpisodePipelineUI(episodeId) {
-    if (episodeId && pipelineByEpisode[episodeId]) pipelineByEpisode[episodeId].live = null;
     clearPipelineEpisode(episodeId);
     finishPendingWorkflowUI();
-    refreshPipelineLiveForCurrentEpisode();
   }
 
   function updateChatProgress(message, progress) {
@@ -1385,93 +1376,6 @@
     wrap.style.display = 'block';
     fill.style.width = Math.min(100, Math.max(0, progress || 0)) + '%';
     text.textContent = message;
-  }
-
-  // 环节 id -> 中文名（与后端 episodePipelineOrder 对应，作为 step_label 缺失时的兜底）
-  const pipelineStepLabels = {
-    generate_skeleton: '故事骨架',
-    generate_strategy: '改编策略',
-    generate_script: '剧本',
-    generate_storyboard: '分镜',
-    extract_assets: '提取资产',
-    assign_character_voices: '分配音色',
-    batch_generate_shot_images: '批量生图',
-    batch_generate_shot_videos: '批量生视频',
-    batch_compose_shots: '对白合成',
-    episode_pipeline: '流水线',
-  };
-
-  function renderPipelineLiveBox(status, epLabel, message) {
-    const box = document.getElementById('wb-pipeline-live');
-    if (!box) return;
-    if (!status) {
-      box.style.display = 'none';
-      return;
-    }
-    box.style.display = 'block';
-    const epEl = document.getElementById('wb-pll-episode');
-    const stepEl = document.getElementById('wb-pll-step');
-    const shotEl = document.getElementById('wb-pll-shot');
-    const retryEl = document.getElementById('wb-pll-retry');
-    const msgEl = document.getElementById('wb-pll-msg');
-
-    if (epEl) epEl.textContent = epLabel || '—';
-    const stepLabel = status.step_label || pipelineStepLabels[status.step_id] || status.step_id || '—';
-    if (stepEl) stepEl.textContent = stepLabel;
-
-    if (shotEl) {
-      if (status.shot && status.shot > 0) {
-        const seq = status.shot_seq && status.shot_total
-          ? ` (${status.shot_seq}/${status.shot_total})` : '';
-        shotEl.textContent = `第 ${status.shot} 镜${seq}`;
-      } else {
-        shotEl.textContent = '—';
-      }
-    }
-
-    const retrying = status.attempt && status.attempt > 0;
-    if (retryEl) {
-      if (retrying) {
-        retryEl.textContent = status.max_attempt && status.max_attempt > 0
-          ? `第 ${status.attempt}/${status.max_attempt} 次`
-          : `第 ${status.attempt} 次`;
-        retryEl.classList.add('retry-on');
-      } else {
-        retryEl.textContent = '无';
-        retryEl.classList.remove('retry-on');
-      }
-    }
-    box.classList.toggle('retrying', !!retrying);
-    if (msgEl) {
-      const note = retrying && status.retry_note ? status.retry_note : (message || '');
-      msgEl.textContent = note || '';
-    }
-  }
-
-  function hidePipelineLiveBox() {
-    const box = document.getElementById('wb-pipeline-live');
-    if (box) box.style.display = 'none';
-  }
-
-  // 切换分集时刷新实时进度框：当前分集有活跃流水线且有实时状态则显示，否则隐藏
-  function refreshPipelineLiveForCurrentEpisode() {
-    const epId = currentEpisode && currentEpisode.id;
-    const st = epId && pipelineByEpisode[epId];
-    if (st && st.live && isPipelineActiveRecord(st)) {
-      renderPipelineLiveBox(st.live, getPipelineEpisodeLabel(epId), st.progressMsg);
-    } else {
-      hidePipelineLiveBox();
-    }
-  }
-
-  // 收到结构化流水线状态时更新实时进度框（仅当前分集）
-  function applyPipelineLiveStatus(epId, status, message) {
-    if (!epId || !status) return;
-    const st = ensurePipelineRecord(epId);
-    st.live = status;
-    if (currentEpisode && currentEpisode.id === epId) {
-      renderPipelineLiveBox(status, getPipelineEpisodeLabel(epId), message);
-    }
   }
 
   function setPipelineControlsVisible(active, paused) {
