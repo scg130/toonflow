@@ -16,6 +16,7 @@ type ShotMeta struct {
 	Lighting       string
 	ActionContinue string
 	Transition     string
+	SceneLink      string
 	ImageURL       string
 	ImageRemoteURL string
 }
@@ -47,6 +48,7 @@ func LoadShot(db *sql.DB, projectID, episodeID string, shotNumber int) (*ShotMet
 				Lighting:       it.Lighting,
 				ActionContinue: it.ActionContinue,
 				Transition:     it.Transition,
+				SceneLink:      it.SceneLink,
 				ImageURL:       it.ImageURL,
 				ImageRemoteURL: it.ImageRemoteURL,
 			}, nil

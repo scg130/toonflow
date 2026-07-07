@@ -4,6 +4,7 @@ import (
 	"toonflow/service/internal/ffmpeg"
 	"toonflow/service/internal/fsutil"
 	"toonflow/service/media"
+	"toonflow/service/storyboard"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -251,6 +252,18 @@ func buildDefaultTimeline(db *sql.DB, projectID, episodeID string) (*TimelineEdi
 			selected[c.ShotNumber] = c
 		}
 	}
+	// scene_link per shot drives boundary transitions: a "continuous" incoming
+	// shot butt-joins its predecessor (no transition); a "transition" incoming
+	// shot gets a visible transition mapped from its storyboard transition style.
+	linkByShot := map[int]string{}
+	transStyleByShot := map[int]string{}
+	if items, err := storyboard.LoadStoryboardItems(db, projectID, episodeID); err == nil {
+		for _, it := range items {
+			linkByShot[it.ShotNumber] = it.SceneLink
+			transStyleByShot[it.ShotNumber] = it.Transition
+		}
+	}
+
 	var videoClips []TimelineClip
 	for shotNum := 1; shotNum <= 999; shotNum++ {
 		c, ok := selected[shotNum]
@@ -283,6 +296,12 @@ func buildDefaultTimeline(db *sql.DB, projectID, episodeID string) (*TimelineEdi
 				FileURL: media.EffectiveClipFileURL(c), Start: 0, End: c.Duration, Duration: c.Duration,
 			})
 		}
+	}
+	// Transition after clip j is decided by the NEXT clip's scene_link: continuous
+	// → seamless butt-join ("none"); transition → visible transition effect.
+	for j := 0; j < len(videoClips)-1; j++ {
+		next := videoClips[j+1].ShotNumber
+		videoClips[j].Transition = timelineTransitionForShot(linkByShot[next], transStyleByShot[next])
 	}
 	return &TimelineEdit{
 		ProjectID: projectID, EpisodeID: episodeID,

@@ -64,17 +64,23 @@ func TestStripNonRoleCharacterIDs(t *testing.T) {
 	}
 }
 
-func TestSanitizeStoryboardItemPrompt_misclassifiedInanimateRole(t *testing.T) {
-	assets := []ProjectAsset{{ID: 3, Name: "焦黑树桩", Type: "role", Desc: "charred black tree stump, inanimate"}}
+func TestSanitizeStoryboardItemPrompt_humanRoleKeepsCharacterAndHealsInjection(t *testing.T) {
+	// 石昊 is a human protagonist; its description contains the negative-prompt phrase
+	// "no mask" which must NOT cause it to be treated as an inanimate prop.
+	assets := []ProjectAsset{{ID: 12, Name: "石昊", Type: "role", Desc: "handsome young man, empty hands, no mask"}}
 	shot := task.StoryboardItem{
-		ShotNumber:  1,
-		Description: "极低角度仰拍，焦黑树桩矗立在死寂虚空中",
-		Prompt:      "3D anime, character_id: 焦黑树桩, style: consistent, wide shot",
-		AssetIDs:    []int{3},
+		ShotNumber:  2,
+		Description: "石昊踉跄走入画面",
+		Prompt:      "石昊 inanimate prop, no human character, 3D anime, character_id: 石昊, style: consistent, medium shot",
+		AssetIDs:    []int{12},
 	}
 	out := SanitizeStoryboardItemPrompt(shot, assets)
-	if strings.Contains(strings.ToLower(out.Prompt), "character_id") {
-		t.Fatalf("inanimate role should not keep character_id: %q", out.Prompt)
+	low := strings.ToLower(out.Prompt)
+	if strings.Contains(low, "inanimate") || strings.Contains(low, "no human character") {
+		t.Fatalf("human-role shot should drop stale inanimate injection: %q", out.Prompt)
+	}
+	if !strings.Contains(out.Prompt, "character_id: 石昊") {
+		t.Fatalf("human role should keep character_id: %q", out.Prompt)
 	}
 }
 

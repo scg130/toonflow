@@ -80,9 +80,9 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 		t.UpdateProgress(30)
 		t.SetState(task.StateStoryboard, "gen_storyboard")
 		p.broadcast(t, "分镜生成完成", 30, map[string]interface{}{
-			"storyboard": items,
+			"storyboard":   items,
 			"current_shot": 0,
-			"total_shots": len(items),
+			"total_shots":  len(items),
 		})
 
 		if mode == "parse" {
@@ -121,6 +121,7 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 			return fmt.Errorf("no shots selected for image generation")
 		}
 		total := len(indices)
+		liveStatus := service.PipelineStatusFromContext(ctx)
 		for seq, idx := range indices {
 			item := t.Storyboard[idx]
 			if err := service.WaitIfPaused(ctx); err != nil {
@@ -131,6 +132,7 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 				return ctx.Err()
 			default:
 			}
+			liveStatus.SetShot(item.ShotNumber, seq+1, total)
 
 			if p.db != nil && t.ProjectID != "" && t.EpisodeID != "" {
 				service.MergeShotMediaFromStore(p.db, t.ProjectID, t.EpisodeID, item.ShotNumber, &t.Storyboard[idx])

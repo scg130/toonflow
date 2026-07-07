@@ -13,6 +13,7 @@ import (
 	"toonflow/service/core"
 	"toonflow/service/internal/fsutil"
 	"toonflow/service/storyboard"
+	"toonflow/task"
 )
 
 const betweenShotCooldown = 12 * time.Second
@@ -58,6 +59,15 @@ func GenerateShotClipsSequential(ctx context.Context, db *sql.DB, v adapter.Vend
 		return nil, err
 	}
 
+	// scene_link per shot decides continuity: only "continuous" shots inherit the
+	// previous shot's last frame; "transition" shots render from their own image.
+	linkByShot := map[int]string{}
+	if items, ldErr := storyboard.LoadStoryboardItems(db, projectID, episodeID); ldErr == nil {
+		for _, it := range items {
+			linkByShot[it.ShotNumber] = it.SceneLink
+		}
+	}
+
 	workDir, err := os.MkdirTemp(filepath.Join(outputDir, "clips", projectID, episodeID), "chain_")
 	if err != nil {
 		return nil, err
@@ -67,11 +77,13 @@ func GenerateShotClipsSequential(ctx context.Context, db *sql.DB, v adapter.Vend
 	outcome := &BatchVideoOutcome{}
 	var continuityURL string
 	total := len(ordered)
+	status := core.PipelineStatusFromContext(ctx)
 
 	for i, shotNum := range ordered {
 		if err := core.WaitIfPaused(ctx); err != nil {
 			return outcome, err
 		}
+		status.SetShot(shotNum, i+1, total)
 		if i > 0 {
 			logger.CtxTrace(ctx, "batch video cooldown %s before shot=%d", betweenShotCooldown, shotNum)
 			select {
@@ -85,9 +97,11 @@ func GenerateShotClipsSequential(ctx context.Context, db *sql.DB, v adapter.Vend
 		core.ReportStepProgress(ctx, localPct,
 			fmt.Sprintf("正在生成第 %d 镜视频 (%d/%d)", shotNum, i+1, total))
 
+		// Only continue from the previous frame when THIS shot is a same-scene link.
 		cont := ""
-		if i > 0 && continuityURL != "" {
+		if i > 0 && continuityURL != "" && linkByShot[shotNum] == task.SceneLinkContinuous {
 			cont = continuityURL
+			logger.CtxTrace(ctx, "batch video shot=%d continuous, chaining previous last frame", shotNum)
 		}
 
 		clip, err := generateShotClipUntilSuccess(ctx, db, v, outputDir, projectID, episodeID, shotNum, cont)
@@ -100,18 +114,20 @@ func GenerateShotClipsSequential(ctx context.Context, db *sql.DB, v adapter.Vend
 		core.ReportStepProgress(ctx, donePct,
 			fmt.Sprintf("第 %d 镜视频完成 (%d/%d)", shotNum, i+1, total))
 
-		local, ok := fsutil.PublicURLToLocal(outputDir, clip.FileURL)
-		if !ok {
-			continuityURL = ""
-			continue
+		// Prepare the continuity frame only when the NEXT shot is a same-scene link.
+		continuityURL = ""
+		if i+1 < total && linkByShot[ordered[i+1]] == task.SceneLinkContinuous {
+			local, ok := fsutil.PublicURLToLocal(outputDir, clip.FileURL)
+			if !ok {
+				continue
+			}
+			nextURL, pubErr := ContinuityFrameFromClip(ctx, v, outputDir, local, workDir, shotNum)
+			if pubErr != nil {
+				logger.CtxTrace(ctx, "continuity frame failed shot=%d: %v", shotNum, pubErr)
+				continue
+			}
+			continuityURL = nextURL
 		}
-		nextURL, pubErr := ContinuityFrameFromClip(ctx, v, outputDir, local, workDir, shotNum)
-		if pubErr != nil {
-			logger.CtxTrace(ctx, "continuity frame failed shot=%d: %v", shotNum, pubErr)
-			continuityURL = ""
-			continue
-		}
-		continuityURL = nextURL
 	}
 
 	if len(outcome.Clips) == 0 {

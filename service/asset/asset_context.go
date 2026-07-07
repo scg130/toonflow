@@ -11,27 +11,15 @@ import (
 
 var reCharacterIDTag = regexp.MustCompile(`(?i)character_id:\s*([^,]+)`)
 
-var inanimateAssetKeywords = []string{
-	"树桩", "stump", "残躯", "尸骸", " corpse", "枯木", "树干", "石碑", "雕像", "statue",
-	"残骸", "器物", "灵根", "宝石", "gem", "artifact", "weapon", "武器", "剑", "刀",
-	"面具", "mask", "道具", "prop", "inanimate",
-}
-
-// IsInanimateAsset reports props and misclassified role entries that must not use character_id.
+// IsInanimateAsset reports assets that must not use character_id.
+//
+// The structured asset type is authoritative: only props are inanimate. Roles are
+// always treated as characters. There is deliberately no keyword/name/description
+// matching here — such heuristics are unreliable (e.g. a role description containing
+// "no mask" would falsely match "mask"). If an asset is mislabelled, fix its type
+// at the source (extraction) rather than guessing from text.
 func IsInanimateAsset(a ProjectAsset) bool {
-	if a.Type == "prop" {
-		return true
-	}
-	if a.Type == "scene" {
-		return false
-	}
-	blob := strings.ToLower(strings.TrimSpace(a.Name + " " + a.Desc))
-	for _, kw := range inanimateAssetKeywords {
-		if strings.Contains(blob, strings.ToLower(kw)) {
-			return true
-		}
-	}
-	return false
+	return a.Type == "prop"
 }
 
 func assetUsesCharacterID(a ProjectAsset) bool {
@@ -142,7 +130,12 @@ func ShotHasHumanRole(shot task.StoryboardItem, assets []ProjectAsset) bool {
 
 func SanitizeStoryboardItemPrompt(shot task.StoryboardItem, assets []ProjectAsset) task.StoryboardItem {
 	shot.Prompt = StripNonRoleCharacterIDs(shot.Prompt, assets)
-	if !shotHasRoleAsset(shot, assets) {
+	if shotHasRoleAsset(shot, assets) {
+		// Self-heal: a shot that genuinely has a human role must not carry stale
+		// "<name> inanimate prop, no human character" injections (e.g. baked in
+		// before a classification fix). Drop them so regeneration renders the role.
+		shot.Prompt = stripInanimateInjections(shot.Prompt)
+	} else {
 		shot.Prompt = stripAllCharacterIDs(shot.Prompt)
 		if hint := inanimateShotHint(shot, assets); hint != "" {
 			lower := strings.ToLower(shot.Prompt)
@@ -152,6 +145,29 @@ func SanitizeStoryboardItemPrompt(shot task.StoryboardItem, assets []ProjectAsse
 		}
 	}
 	return shot
+}
+
+// stripInanimateInjections removes comma/semicolon-separated segments that declare
+// the subject inanimate or human-less. Used to clean shots that actually contain a
+// human role but were previously tagged as environment-only.
+func stripInanimateInjections(prompt string) string {
+	if strings.TrimSpace(prompt) == "" {
+		return prompt
+	}
+	fields := strings.FieldsFunc(prompt, func(r rune) bool { return r == ',' || r == ';' })
+	kept := make([]string, 0, len(fields))
+	for _, f := range fields {
+		s := strings.TrimSpace(f)
+		if s == "" {
+			continue
+		}
+		l := strings.ToLower(s)
+		if strings.Contains(l, "inanimate") || strings.Contains(l, "no human character") {
+			continue
+		}
+		kept = append(kept, s)
+	}
+	return strings.Join(kept, ", ")
 }
 
 // SanitizeStoryboardItemForImage loads project assets and sanitizes shot prompt before image gen.
@@ -197,10 +213,7 @@ func nonRoleCharacterIDKeys(assets []ProjectAsset) map[string]bool {
 }
 
 func usesCharacterIDKey(a ProjectAsset) bool {
-	if a.Type == "scene" || a.Type == "prop" {
-		return true
-	}
-	return IsInanimateAsset(a)
+	return a.Type == "scene" || a.Type == "prop"
 }
 
 func isNonRoleCharacterID(val string, nonRole map[string]bool) bool {
@@ -257,16 +270,12 @@ func inanimateShotHint(shot task.StoryboardItem, assets []ProjectAsset) string {
 	matched := MatchShotAssets(shot, assets)
 	var parts []string
 	for _, a := range matched {
-		if IsInanimateAsset(a) || a.Type == "prop" || a.Type == "scene" {
+		if a.Type == "prop" || a.Type == "scene" {
 			name := strings.TrimSpace(a.Name)
 			if name == "" {
 				continue
 			}
-			kind := a.Type
-			if IsInanimateAsset(a) && a.Type == "role" {
-				kind = "prop"
-			}
-			parts = append(parts, name+" inanimate "+kind+", no human character")
+			parts = append(parts, name+" inanimate "+a.Type+", no human character")
 		}
 	}
 	if len(parts) > 0 {

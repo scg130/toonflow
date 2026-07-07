@@ -29,14 +29,14 @@ type (
 )
 
 var (
-	AnalyzeSourceEvents      = svcproject.AnalyzeSourceEvents
-	SplitEpisodes            = svcproject.SplitEpisodes
-	RefreshProjectStyleAnchor = svcproject.RefreshProjectStyleAnchor
-	LoadProjectStyleAnchor   = svcproject.LoadProjectStyleAnchor
-	BuildStyleAnchor         = svcproject.BuildStyleAnchor
-	BuildShotImagePrompt     = svcproject.BuildShotImagePrompt
-	ResolutionToVideoRatio   = svcproject.ResolutionToVideoRatio
-	IsContentPolicyViolation = svcproject.IsContentPolicyViolation
+	AnalyzeSourceEvents          = svcproject.AnalyzeSourceEvents
+	SplitEpisodes                = svcproject.SplitEpisodes
+	RefreshProjectStyleAnchor    = svcproject.RefreshProjectStyleAnchor
+	LoadProjectStyleAnchor       = svcproject.LoadProjectStyleAnchor
+	BuildStyleAnchor             = svcproject.BuildStyleAnchor
+	BuildShotImagePrompt         = svcproject.BuildShotImagePrompt
+	ResolutionToVideoRatio       = svcproject.ResolutionToVideoRatio
+	IsContentPolicyViolation     = svcproject.IsContentPolicyViolation
 	UserFacingImagePolicyMessage = svcproject.UserFacingImagePolicyMessage
 	SanitizeImagePromptForPolicy = svcproject.SanitizeImagePromptForPolicy
 )
@@ -50,24 +50,24 @@ func SanitizeWorkContent(text string) string { return svcagent.SanitizeWorkConte
 
 // --- asset ---
 var (
-	ExtractAssetsFromEpisode = svcasset.ExtractAssetsFromEpisode
-	CountProjectAssets       = svcasset.CountProjectAssets
-	RequireProjectAssets     = svcasset.RequireProjectAssets
-	ShotImageParams          = svcasset.ShotImageParams
+	ExtractAssetsFromEpisode       = svcasset.ExtractAssetsFromEpisode
+	CountProjectAssets             = svcasset.CountProjectAssets
+	RequireProjectAssets           = svcasset.RequireProjectAssets
+	ShotImageParams                = svcasset.ShotImageParams
 	SanitizeStoryboardItemForImage = svcasset.SanitizeStoryboardItemForImage
 )
 
 // --- storyboard ---
 var (
-	LoadStoryboardItems           = svcstoryboard.LoadStoryboardItems
-	SaveStoryboardItems           = svcstoryboard.SaveStoryboardItems
-	UpdateStoryboardShotDialogue  = svcstoryboard.UpdateStoryboardShotDialogue
-	NormalizeStoryboardItems      = svcstoryboard.NormalizeStoryboardItems
-	StoryboardFromRecentChat = svcstoryboard.StoryboardFromRecentChat
-	MergeStoryboardMedia     = svcstoryboard.MergeStoryboardMedia
-	ShotHasImage             = svcstoryboard.ShotHasImage
-	MergeShotMediaFromStore  = svcstoryboard.MergeShotMediaFromStore
-	UpdateStoryboardShotMedia = svcstoryboard.UpdateStoryboardShotMedia
+	LoadStoryboardItems          = svcstoryboard.LoadStoryboardItems
+	SaveStoryboardItems          = svcstoryboard.SaveStoryboardItems
+	UpdateStoryboardShotDialogue = svcstoryboard.UpdateStoryboardShotDialogue
+	NormalizeStoryboardItems     = svcstoryboard.NormalizeStoryboardItems
+	StoryboardFromRecentChat     = svcstoryboard.StoryboardFromRecentChat
+	MergeStoryboardMedia         = svcstoryboard.MergeStoryboardMedia
+	ShotHasImage                 = svcstoryboard.ShotHasImage
+	MergeShotMediaFromStore      = svcstoryboard.MergeShotMediaFromStore
+	UpdateStoryboardShotMedia    = svcstoryboard.UpdateStoryboardShotMedia
 )
 
 // --- media ---
@@ -80,37 +80,37 @@ type (
 const DefaultShotDurationSec = svcmedia.DefaultShotDurationSec
 
 var (
-	ListShotClips              = svcmedia.ListShotClips
-	GenerateShotClip           = svcmedia.GenerateShotClip
+	ListShotClips               = svcmedia.ListShotClips
+	GenerateShotClip            = svcmedia.GenerateShotClip
 	GenerateShotClipsSequential = svcmedia.GenerateShotClipsSequential
-	BatchVideoTaskTimeout      = svcmedia.BatchVideoTaskTimeout
-	SelectShotClip             = svcmedia.SelectShotClip
-	DeleteShotClip             = svcmedia.DeleteShotClip
-	ComposeShotClip            = svcmedia.ComposeShotClip
-	BatchComposeShots          = svcmedia.BatchComposeShots
-	RequestShotImageWithRetry  = svcmedia.RequestShotImageWithRetry
-	SortShotNumbers            = svcmedia.SortShotNumbers
+	BatchVideoTaskTimeout       = svcmedia.BatchVideoTaskTimeout
+	SelectShotClip              = svcmedia.SelectShotClip
+	DeleteShotClip              = svcmedia.DeleteShotClip
+	ComposeShotClip             = svcmedia.ComposeShotClip
+	BatchComposeShots           = svcmedia.BatchComposeShots
+	RequestShotImageWithRetry   = svcmedia.RequestShotImageWithRetry
+	SortShotNumbers             = svcmedia.SortShotNumbers
 )
 
 // --- timeline ---
 type (
-	TimelineEdit      = svctimeline.TimelineEdit
-	NarrationSegment  = svctimeline.NarrationSegment
-	NarrationPlan     = svctimeline.NarrationPlan
+	TimelineEdit     = svctimeline.TimelineEdit
+	NarrationSegment = svctimeline.NarrationSegment
+	NarrationPlan    = svctimeline.NarrationPlan
 )
 
 var (
-	LoadTimeline            = svctimeline.LoadTimeline
-	SaveTimeline            = svctimeline.SaveTimeline
-	ReloadTimelineFromClips = svctimeline.ReloadTimelineFromClips
-	ClearTimeline           = svctimeline.ClearTimeline
-	ExportTimeline          = svctimeline.ExportTimeline
-	GenerateNarrationPlan   = svctimeline.GenerateNarrationPlan
-	SynthesizeNarrationPlan = svctimeline.SynthesizeNarrationPlan
-	ApplyNarrationToTimeline = svctimeline.ApplyNarrationToTimeline
-	NormalizeNarrationSegments = svctimeline.NormalizeNarrationSegments
-	TimelineVideoDuration       = svctimeline.TimelineVideoDuration
-	TimelineExportDuration      = svctimeline.TimelineExportDuration
+	LoadTimeline                   = svctimeline.LoadTimeline
+	SaveTimeline                   = svctimeline.SaveTimeline
+	ReloadTimelineFromClips        = svctimeline.ReloadTimelineFromClips
+	ClearTimeline                  = svctimeline.ClearTimeline
+	ExportTimeline                 = svctimeline.ExportTimeline
+	GenerateNarrationPlan          = svctimeline.GenerateNarrationPlan
+	SynthesizeNarrationPlan        = svctimeline.SynthesizeNarrationPlan
+	ApplyNarrationToTimeline       = svctimeline.ApplyNarrationToTimeline
+	NormalizeNarrationSegments     = svctimeline.NormalizeNarrationSegments
+	TimelineVideoDuration          = svctimeline.TimelineVideoDuration
+	TimelineExportDuration         = svctimeline.TimelineExportDuration
 	ResolveNarrationTargetDuration = svctimeline.ResolveNarrationTargetDuration
 )
 
@@ -118,10 +118,10 @@ const DefaultNarrationVoice = svcvoice.DefaultNarrationVoice
 
 // --- voice ---
 var (
-	EdgeVoiceCatalog       = svcvoice.EdgeVoiceCatalog
-	AssignCharacterVoices  = svcvoice.AssignCharacterVoices
-	LookupCharacterVoice   = svcvoice.LookupCharacterVoice
-	RolesHaveVoices        = svcvoice.RolesHaveVoices
+	EdgeVoiceCatalog      = svcvoice.EdgeVoiceCatalog
+	AssignCharacterVoices = svcvoice.AssignCharacterVoices
+	LookupCharacterVoice  = svcvoice.LookupCharacterVoice
+	RolesHaveVoices       = svcvoice.RolesHaveVoices
 )
 
 // --- pipeline ---
@@ -150,23 +150,26 @@ var (
 
 // --- core ---
 type ProgressFunc = svccore.ProgressFunc
+type PipelineStatus = svccore.PipelineStatus
 
 var (
-	WithProgress            = svccore.WithProgress
-	WithStreamDelta         = svccore.WithStreamDelta
-	WithStreamEnd           = svccore.WithStreamEnd
-	WithStepProgress        = svccore.WithStepProgress
-	WithPauseGate           = svccore.WithPauseGate
-	InheritPipelineContext  = svccore.InheritPipelineContext
-	ReportProgress          = svccore.ReportProgress
-	ReportStepProgress      = svccore.ReportStepProgress
-	WaitIfPaused            = svccore.WaitIfPaused
-	NewPauseGate            = svccore.NewPauseGate
-	EnrichTaskMeta          = svccore.EnrichTaskMeta
-	MarkTaskFailed          = svccore.MarkTaskFailed
-	UserMessage             = svccore.UserMessage
-	UserMessageWithLogID    = svccore.UserMessageWithLogID
-	UserMessageFromContext  = svccore.UserMessageFromContext
-	AppendLogID             = svccore.AppendLogID
-	UserMessageText         = svccore.UserMessageText
+	WithProgress              = svccore.WithProgress
+	WithPipelineStatus        = svccore.WithPipelineStatus
+	PipelineStatusFromContext = svccore.PipelineStatusFromContext
+	WithStreamDelta           = svccore.WithStreamDelta
+	WithStreamEnd             = svccore.WithStreamEnd
+	WithStepProgress          = svccore.WithStepProgress
+	WithPauseGate             = svccore.WithPauseGate
+	InheritPipelineContext    = svccore.InheritPipelineContext
+	ReportProgress            = svccore.ReportProgress
+	ReportStepProgress        = svccore.ReportStepProgress
+	WaitIfPaused              = svccore.WaitIfPaused
+	NewPauseGate              = svccore.NewPauseGate
+	EnrichTaskMeta            = svccore.EnrichTaskMeta
+	MarkTaskFailed            = svccore.MarkTaskFailed
+	UserMessage               = svccore.UserMessage
+	UserMessageWithLogID      = svccore.UserMessageWithLogID
+	UserMessageFromContext    = svccore.UserMessageFromContext
+	AppendLogID               = svccore.AppendLogID
+	UserMessageText           = svccore.UserMessageText
 )

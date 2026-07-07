@@ -107,9 +107,18 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 		return nil, err
 	}
 	imageInput := storyboardImage
-	if opts != nil && adapter.IsCDNImageURL(opts.ContinuityImageURL) {
+	switch {
+	case opts != nil && adapter.IsCDNImageURL(opts.ContinuityImageURL):
+		// Caller (batch) supplied the previous shot's last frame.
 		imageInput = opts.ContinuityImageURL
 		logger.CtxTrace(ctx, "shot video continuity frame shot=%d url=%s", shotNumber, imageInput)
+	case shot.SceneLink == task.SceneLinkContinuous:
+		// Same-scene shot regenerated on its own: derive continuity from the
+		// previous shot's selected clip so it still flows seamlessly.
+		if url := resolvePrevShotContinuityFrame(ctx, db, v, outputDir, projectID, episodeID, shotNumber); url != "" {
+			imageInput = url
+			logger.CtxTrace(ctx, "shot video derived continuity frame shot=%d url=%s", shotNumber, imageInput)
+		}
 	}
 	if imageInput == "" {
 		return nil, fmt.Errorf("请先生成第 %d 镜图片后再生成视频", shotNumber)
@@ -163,6 +172,34 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 	best.IsSelected = true
 	logger.CtxTrace(ctx, "shot video done shot=%d version=%d coherence=%.1f", shotNumber, best.Version, best.CoherenceScore)
 	return best, nil
+}
+
+// resolvePrevShotContinuityFrame extracts and publishes the previous shot's
+// selected clip last frame as a CDN URL for same-scene I2V continuity. Returns
+// "" (caller falls back to this shot's own image) if unavailable.
+func resolvePrevShotContinuityFrame(ctx context.Context, db *sql.DB, v adapter.Vendor, outputDir, projectID, episodeID string, shotNumber int) string {
+	if shotNumber <= 1 {
+		return ""
+	}
+	prev, err := SelectedClipForShot(db, projectID, episodeID, shotNumber-1)
+	if err != nil || prev == nil || prev.FileURL == "" {
+		return ""
+	}
+	local, ok := fsutil.PublicURLToLocal(outputDir, prev.FileURL)
+	if !ok {
+		return ""
+	}
+	workDir, err := os.MkdirTemp(filepath.Join(outputDir, "clips", projectID, episodeID), "cont_")
+	if err != nil {
+		return ""
+	}
+	defer os.RemoveAll(workDir)
+	url, err := ContinuityFrameFromClip(ctx, v, outputDir, local, workDir, shotNumber)
+	if err != nil {
+		logger.CtxTrace(ctx, "derive continuity frame failed shot=%d: %v", shotNumber, err)
+		return ""
+	}
+	return url
 }
 
 func derefClips(ptrs []*ShotClip) []ShotClip {

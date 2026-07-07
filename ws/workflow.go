@@ -180,7 +180,7 @@ func (wfs *WorkflowService) runWorkflow(cm *ConnManager, userID string, req *WSR
 	}
 
 	v := wfs.resolveVendor()
-		agent := &service.AgentChat{DB: wfs.DB, Vendor: v, SkillMgr: wfs.SkillMgr, OutputDir: wfs.OutputDir}
+	agent := &service.AgentChat{DB: wfs.DB, Vendor: v, SkillMgr: wfs.SkillMgr, OutputDir: wfs.OutputDir}
 	intent := &service.ChatActionIntent{Type: action, Params: req.WorkflowParams}
 	resp, err := agent.RunAction(ctx, userID, req.ProjectID, req.EpisodeID, "general", intent)
 	if err != nil {
@@ -263,18 +263,21 @@ func (wfs *WorkflowService) runEpisodePipeline(ctx context.Context, cm *ConnMana
 	}()
 
 	runCtx = service.WithPauseGate(runCtx, gate)
+	liveStatus := &service.PipelineStatus{}
+	runCtx = service.WithPipelineStatus(runCtx, liveStatus)
 	_ = service.InitPipelineUIState(wfs.DB, req.ProjectID, req.EpisodeID,
 		"🚀 已开始：策划 → 分镜 → 资产 → 生图 → 生视频\n（可在输入框上方暂停 / 继续）")
 	runCtx = service.WithProgress(runCtx, func(step string, progress float32, message string) {
 		_ = service.AppendPipelineUIProgress(wfs.DB, req.ProjectID, req.EpisodeID, progress, message)
+		snap := liveStatus.Snapshot()
 		cm.Broadcast(WSResponse{
 			Code: 0, Msg: message, Step: "chat_progress", Progress: progress,
 			Data: MustMarshalJSON(map[string]interface{}{
 				"log_id": logID, "project_id": req.ProjectID, "episode_id": req.EpisodeID,
-				"action": step, "pipeline": true,
+				"action": step, "pipeline": true, "status": snap,
 			}),
 		})
-		wfs.broadcastEpisodePipeline(cm, req, logID, "running", progress, message)
+		wfs.broadcastEpisodePipelineStatus(cm, req, logID, "running", progress, message, snap)
 	})
 	wfs.broadcastEpisodePipeline(cm, req, logID, "running", 2,
 		fmt.Sprintf("开始执行分集流水线（待执行 %d 步）", len(pending)))
@@ -342,11 +345,11 @@ func (wfs *WorkflowService) finishEpisodePipeline(cm *ConnManager, req *WSReques
 	_ = service.FinalizePipelineUIState(wfs.DB, req.ProjectID, req.EpisodeID, "✅ "+out.reply)
 	wfs.broadcastEpisodePipeline(cm, req, logID, "done", 100, out.reply)
 	data := map[string]interface{}{
-		"log_id":      logID,
-		"project_id":  req.ProjectID,
-		"episode_id":  req.EpisodeID,
-		"action":      "run_episode_pipeline",
-		"reply":       out.reply,
+		"log_id":     logID,
+		"project_id": req.ProjectID,
+		"episode_id": req.EpisodeID,
+		"action":     "run_episode_pipeline",
+		"reply":      out.reply,
 	}
 	for k, v := range out.extra {
 		data[k] = v
@@ -358,17 +361,22 @@ func (wfs *WorkflowService) finishEpisodePipeline(cm *ConnManager, req *WSReques
 }
 
 func (wfs *WorkflowService) broadcastEpisodePipeline(cm *ConnManager, req *WSRequest, logID, state string, progress float32, message string) {
+	wfs.broadcastEpisodePipelineStatus(cm, req, logID, state, progress, message, nil)
+}
+
+func (wfs *WorkflowService) broadcastEpisodePipelineStatus(cm *ConnManager, req *WSRequest, logID, state string, progress float32, message string, status map[string]interface{}) {
 	if cm == nil {
 		return
 	}
 	cm.Broadcast(WSResponse{
 		Code: 0, Msg: message, Step: "episode_pipeline", Progress: progress,
 		Data: MustMarshalJSON(map[string]interface{}{
-			"log_id":      logID,
-			"project_id":  req.ProjectID,
-			"episode_id":  req.EpisodeID,
-			"state":       state,
-			"pipeline":    true,
+			"log_id":     logID,
+			"project_id": req.ProjectID,
+			"episode_id": req.EpisodeID,
+			"state":      state,
+			"pipeline":   true,
+			"status":     status,
 		}),
 	})
 }

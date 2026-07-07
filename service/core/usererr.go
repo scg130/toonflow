@@ -103,3 +103,36 @@ func isTimeoutError(lower string) bool {
 		strings.Contains(lower, "timeout exceeded while awaiting headers") ||
 		strings.Contains(lower, "i/o timeout")
 }
+
+// IsRetryableError reports whether an error is transient (upstream/network blip,
+// timeout, rate limit, 5xx) and the operation is worth retrying automatically.
+// Non-transient failures (auth, content policy, bad request, "please generate X
+// first") return false so the caller aborts instead of looping.
+func IsRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	// Never auto-retry auth or content-policy problems — retrying can't fix them.
+	if strings.Contains(lower, "401") || strings.Contains(lower, "403") ||
+		strings.Contains(lower, "invalid api key") || strings.Contains(lower, "incorrect api key") ||
+		strings.Contains(lower, "无效的令牌") || strings.Contains(lower, "content policy") ||
+		strings.Contains(lower, "内容审核") || strings.Contains(lower, "违规") {
+		return false
+	}
+	if isTimeoutError(lower) {
+		return true
+	}
+	if strings.Contains(lower, "超时") || strings.Contains(lower, "timeout") ||
+		strings.Contains(lower, "timed out") || strings.Contains(lower, "upstream_error") ||
+		strings.Contains(lower, "connection reset") || strings.Contains(lower, "connection refused") ||
+		strings.Contains(lower, "request failed") || strings.Contains(lower, "eof") ||
+		strings.Contains(lower, "暂时不可用") || strings.Contains(lower, "过于频繁") {
+		return true
+	}
+	return strings.Contains(lower, "error 408") || strings.Contains(lower, "error 425") ||
+		strings.Contains(lower, "error 429") || strings.Contains(lower, " 429") ||
+		strings.Contains(lower, "error 500") || strings.Contains(lower, "error 502") ||
+		strings.Contains(lower, "error 503") || strings.Contains(lower, "error 504") ||
+		strings.Contains(lower, " 500") || strings.Contains(lower, " 502") || strings.Contains(lower, " 503")
+}

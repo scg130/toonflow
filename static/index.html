@@ -77,6 +77,19 @@
             <span class="wb-chat-header-title">AI 创作助手</span>
             <button class="btn btn-sm btn-outline" id="btn-wb-chat-clear" type="button" title="清除本集本地聊天记录">清除记录</button>
           </div>
+          <div id="wb-pipeline-live" class="wb-pipeline-live" style="display:none;">
+            <div class="wb-pipeline-live-head">
+              <span class="wb-pipeline-live-dot"></span>
+              <span id="wb-pipeline-live-title" class="wb-pipeline-live-title">流水线执行中</span>
+            </div>
+            <div class="wb-pipeline-live-grid">
+              <div class="wb-pipeline-live-cell"><span class="wb-pll-label">分集</span><span id="wb-pll-episode" class="wb-pll-value">—</span></div>
+              <div class="wb-pipeline-live-cell"><span class="wb-pll-label">环节</span><span id="wb-pll-step" class="wb-pll-value">—</span></div>
+              <div class="wb-pipeline-live-cell"><span class="wb-pll-label">分镜</span><span id="wb-pll-shot" class="wb-pll-value">—</span></div>
+              <div class="wb-pipeline-live-cell"><span class="wb-pll-label">重试</span><span id="wb-pll-retry" class="wb-pll-value">无</span></div>
+            </div>
+            <div id="wb-pll-msg" class="wb-pipeline-live-msg"></div>
+          </div>
           <div id="wb-chat-progress" class="wb-chat-progress" style="display:none;">
             <div class="wb-chat-progress-bar"><div id="wb-chat-progress-fill"></div></div>
             <div id="wb-chat-progress-text" class="wb-chat-progress-text"></div>

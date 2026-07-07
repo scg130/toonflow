@@ -57,3 +57,34 @@ func TestAppendLogID_skipsDuplicate(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestIsRetryableError(t *testing.T) {
+	retryable := []string{
+		"shot 11: image api request failed: context deadline exceeded",
+		"批量生图超时",
+		"agnes chat error 404: {\"type\":\"upstream_error\",\"code\":\"404\"}",
+		"agnes video error 503: service unavailable",
+		"AI 服务请求过于频繁，请稍后重试",
+		"connection reset by peer",
+	}
+	for _, m := range retryable {
+		if !IsRetryableError(fmt.Errorf("%s", m)) {
+			t.Errorf("expected retryable: %q", m)
+		}
+	}
+	notRetryable := []string{
+		"agnes chat error 401: invalid api key",
+		"agnes image error 403: forbidden",
+		"内容审核未通过：违规",
+		"请先生成分镜",
+		"unknown step: foo",
+	}
+	for _, m := range notRetryable {
+		if IsRetryableError(fmt.Errorf("%s", m)) {
+			t.Errorf("expected NOT retryable: %q", m)
+		}
+	}
+	if IsRetryableError(nil) {
+		t.Error("nil should not be retryable")
+	}
+}

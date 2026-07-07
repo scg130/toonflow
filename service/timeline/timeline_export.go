@@ -9,9 +9,36 @@ import (
 
 	"toonflow/service/internal/ffmpeg"
 	"toonflow/service/internal/fsutil"
+	"toonflow/task"
 )
 
 const defaultExportFPS = 24.0
+
+// continuousCutDur is the near-zero xfade used at a same-scene boundary so a
+// mixed timeline still butt-joins continuous shots imperceptibly.
+const continuousCutDur = 0.04
+
+// timelineTransitionForShot maps an incoming shot's scene_link + storyboard
+// transition style to a timeline boundary transition. Continuous shots produce
+// no transition (seamless); scene changes get a visible effect.
+func timelineTransitionForShot(sceneLink, transitionStyle string) string {
+	if sceneLink == task.SceneLinkContinuous {
+		return "none"
+	}
+	s := strings.ToLower(strings.TrimSpace(transitionStyle))
+	switch {
+	case strings.Contains(s, "black"), strings.Contains(s, "dip"),
+		strings.Contains(s, "闪回"), strings.Contains(s, "淡出"), strings.Contains(s, "淡入淡出"):
+		return "dip"
+	case strings.Contains(s, "wipe"), strings.Contains(s, "擦"):
+		return "wipe"
+	case strings.Contains(s, "slide"), strings.Contains(s, "滑"):
+		return "slide"
+	default:
+		// soft dissolve / match cut / unspecified scene change
+		return "fade"
+	}
+}
 
 // NormalizeTimelineEdit fills defaults for export settings and clip fields.
 func NormalizeTimelineEdit(tl *TimelineEdit) {
@@ -33,7 +60,7 @@ func NormalizeTimelineEdit(tl *TimelineEdit) {
 func DefaultExportSettings() *TimelineExportSettings {
 	return &TimelineExportSettings{
 		DefaultTransition:  "fade",
-		TransitionDuration: 0.15,
+		TransitionDuration: 0.4,
 		TrimHeadFrames:     2,
 		TrimTailFrames:     2,
 		GlobalBrightness:   0,
@@ -289,11 +316,15 @@ func concatWithXfade(parts []string, durations []float64, transitions []string, 
 		if i-1 < len(transitions) {
 			trans = transitions[i-1]
 		}
-		if strings.EqualFold(trans, "none") {
-			// fall back to hard concat for remaining — simplify: use fade with shorter dur
-			trans = "fade"
+		// Same-scene ("none") boundaries use a near-zero xfade so continuous shots
+		// butt-join imperceptibly; real scene changes use the configured duration.
+		effDur := fadeSec
+		name := xfadeTransitionName(trans)
+		if trans == "" || strings.EqualFold(trans, "none") {
+			effDur = continuousCutDur
+			name = "fade"
 		}
-		offset := cumulative - fadeSec
+		offset := cumulative - effDur
 		if offset < 0 {
 			offset = 0
 		}
@@ -302,9 +333,9 @@ func concatWithXfade(parts []string, durations []float64, transitions []string, 
 			outLabel = "[vout]"
 		}
 		filters = append(filters, fmt.Sprintf("%s[%d:v]xfade=transition=%s:duration=%.3f:offset=%.3f%s",
-			prev, i, xfadeTransitionName(trans), fadeSec, offset, outLabel))
+			prev, i, name, effDur, offset, outLabel))
 		prev = outLabel
-		cumulative += durations[i] - fadeSec
+		cumulative += durations[i] - effDur
 	}
 	args = append(args, "-filter_complex", strings.Join(filters, ";"), "-map", "[vout]",
 		"-c:v", "libx264", "-pix_fmt", "yuv420p", dest)

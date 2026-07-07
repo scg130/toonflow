@@ -47,6 +47,7 @@ func PromptForImageAttempt(basePrompt string, attempt int) string {
 
 // RetryUntilSuccess repeats fn until it returns nil or ctx is cancelled.
 func RetryUntilSuccess(ctx context.Context, label string, fn func(attempt int) error) error {
+	status := core.PipelineStatusFromContext(ctx)
 	for attempt := 0; ; attempt++ {
 		if err := core.WaitIfPaused(ctx); err != nil {
 			return err
@@ -54,6 +55,7 @@ func RetryUntilSuccess(ctx context.Context, label string, fn func(attempt int) e
 		err := fn(attempt)
 		if err == nil {
 			if attempt > 0 {
+				status.ClearRetry()
 				logger.CtxTrace(ctx, "%s ok after %d retries", label, attempt)
 			}
 			return nil
@@ -63,6 +65,16 @@ func RetryUntilSuccess(ctx context.Context, label string, fn func(attempt int) e
 		}
 		delay := RetryBackoffDelay(attempt + 1)
 		logger.CtxTrace(ctx, "%s attempt=%d failed, retry in %s: %v", label, attempt+1, delay, err)
+		// Surface the retry to the live progress box (0 max = unbounded).
+		if status != nil {
+			status.SetRetry(attempt+1, 0, core.UserMessage(err))
+			if seq, total := status.ShotProgress(); total > 0 {
+				localPct := float32(seq-1) / float32(total) * 100
+				msg := fmt.Sprintf("第 %d 镜自动重试中（第 %d 次，%s 后）：%s",
+					status.CurrentShot(), attempt+1, delay, core.UserMessage(err))
+				core.ReportStepProgress(ctx, localPct, msg)
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

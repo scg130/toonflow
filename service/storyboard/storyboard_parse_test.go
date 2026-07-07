@@ -8,6 +8,32 @@ import (
 	"toonflow/task"
 )
 
+func TestNormalizeStoryboardItems_sceneLink(t *testing.T) {
+	items := []task.StoryboardItem{
+		{ShotNumber: 1, Scene: "村口", Description: "开场", Prompt: "p"},                         // first → transition
+		{ShotNumber: 2, Scene: "村口", Description: "顺接", Prompt: "p"},                         // same scene, empty → continuous
+		{ShotNumber: 3, Scene: "战场", Description: "换场", Prompt: "p"},                         // scene changed → transition
+		{ShotNumber: 4, Scene: "战场", Description: "闪回", Prompt: "p", SceneLink: "transition"}, // same scene but model forces transition (flashback)
+		{ShotNumber: 5, Scene: "战场", Description: "续", Prompt: "p", SceneLink: "续接"},          // model says continuous (zh)
+	}
+	out := NormalizeStoryboardItems(items)
+	want := []string{
+		task.SceneLinkTransition,
+		task.SceneLinkContinuous,
+		task.SceneLinkTransition,
+		task.SceneLinkTransition,
+		task.SceneLinkContinuous,
+	}
+	if len(out) != len(want) {
+		t.Fatalf("expected %d items, got %d", len(want), len(out))
+	}
+	for i, w := range want {
+		if out[i].SceneLink != w {
+			t.Fatalf("shot %d scene_link = %q, want %q", out[i].ShotNumber, out[i].SceneLink, w)
+		}
+	}
+}
+
 func TestParseStoryboardResponse_objectWrapper(t *testing.T) {
 	// JSON-mode returns an object wrapper.
 	obj := `{"shots":[{"shot_number":1,"scene":"虚空","description":"焦黑树桩","duration":4,"dialogue":"石昊：走了","prompt":"wide"},{"shot_number":2,"scene":"虚空","description":"石昊起身","duration":3,"prompt":"close"}]}`

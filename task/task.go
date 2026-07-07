@@ -69,10 +69,26 @@ type StoryboardItem struct {
 	Lighting       string  `json:"lighting,omitempty"`        // 光照参数，全剧统一
 	ActionContinue string  `json:"action_continue,omitempty"` // 承接上镜动作节点
 	Transition     string  `json:"transition,omitempty"`      // 与下镜衔接方式
+	SceneLink      string  `json:"scene_link,omitempty"`      // 与上一镜关系: continuous(同场景续接) | transition(转场/换场景)
 	Dialogue       string  `json:"dialogue,omitempty"`        // 对白（说话人：台词）
 	AssetIDs       []int   `json:"asset_ids,omitempty"`
 	ImageURL       string  `json:"image_url,omitempty"`
 	ImageRemoteURL string  `json:"image_remote_url,omitempty"` // Agnes CDN, e.g. platform-outputs.agnes-ai.space (~24h)
+}
+
+// SceneLink values describe how a shot connects to the previous shot.
+const (
+	// SceneLinkContinuous: same scene, seamless continuation — chain the previous
+	// shot's last frame into this shot's image-to-video, no transition at the cut.
+	SceneLinkContinuous = "continuous"
+	// SceneLinkTransition: a new scene / hard cut — render from this shot's own
+	// image and apply a visible transition at the boundary.
+	SceneLinkTransition = "transition"
+)
+
+// IsContinuousLink reports whether this shot continues the previous shot's scene.
+func (s StoryboardItem) IsContinuousLink() bool {
+	return s.SceneLink == SceneLinkContinuous
 }
 
 // ImageArtifact represents a generated image for one shot.

@@ -24,6 +24,7 @@ var (
 // NormalizeStoryboardItems fills defaults and fixes shot numbers.
 func NormalizeStoryboardItems(items []task.StoryboardItem) []task.StoryboardItem {
 	out := make([]task.StoryboardItem, 0, len(items))
+	prevScene := ""
 	for i, it := range items {
 		if strings.TrimSpace(it.Description) == "" && strings.TrimSpace(it.Prompt) == "" && strings.TrimSpace(it.Scene) == "" {
 			continue
@@ -46,9 +47,49 @@ func NormalizeStoryboardItems(items []task.StoryboardItem) []task.StoryboardItem
 			it.Camera = "固定镜头"
 		}
 		it.Dialogue = strings.TrimSpace(it.Dialogue)
+		it.SceneLink = resolveSceneLink(it.SceneLink, it.Scene, prevScene, len(out) == 0)
+		prevScene = strings.TrimSpace(it.Scene)
 		out = append(out, it)
 	}
 	return out
+}
+
+// NormalizeSceneLink maps a model-provided scene-link value to a canonical enum.
+// Returns "" when the value is unrecognized so the caller can infer a default.
+func NormalizeSceneLink(raw string) string {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	if s == "" {
+		return ""
+	}
+	switch {
+	case strings.Contains(s, "continu"), strings.Contains(s, "seamless"),
+		strings.Contains(s, "same scene"), strings.Contains(s, "carry"),
+		strings.Contains(s, "续接"), strings.Contains(s, "衔接"),
+		strings.Contains(s, "同场景"), strings.Contains(s, "顺接"):
+		return task.SceneLinkContinuous
+	case strings.Contains(s, "transition"), strings.Contains(s, "cut"),
+		strings.Contains(s, "new scene"), strings.Contains(s, "转场"),
+		strings.Contains(s, "换场"), strings.Contains(s, "切换"),
+		strings.Contains(s, "切镜"):
+		return task.SceneLinkTransition
+	}
+	return ""
+}
+
+// resolveSceneLink returns the canonical scene link, inferring from scene changes
+// when the model did not provide a usable value. The first shot is always a
+// transition (no previous frame to continue from).
+func resolveSceneLink(raw, scene, prevScene string, isFirst bool) string {
+	if isFirst {
+		return task.SceneLinkTransition
+	}
+	if v := NormalizeSceneLink(raw); v != "" {
+		return v
+	}
+	if strings.TrimSpace(scene) != "" && strings.TrimSpace(scene) == strings.TrimSpace(prevScene) {
+		return task.SceneLinkContinuous
+	}
+	return task.SceneLinkTransition
 }
 
 // LoadStoryboardItems reads storyboard shots from DB for an episode.

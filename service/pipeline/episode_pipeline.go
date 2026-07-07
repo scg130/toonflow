@@ -1,17 +1,17 @@
 package pipeline
 
 import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+	"time"
 	svcagent "toonflow/service/agent"
 	"toonflow/service/asset"
 	"toonflow/service/core"
 	"toonflow/service/media"
 	"toonflow/service/storyboard"
 	"toonflow/service/voice"
-	"context"
-	"database/sql"
-	"fmt"
-	"strings"
-	"time"
 
 	"toonflow/adapter"
 	"toonflow/skill"
@@ -39,11 +39,13 @@ var episodePipelineOrder = []EpisodePipelineStep{
 
 // EpisodePipelineDeps holds services needed to run the full episode flow.
 type EpisodePipelineDeps struct {
-	DB          *sql.DB
-	Vendor      adapter.Vendor
-	SkillMgr    *skill.Manager
-	Queue       *task.Queue
-	Pipeline    interface{ Execute(context.Context, *task.Task) error }
+	DB       *sql.DB
+	Vendor   adapter.Vendor
+	SkillMgr *skill.Manager
+	Queue    *task.Queue
+	Pipeline interface {
+		Execute(context.Context, *task.Task) error
+	}
 	OutputDir   string
 	TaskTimeout time.Duration
 	NotifyTask  func(t *task.Task, msg string)
@@ -287,68 +289,48 @@ func RunEpisodePipeline(ctx context.Context, deps EpisodePipelineDeps, userID, p
 			return result, fmt.Errorf("%s未能推进流水线，请检查后重试", step.Label)
 		}
 
+		status := core.PipelineStatusFromContext(ctx)
+		status.SetStep(step.ID, step.Label)
+
 		total := len(pending)
 		core.ReportProgress(ctx, step.ID, float32(pass)*12,
 			fmt.Sprintf("[待执行 %d 步] %s — 准备中...", total, step.Label))
 
+		// Auto-retry transient failures (AI timeout / upstream_error / 429 / 5xx)
+		// so a temporary blip does not abort the whole one-click run. Each retry
+		// re-plans, so only the still-missing shots are regenerated.
 		var runErr error
-		switch step.ID {
-		case "generate_skeleton", "generate_strategy", "generate_script", "generate_storyboard", "extract_assets":
-			core.ReportProgress(ctx, step.ID, float32(pass)*12+5,
-				fmt.Sprintf("正在%s...", step.Label))
-			_, _, runErr = chatAgent.ExecuteAction(ctx, userID, projectID, episodeID, "general", intentForStep(step.ID), step.Label)
-		case "assign_character_voices":
-			core.ReportProgress(ctx, step.ID, float32(pass)*12+5, "正在分配角色音色...")
-			execs := svcagent.NewAgentExecutors(deps.DB, deps.Vendor, deps.SkillMgr)
-			_, runErr = (&svcagent.VoiceAssigner{execs}).AssignVoices(ctx, projectID)
-		case "batch_generate_shot_images":
-			shots, err := shotsNeedingImages(deps.DB, projectID, episodeID)
-			if err != nil {
-				return result, err
-			}
-			if len(shots) == 0 {
-				ran[step.ID] = true
-				continue
-			}
-			core.ReportProgress(ctx, step.ID, float32(pass)*12+5,
-				fmt.Sprintf("批量生图（%d 镜）...", len(shots)))
-			stepCtx := core.WithStepProgress(ctx, step.ID, float32(pass)*12+5, 10)
-			runErr = runEpisodeBatchImages(stepCtx, deps, userID, projectID, episodeID, shots)
+		var skip bool
+		for attempt := 1; attempt <= maxEpisodeStepAttempts; attempt++ {
+			skip, runErr = executeEpisodeStep(ctx, deps, chatAgent, userID, projectID, episodeID, step, pass, result)
 			if runErr == nil {
-				result.ShotImages = len(shots)
+				status.ClearRetry()
+				break
 			}
-		case "batch_generate_shot_videos":
-			shots, err := shotsNeedingVideos(deps.DB, projectID, episodeID)
-			if err != nil {
-				return result, err
+			if !core.IsRetryableError(runErr) {
+				break
 			}
-			if len(shots) == 0 {
-				ran[step.ID] = true
-				continue
+			if attempt >= maxEpisodeStepAttempts {
+				break
 			}
-			core.ReportProgress(ctx, step.ID, float32(pass)*12+5,
-				fmt.Sprintf("串行生视频（%d 镜）...", len(shots)))
-			stepCtx := core.WithStepProgress(ctx, step.ID, float32(pass)*12+5, 10)
-			var outcome *media.BatchVideoOutcome
-			outcome, runErr = media.GenerateShotClipsSequential(stepCtx, deps.DB, deps.Vendor, deps.OutputDir, projectID, episodeID, shots)
-			if outcome != nil {
-				result.ShotVideos = len(outcome.Clips)
+			backoff := time.Duration(attempt) * episodeStepRetryBackoff
+			status.SetRetry(attempt, maxEpisodeStepAttempts-1, core.UserMessage(runErr))
+			core.ReportProgress(ctx, step.ID, float32(pass)*12+2,
+				fmt.Sprintf("%s 遇到临时错误，%s 后自动重试 (%d/%d)：%s",
+					step.Label, backoff, attempt, maxEpisodeStepAttempts-1, core.UserMessage(runErr)))
+			select {
+			case <-ctx.Done():
+				return result, ctx.Err()
+			case <-time.After(backoff):
 			}
-		case "batch_compose_shots":
-			core.ReportProgress(ctx, step.ID, float32(pass)*12+5, "批量合成对白镜头...")
-			n, _, err := media.BatchComposeShots(ctx, deps.DB, deps.Vendor, deps.OutputDir, projectID, episodeID)
-			if err != nil {
-				runErr = err
-			} else if n == 0 {
-				ran[step.ID] = true
-				continue
-			}
-		default:
-			runErr = fmt.Errorf("unknown step: %s", step.ID)
 		}
 
 		if runErr != nil {
 			return result, fmt.Errorf("%s失败: %w", step.Label, runErr)
+		}
+		if skip {
+			ran[step.ID] = true
+			continue
 		}
 		ran[step.ID] = true
 		result.StepsRun = append(result.StepsRun, step.ID)
@@ -358,6 +340,73 @@ func RunEpisodePipeline(ctx context.Context, deps EpisodePipelineDeps, userID, p
 
 	core.ReportProgress(ctx, "episode_pipeline", 100, "分集流水线全部完成")
 	return result, nil
+}
+
+// maxEpisodeStepAttempts is the total attempts (1 initial + retries) per pipeline
+// step before the one-click run gives up on a transient failure.
+const maxEpisodeStepAttempts = 4
+
+// episodeStepRetryBackoff is multiplied by the attempt number for backoff between
+// retries (attempt 1 → 20s, attempt 2 → 40s, attempt 3 → 60s).
+const episodeStepRetryBackoff = 20 * time.Second
+
+// executeEpisodeStep runs one pipeline step. skip=true means the step had nothing
+// to do (already satisfied) and should be marked done without counting as "run".
+func executeEpisodeStep(ctx context.Context, deps EpisodePipelineDeps, chatAgent *svcagent.AgentChat,
+	userID, projectID, episodeID string, step EpisodePipelineStep, pass int, result *EpisodePipelineResult) (skip bool, err error) {
+	switch step.ID {
+	case "generate_skeleton", "generate_strategy", "generate_script", "generate_storyboard", "extract_assets":
+		core.ReportProgress(ctx, step.ID, float32(pass)*12+5, fmt.Sprintf("正在%s...", step.Label))
+		_, _, err = chatAgent.ExecuteAction(ctx, userID, projectID, episodeID, "general", intentForStep(step.ID), step.Label)
+		return false, err
+	case "assign_character_voices":
+		core.ReportProgress(ctx, step.ID, float32(pass)*12+5, "正在分配角色音色...")
+		execs := svcagent.NewAgentExecutors(deps.DB, deps.Vendor, deps.SkillMgr)
+		_, err = (&svcagent.VoiceAssigner{AgentExecutors: execs}).AssignVoices(ctx, projectID)
+		return false, err
+	case "batch_generate_shot_images":
+		shots, err := shotsNeedingImages(deps.DB, projectID, episodeID)
+		if err != nil {
+			return false, err
+		}
+		if len(shots) == 0 {
+			return true, nil
+		}
+		core.ReportProgress(ctx, step.ID, float32(pass)*12+5, fmt.Sprintf("批量生图（%d 镜）...", len(shots)))
+		stepCtx := core.WithStepProgress(ctx, step.ID, float32(pass)*12+5, 10)
+		if err := runEpisodeBatchImages(stepCtx, deps, userID, projectID, episodeID, shots); err != nil {
+			return false, err
+		}
+		result.ShotImages = len(shots)
+		return false, nil
+	case "batch_generate_shot_videos":
+		shots, err := shotsNeedingVideos(deps.DB, projectID, episodeID)
+		if err != nil {
+			return false, err
+		}
+		if len(shots) == 0 {
+			return true, nil
+		}
+		core.ReportProgress(ctx, step.ID, float32(pass)*12+5, fmt.Sprintf("串行生视频（%d 镜）...", len(shots)))
+		stepCtx := core.WithStepProgress(ctx, step.ID, float32(pass)*12+5, 10)
+		outcome, err := media.GenerateShotClipsSequential(stepCtx, deps.DB, deps.Vendor, deps.OutputDir, projectID, episodeID, shots)
+		if outcome != nil {
+			result.ShotVideos = len(outcome.Clips)
+		}
+		return false, err
+	case "batch_compose_shots":
+		core.ReportProgress(ctx, step.ID, float32(pass)*12+5, "批量合成对白镜头...")
+		n, _, err := media.BatchComposeShots(ctx, deps.DB, deps.Vendor, deps.OutputDir, projectID, episodeID)
+		if err != nil {
+			return false, err
+		}
+		if n == 0 {
+			return true, nil
+		}
+		return false, nil
+	default:
+		return false, fmt.Errorf("unknown step: %s", step.ID)
+	}
 }
 
 func intentForStep(stepID string) *svcagent.ChatActionIntent {
