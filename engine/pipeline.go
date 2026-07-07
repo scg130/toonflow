@@ -321,6 +321,7 @@ func (p *Pipeline) parseScript(ctx context.Context, t *task.Task) ([]task.Storyb
 func (p *Pipeline) genImage(ctx context.Context, t *task.Task, item task.StoryboardItem, localPath string) (string, error) {
 	var refURL, assetPrompt string
 	if p.db != nil && t.ProjectID != "" {
+		item = service.SanitizeStoryboardItemForImage(p.db, t.ProjectID, item)
 		refURL, assetPrompt, _ = service.ShotImageParams(p.db, t.ProjectID, item)
 	}
 	prompt := service.BuildShotImagePrompt(item, t.Style, service.ResolutionToVideoRatio(t.Resolution), assetPrompt,

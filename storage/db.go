@@ -161,6 +161,8 @@ func (db *DB) migrate() error {
 	db.Exec(`ALTER TABLE o_project ADD COLUMN style_anchor TEXT DEFAULT ''`)
 	db.Exec(`ALTER TABLE o_shot_clip ADD COLUMN coherence_score REAL DEFAULT 0`)
 	db.Exec(`ALTER TABLE o_shot_clip ADD COLUMN coherence_json TEXT DEFAULT ''`)
+	db.Exec(`ALTER TABLE o_assets ADD COLUMN voice_id TEXT DEFAULT ''`)
+	db.Exec(`ALTER TABLE o_shot_clip ADD COLUMN composed_file_url TEXT DEFAULT ''`)
 	db.Exec(`CREATE TABLE IF NOT EXISTS o_chat_message (
 		id TEXT PRIMARY KEY,
 		project_id TEXT NOT NULL,

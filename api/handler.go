@@ -112,6 +112,9 @@ func (r *Router) Setup() *gin.Engine {
 		protected.GET("/projects/:id/episodes", r.episodesListHandler)
 		protected.POST("/projects/:id/episodes/split", r.episodesSplitHandler)
 		protected.PATCH("/projects/:id/episodes/:epId", r.episodeUpdateHandler)
+		protected.GET("/projects/:id/episodes/:epId/pipeline-plan", r.episodePipelinePlanHandler)
+
+		protected.GET("/voices", r.voicesCatalogHandler)
 
 		protected.GET("/projects/:id/agent-work", r.agentWorkHandler)
 		protected.POST("/projects/:id/agent-work/generate", r.agentWorkGenerateHandler)
@@ -129,6 +132,7 @@ func (r *Router) Setup() *gin.Engine {
 		protected.DELETE("/assets/:id", r.assetDeleteHandler)
 
 		protected.GET("/storyboards", r.storyboardsListHandler)
+		protected.PUT("/projects/:id/episodes/:epId/shots/:shotNum/storyboard", r.storyboardShotUpdateHandler)
 		protected.GET("/styles", r.stylesHandler)
 
 		protected.GET("/projects/:id/shot-clips", r.shotClipsListHandler)
@@ -136,6 +140,7 @@ func (r *Router) Setup() *gin.Engine {
 		protected.POST("/projects/:id/generate/images", r.generateImagesHandler)
 		protected.PUT("/shot-clips/:clipId/select", r.shotClipSelectHandler)
 		protected.DELETE("/shot-clips/:clipId", r.shotClipDeleteHandler)
+		protected.POST("/projects/:id/episodes/:epId/shots/:shotNum/compose", r.shotClipComposeHandler)
 		protected.GET("/projects/:id/timeline", r.timelineGetHandler)
 		protected.POST("/projects/:id/timeline/reload", r.timelineReloadHandler)
 		protected.POST("/projects/:id/timeline/clear", r.timelineClearHandler)
@@ -622,10 +627,10 @@ func (r *Router) assetsListHandler(c *gin.Context) {
 	var query string
 	var args []interface{}
 	if projectID != "" {
-		query = "SELECT id, name, desc, type, file_url FROM o_assets WHERE project_id = ? ORDER BY id"
+		query = "SELECT id, name, desc, type, file_url, COALESCE(voice_id, '') FROM o_assets WHERE project_id = ? ORDER BY id"
 		args = []interface{}{projectID}
 	} else {
-		query = "SELECT id, name, desc, type, file_url FROM o_assets WHERE user_id = ? ORDER BY id"
+		query = "SELECT id, name, desc, type, file_url, COALESCE(voice_id, '') FROM o_assets WHERE user_id = ? ORDER BY id"
 		args = []interface{}{userID}
 	}
 
@@ -640,8 +645,8 @@ func (r *Router) assetsListHandler(c *gin.Context) {
 	for rows.Next() {
 		var id int
 		var name, fileType string
-		var desc, fileURL sql.NullString
-		if err := rows.Scan(&id, &name, &desc, &fileType, &fileURL); err != nil {
+		var desc, fileURL, voiceID sql.NullString
+		if err := rows.Scan(&id, &name, &desc, &fileType, &fileURL, &voiceID); err != nil {
 			continue
 		}
 		assets = append(assets, gin.H{
@@ -650,6 +655,7 @@ func (r *Router) assetsListHandler(c *gin.Context) {
 			"desc":     desc.String,
 			"type":     fileType,
 			"file_url": fileURL.String,
+			"voice_id": voiceID.String,
 		})
 	}
 	if len(assets) == 0 {
@@ -666,6 +672,7 @@ func (r *Router) assetsCreateHandler(c *gin.Context) {
 		Desc      string `json:"desc"`
 		Type      string `json:"type"`
 		FileURL   string `json:"file_url"`
+		VoiceID   string `json:"voice_id"`
 	}
 	if err := c.ShouldBindJSON(&a); err != nil {
 		c.AbortWithError(http.StatusBadRequest, err)
@@ -681,8 +688,8 @@ func (r *Router) assetsCreateHandler(c *gin.Context) {
 	}
 
 	_, err := r.db.Exec(
-		"INSERT INTO o_assets (project_id, user_id, name, desc, type, file_url) VALUES (?, ?, ?, ?, ?, ?)",
-		a.ProjectID, userID, a.Name, a.Desc, a.Type, strings.TrimSpace(a.FileURL),
+		"INSERT INTO o_assets (project_id, user_id, name, desc, type, file_url, voice_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		a.ProjectID, userID, a.Name, a.Desc, a.Type, strings.TrimSpace(a.FileURL), strings.TrimSpace(a.VoiceID),
 	)
 	if err != nil {
 		c.AbortWithError(http.StatusInternalServerError, err)
@@ -716,6 +723,7 @@ func (r *Router) assetUpdateHandler(c *gin.Context) {
 		Desc    string `json:"desc"`
 		Type    string `json:"type"`
 		FileURL string `json:"file_url"`
+		VoiceID string `json:"voice_id"`
 	}
 	if err := c.ShouldBindJSON(&a); err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
@@ -726,8 +734,8 @@ func (r *Router) assetUpdateHandler(c *gin.Context) {
 	}
 
 	res, err := r.db.Exec(
-		"UPDATE o_assets SET name = ?, desc = ?, type = ?, file_url = ? WHERE id = ?",
-		a.Name, a.Desc, a.Type, strings.TrimSpace(a.FileURL), id,
+		"UPDATE o_assets SET name = ?, desc = ?, type = ?, file_url = ?, voice_id = ? WHERE id = ?",
+		a.Name, a.Desc, a.Type, strings.TrimSpace(a.FileURL), strings.TrimSpace(a.VoiceID), id,
 	)
 	if err != nil {
 		c.AbortWithError(http.StatusInternalServerError, err)
@@ -783,7 +791,7 @@ func (r *Router) projectAssetsListHandler(c *gin.Context) {
 
 func (r *Router) queryAssetsForProject(projectID string) []map[string]interface{} {
 	rows, err := r.db.Query(
-		"SELECT id, name, desc, type, file_url FROM o_assets WHERE project_id = ? ORDER BY id",
+		"SELECT id, name, desc, type, file_url, COALESCE(voice_id, '') FROM o_assets WHERE project_id = ? ORDER BY id",
 		projectID,
 	)
 	if err != nil {
@@ -795,8 +803,8 @@ func (r *Router) queryAssetsForProject(projectID string) []map[string]interface{
 	for rows.Next() {
 		var id int
 		var name, fileType string
-		var desc, fileURL sql.NullString
-		if err := rows.Scan(&id, &name, &desc, &fileType, &fileURL); err != nil {
+		var desc, fileURL, voiceID sql.NullString
+		if err := rows.Scan(&id, &name, &desc, &fileType, &fileURL, &voiceID); err != nil {
 			continue
 		}
 		assets = append(assets, gin.H{
@@ -805,6 +813,7 @@ func (r *Router) queryAssetsForProject(projectID string) []map[string]interface{
 			"desc":     desc.String,
 			"type":     fileType,
 			"file_url": fileURL.String,
+			"voice_id": voiceID.String,
 		})
 	}
 	if assets == nil {
@@ -996,4 +1005,24 @@ func (r *Router) downloadHandler(c *gin.Context) {
 func (r *Router) indexHandler(c *gin.Context) {
 	c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
 	c.File(filepath.Join(r.staticDir, "index.html"))
+}
+
+func (r *Router) voicesCatalogHandler(c *gin.Context) {
+	c.JSON(http.StatusOK, service.EdgeVoiceCatalog())
+}
+
+func (r *Router) episodePipelinePlanHandler(c *gin.Context) {
+	projectID := c.Param("id")
+	episodeID := c.Param("epId")
+	userID := currentUserID(c)
+	if !r.ownsProject(userID, projectID) {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	steps, err := service.ListEpisodePipelineStatus(r.db.DB, projectID, episodeID)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"steps": steps})
 }

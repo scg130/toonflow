@@ -27,6 +27,9 @@ var allowedWorkflowActions = map[string]bool{
 	"batch_generate_shot_images": true,
 	"generate_shot_video":        true,
 	"batch_generate_shot_videos": true,
+	"assign_character_voices":    true,
+	"compose_shot":               true,
+	"batch_compose_shots":        true,
 	"run_episode_pipeline":       true,
 	"delete_shot_clip":           true,
 }
@@ -41,6 +44,9 @@ var workflowNeedsEpisode = map[string]bool{
 	"batch_generate_shot_images": true,
 	"generate_shot_video":        true,
 	"batch_generate_shot_videos": true,
+	"assign_character_voices":    true,
+	"compose_shot":               true,
+	"batch_compose_shots":        true,
 	"run_episode_pipeline":       true,
 }
 
@@ -170,7 +176,7 @@ func (wfs *WorkflowService) runWorkflow(cm *ConnManager, userID string, req *WSR
 	}
 
 	v := wfs.resolveVendor()
-	agent := &service.AgentChat{DB: wfs.DB, Vendor: v, SkillMgr: wfs.SkillMgr}
+		agent := &service.AgentChat{DB: wfs.DB, Vendor: v, SkillMgr: wfs.SkillMgr, OutputDir: wfs.OutputDir}
 	intent := &service.ChatActionIntent{Type: action, Params: req.WorkflowParams}
 	resp, err := agent.RunAction(ctx, userID, req.ProjectID, req.EpisodeID, "general", intent)
 	if err != nil {

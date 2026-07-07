@@ -179,5 +179,33 @@ func (r *Router) timelineExportHandler(c *gin.Context) {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"video_url": url})
+	if err := service.SaveTimeline(r.db.DB, tl); err != nil {
+		c.AbortWithError(http.StatusInternalServerError, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"video_url":          url,
+		"duration":           tl.ExportedDuration,
+		"exported_video_url": tl.ExportedVideoURL,
+		"timeline":           tl,
+	})
+}
+
+func (r *Router) shotClipComposeHandler(c *gin.Context) {
+	projectID, ok := r.requireProject(c)
+	if !ok {
+		return
+	}
+	episodeID := c.Param("epId")
+	shotNum, err := strconv.Atoi(c.Param("shotNum"))
+	if err != nil || shotNum <= 0 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid shot number"})
+		return
+	}
+	result, err := service.ComposeShotClip(c.Request.Context(), r.db.DB, r.resolveVendor(), r.outputDir, projectID, episodeID, shotNum)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }

@@ -69,6 +69,7 @@ type Asset struct {
 	FileURL    string    `db:"file_url" json:"file_url,omitempty"`
 	ParentID   int       `db:"parent_id" json:"parent_id"`
 	Derive     string    `db:"derive" json:"derive,omitempty"`
+	VoiceID    string    `db:"voice_id" json:"voice_id,omitempty"`
 	CreatedAt  time.Time `db:"created_at" json:"created_at"`
 }
 

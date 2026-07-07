@@ -26,7 +26,7 @@ func (r *Router) narrationPlanHandler(c *gin.Context) {
 		c.AbortWithError(http.StatusInternalServerError, err)
 		return
 	}
-	plan, err := service.GenerateNarrationPlan(c.Request.Context(), r.db.DB, r.resolveVendor(), projectID, req.EpisodeID, tl)
+	plan, err := service.GenerateNarrationPlan(c.Request.Context(), r.db.DB, r.resolveVendor(), r.outputDir, projectID, req.EpisodeID, tl)
 	if err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
 		return
@@ -76,7 +76,7 @@ func (r *Router) narrationSynthesizeHandler(c *gin.Context) {
 		plan.Voice = req.Voice
 	}
 	if plan.TotalDuration <= 0 {
-		plan.TotalDuration = service.TimelineVideoDuration(tl)
+		plan.TotalDuration = service.ResolveNarrationTargetDuration(r.outputDir, tl)
 	}
 	if len(plan.Segments) == 0 {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "请先生成旁白方案"})

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI-VIDEO · 短剧 AI 创作平台</title>
-<link rel="stylesheet" href="/static/css/style.css?v=20260706c">
+<link rel="stylesheet" href="/static/css/style.css?v=20260707a">
 </head>
 <body>
 <div id="app">
@@ -64,6 +64,10 @@
           <button class="wb-nav-btn" data-wb="assets" title="资产">👤</button>
           <button class="wb-nav-btn" data-wb="video" title="视频">🎬</button>
         </nav>
+      </div>
+      <div id="wb-episode-steps" class="wb-episode-steps" style="display:none;">
+        <div class="wb-episode-steps-inner" id="wb-episode-steps-inner"></div>
+        <button class="btn btn-sm btn-primary" id="btn-run-episode-pipeline" type="button" title="自动执行本集剩余步骤">⚡ 一键执行本集</button>
       </div>
 
       <div class="workbench-layout">
@@ -144,6 +148,7 @@
                 <button class="btn btn-sm btn-outline" id="btn-gen-storyboard">🤖 AI 生成分镜</button>
                 <button class="btn btn-sm btn-outline" id="btn-gen-images">🎨 批量生成图片</button>
                 <button class="btn btn-sm btn-outline" id="btn-batch-gen-video">🎬 批量生成视频</button>
+                <button class="btn btn-sm btn-outline" id="btn-batch-compose">🗣 批量合成对白</button>
               </div>
             </div>
             <div id="storyboard-container" class="storyboard-container">
@@ -162,6 +167,7 @@
               <button class="btn btn-sm btn-outline" id="btn-add-scene">＋ 场景</button>
               <button class="btn btn-sm btn-outline" id="btn-add-prop">＋ 道具</button>
               <button class="btn btn-sm btn-outline" id="btn-extract-assets">从剧本提取资产</button>
+              <button class="btn btn-sm btn-outline" id="btn-assign-voices">🎙 自动分配音色</button>
               <span id="asset-count-label" class="asset-count-label"></span>
             </div>
             <div class="asset-filter-tabs" id="asset-filter-tabs">
@@ -183,12 +189,13 @@
               <div class="toolbar-right">
                 <button class="btn btn-sm btn-outline" id="btn-timeline-clear">🗑 清空时间线</button>
                 <button class="btn btn-sm btn-outline" id="btn-timeline-reload">↻ 重新载入分镜</button>
+                <button class="btn btn-sm btn-outline" id="btn-batch-compose-video">🗣 批量合成对白</button>
                 <button class="btn btn-sm btn-outline" id="btn-timeline-save">💾 保存时间线</button>
                 <button class="btn btn-sm btn-primary" id="btn-timeline-export">🎬 导出成片</button>
               </div>
             </div>
             <div class="video-editor">
-              <p class="video-editor-hint">载入分镜视频 → 在时间线调整裁剪/转场/调色/变速 → 生成旁白 → 导出成片。导出默认叠化转场 0.15s，并裁切 AI 片段首尾各 2 帧。</p>
+              <p class="video-editor-hint">① 载入分镜（含对白合成版）→ 调整时间线 → <strong>先导出无旁白成片</strong> → ② 生成旁白解说方案 → 合成旁白配音 → ③ 再次导出含旁白最终成片。旁白为第三人称故事解说，不与镜头内角色对白重复。</p>
               <div class="video-editor-layout">
                 <div class="timeline-panel">
                   <div class="timeline-toolbar">
@@ -205,7 +212,7 @@
                       <h4>旁白配音</h4>
                       <span id="narration-duration-hint" class="narration-duration-hint">成片时长：—</span>
                     </div>
-                    <p class="narration-hint">根据成片总时长生成解说词；配音使用微软 Edge 神经语音（无需额外 API Key），合成后写入音频轨道。</p>
+                    <p class="narration-hint">旁白是<strong>故事解说</strong>（第三人称），与镜头内<strong>角色对白</strong>互补、不重复。须先导出无旁白成片，系统按<strong>实测成片时长</strong>生成解说词并铺满全片，概括本集完整剧情。</p>
                     <div class="narration-actions">
                       <button class="btn btn-sm btn-outline" id="btn-narration-plan" type="button">📝 生成旁白方案</button>
                       <button class="btn btn-sm btn-primary" id="btn-narration-synthesize" type="button">🎙️ 合成配音</button>
@@ -563,6 +570,12 @@
         <label>参考图 URL（可选）</label>
         <input type="url" id="asset-file-url" class="form-input" placeholder="https://example.com/ref.png">
       </div>
+      <div class="form-group" id="asset-voice-group">
+        <label>TTS 音色（角色）</label>
+        <select id="asset-voice-id" class="form-input">
+          <option value="">未分配</option>
+        </select>
+      </div>
       <div class="form-group">
         <label>类型</label>
         <select id="asset-type">
@@ -594,6 +607,6 @@
   </div>
 </div>
 
-<script src="/static/js/app.js?v=20260706i"></script>
+<script src="/static/js/app.js?v=20260707a"></script>
 </body>
 </html>

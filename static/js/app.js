@@ -46,6 +46,9 @@
     generate_script: '生成剧本',
     generate_storyboard: '生成分镜',
     extract_assets: '从剧本提取资产',
+    assign_character_voices: '自动分配音色',
+    compose_shot: '合成对白镜头',
+    batch_compose_shots: '批量合成对白',
     batch_generate_shot_images: '批量生成图片',
     batch_generate_shot_videos: '批量生成视频',
     generate_shot_video: '生成视频',
@@ -59,6 +62,9 @@
     generate_script: '生成中',
     generate_storyboard: '生成中',
     extract_assets: '提取中',
+    assign_character_voices: '分配中',
+    compose_shot: '合成中',
+    batch_compose_shots: '合成中',
     batch_generate_shot_images: '生成中',
     batch_generate_shot_videos: '生成中',
     generate_shot_video: '生成中',
@@ -80,6 +86,32 @@
   let pipelineByEpisode = {}; // episodeId -> { paused, lines[], progress, progressMsg, done }
   let lastWorkflowReplyKey = '';
   let lastTaskToastKey = '';
+  let voiceCatalog = [];
+  let episodePipelineSteps = [];
+
+  const stepPanelMap = {
+    generate_skeleton: 'planning',
+    generate_strategy: 'planning',
+    generate_script: 'planning',
+    generate_storyboard: 'storyboard',
+    extract_assets: 'assets',
+    assign_character_voices: 'assets',
+    batch_generate_shot_images: 'storyboard',
+    batch_generate_shot_videos: 'storyboard',
+    batch_compose_shots: 'video',
+  };
+
+  const DEFAULT_EPISODE_PIPELINE_STEPS = [
+    { id: 'generate_skeleton', label: '故事骨架', panel: 'planning' },
+    { id: 'generate_strategy', label: '改编策略', panel: 'planning' },
+    { id: 'generate_script', label: '剧本', panel: 'planning' },
+    { id: 'generate_storyboard', label: '分镜', panel: 'storyboard' },
+    { id: 'extract_assets', label: '提取资产', panel: 'assets' },
+    { id: 'assign_character_voices', label: '分配音色', panel: 'assets' },
+    { id: 'batch_generate_shot_images', label: '批量生图', panel: 'storyboard' },
+    { id: 'batch_generate_shot_videos', label: '批量生视频', panel: 'storyboard' },
+    { id: 'batch_compose_shots', label: '对白合成', panel: 'video' },
+  ];
 
   // ======================== DOM 引用 ========================
   const els = {
@@ -740,6 +772,8 @@
   function selectProject(id) {
     apiFetch('/api/projects/' + id).then(r => r.json()).then(proj => {
       currentProject = proj;
+      currentEpisode = null;
+      episodePipelineSteps = [];
       assets = normalizeAssetList(proj.assets);
       renderAssets();
       els.projectName.textContent = proj.name;
@@ -779,6 +813,125 @@
     loadChatMessages();
     loadProjectAssets(currentProject.id);
     loadProjectStoryboards(currentProject.id, currentEpisode?.id);
+    loadVoiceCatalog();
+  }
+
+  function loadVoiceCatalog() {
+    if (voiceCatalog.length) return Promise.resolve(voiceCatalog);
+    return apiFetch('/api/voices').then(r => r.json()).then(list => {
+      voiceCatalog = list || [];
+      return voiceCatalog;
+    }).catch(() => { voiceCatalog = []; return []; });
+  }
+
+  function loadEpisodePipelineSteps() {
+    const bar = document.getElementById('wb-episode-steps');
+    if (!bar || !currentProject || !currentEpisode) {
+      if (bar) bar.style.display = 'none';
+      episodePipelineSteps = [];
+      return Promise.resolve([]);
+    }
+    renderEpisodePipelineSteps();
+    return apiFetch('/api/projects/' + currentProject.id + '/episodes/' + currentEpisode.id + '/pipeline-plan')
+      .then(r => r.json())
+      .then(data => {
+        episodePipelineSteps = (data && data.steps && data.steps.length)
+          ? data.steps
+          : DEFAULT_EPISODE_PIPELINE_STEPS.map(s => ({ ...s, done: false }));
+        renderEpisodePipelineSteps();
+        return episodePipelineSteps;
+      }).catch(() => {
+        episodePipelineSteps = DEFAULT_EPISODE_PIPELINE_STEPS.map(s => ({ ...s, done: false }));
+        renderEpisodePipelineSteps();
+        return episodePipelineSteps;
+      });
+  }
+
+  function renderEpisodePipelineSteps() {
+    const bar = document.getElementById('wb-episode-steps');
+    const inner = document.getElementById('wb-episode-steps-inner');
+    if (!bar || !inner) return;
+    if (!currentProject || !currentEpisode) {
+      bar.style.display = 'none';
+      return;
+    }
+    const steps = episodePipelineSteps.length
+      ? episodePipelineSteps
+      : DEFAULT_EPISODE_PIPELINE_STEPS.map(s => ({ ...s, done: false }));
+    bar.style.display = 'flex';
+    inner.innerHTML = steps.map(step => {
+      const icon = step.done ? '✓' : '○';
+      const cls = step.done ? 'done' : 'pending';
+      return `<button type="button" class="wb-step-chip ${cls}" data-step-id="${escapeHtml(step.id)}" data-panel="${escapeHtml(step.panel || stepPanelMap[step.id] || 'storyboard')}" title="${escapeHtml(step.id)}">
+        <span class="wb-step-icon">${icon}</span>${escapeHtml(step.label)}
+      </button>`;
+    }).join('');
+    inner.querySelectorAll('.wb-step-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const panel = chip.dataset.panel;
+        if (panel) switchWorkbenchPanel(panel);
+      });
+    });
+  }
+
+  function runWorkflowAction(action, opts) {
+    opts = opts || {};
+    if (!currentProject) {
+      toast('请先选择项目', 'warning');
+      return false;
+    }
+    if (opts.needsEpisode && !currentEpisode) {
+      toast('请先选择一集', 'warning');
+      return false;
+    }
+    const payload = {
+      action: 'run_workflow',
+      workflow_action: action,
+      project_id: currentProject.id,
+    };
+    if (currentEpisode) payload.episode_id = currentEpisode.id;
+    if (opts.shotNumber) payload.workflow_params = { shot_number: String(opts.shotNumber) };
+    return sendWS('run_workflow', payload);
+  }
+
+  function composeShot(shotNum) {
+    if (!currentProject || !currentEpisode) {
+      toast('请先选择项目与分集', 'warning');
+      return;
+    }
+    appendChatMessage('user', '合成第 ' + shotNum + ' 镜对白');
+    toast('正在合成第 ' + shotNum + ' 镜对白…', 'info');
+    apiFetch('/api/projects/' + currentProject.id + '/episodes/' + currentEpisode.id + '/shots/' + shotNum + '/compose', {
+      method: 'POST',
+    }).then(r => {
+      if (!r.ok) {
+        return r.json().then(body => {
+          const err = new Error(body.error || body.message || ('HTTP ' + r.status));
+          if (r.logId) err.logId = r.logId;
+          throw err;
+        });
+      }
+      return r.json();
+    }).then(data => {
+      loadShotClips();
+      loadEpisodePipelineSteps();
+      const msg = data.message || ('第 ' + shotNum + ' 镜对白已合成');
+      const detail = [];
+      if (data.speaker) detail.push('说话人：' + data.speaker);
+      if (data.text) detail.push('台词：「' + data.text + '」');
+      if (data.voice_id) detail.push('音色：' + data.voice_id);
+      const full = detail.length ? msg + '\n' + detail.join('\n') : msg;
+      toast(msg, 'success');
+      appendChatMessage('assistant', '✅ ' + full);
+      if (data.composed_url) {
+        openMediaPreview('video', data.composed_url, '第 ' + shotNum + ' 镜 · 对白合成');
+      }
+    }).catch(err => {
+      let text = err.message || String(err);
+      if (err.logId && !text.includes(err.logId)) text += '（log_id: ' + err.logId + '）';
+      toast('合成失败: ' + text, 'error');
+      appendChatMessage('assistant', '⚠️ 第 ' + shotNum + ' 镜对白合成失败\n' + text);
+    });
   }
 
   function loadSourceTexts() {
@@ -817,12 +970,15 @@
       .then(r => r.json())
       .then(list => {
         episodes = list || [];
-        renderEpisodeSelect();
-        renderEpisodeList();
+        if (currentEpisode && !episodes.some(ep => ep.id === currentEpisode.id)) {
+          currentEpisode = null;
+        }
         if (episodes.length && !currentEpisode) {
           currentEpisode = episodes[0];
-          renderEpisodeSelect();
         }
+        renderEpisodeSelect();
+        renderEpisodeList();
+        loadEpisodePipelineSteps();
         syncActivePipelinesFromServer();
       }).catch(() => {});
   }
@@ -869,7 +1025,12 @@
         renderEpisodeList();
         loadPlanningContent();
         loadChatMessages();
+        loadEpisodePipelineSteps();
         syncPipelineControlsForCurrentEpisode();
+        if (currentProject) {
+          loadProjectStoryboards(currentProject.id, currentEpisode?.id);
+          loadShotClips();
+        }
       });
     });
     wrap.querySelectorAll('.btn-episode-pipeline').forEach(btn => {
@@ -1278,7 +1439,7 @@
     episodePipelineEpisodeId = epId;
     const st = ensurePipelineRecord(epId);
     st.active = true;
-    st.lines = ['🚀 已开始：策划 → 分镜 → 资产 → 生图 → 生视频\n（可在输入框上方暂停 / 继续）'];
+    st.lines = ['🚀 已开始：策划 → 分镜 → 资产 → 音色 → 生图 → 生视频 → 对白合成\n（可在输入框上方暂停 / 继续）'];
     st.progress = 2;
     st.progressMsg = '流水线启动中...';
     st.done = false;
@@ -1487,6 +1648,32 @@
         return;
       }
       applyExtractAssetsResult(data);
+      loadEpisodePipelineSteps();
+      return;
+    }
+    if (action === 'assign_character_voices') {
+      loadProjectAssets(currentProject.id).then(() => {
+        switchWorkbenchPanel('assets');
+        loadEpisodePipelineSteps();
+        const n = data && data.action_result && data.action_result.result && data.action_result.result.voices_assigned;
+        toast(typeof n === 'number' ? ('已为 ' + n + ' 个角色分配音色') : '音色分配完成', 'success');
+      });
+      return;
+    }
+    if (action === 'compose_shot') {
+      loadShotClips();
+      loadEpisodePipelineSteps();
+      const res = data && data.action_result && data.action_result.result;
+      const msg = (res && res.message) || '对白镜头已合成';
+      toast(msg, 'success');
+      appendChatMessage('assistant', '✅ ' + msg);
+      return;
+    }
+    if (action === 'batch_compose_shots') {
+      loadShotClips();
+      loadTimeline();
+      loadEpisodePipelineSteps();
+      toast('批量对白合成完成', 'success');
       return;
     }
     if (action === 'generate_shot_image') {
@@ -1521,6 +1708,7 @@
         loadProjectStoryboards(currentProject.id, currentEpisode?.id);
         loadProjectAssets(currentProject.id);
         loadShotClips();
+        loadEpisodePipelineSteps();
       }
       switchWorkbenchPanel('storyboard');
       toast('分集流水线已完成', 'success');
@@ -1778,19 +1966,53 @@
     return '';
   }
 
+  function extractDialogueFromDescription(desc) {
+    if (!desc) return '';
+    const text = String(desc);
+    for (const line of text.split('\n')) {
+      const t = line.trim();
+      if (/^(.+?)[:：]/.test(t)) return t;
+    }
+    const m = text.match(/([\u4e00-\u9fa5\w·]+)\s*[:：]\s*([^\n。；;]+)/);
+    if (m) return m[1] + '：' + m[2].trim();
+    return '';
+  }
+
   function normalizeStoryboards(list) {
     if (!Array.isArray(list)) return [];
-    return list.map((sb, i) => ({
-      shot_number: sb.shot_number ?? sb.ShotNumber ?? (i + 1),
-      scene: sb.scene ?? sb.Scene ?? '',
-      description: sb.description ?? sb.Description ?? '',
-      camera: sb.camera ?? sb.Camera ?? '固定镜头',
-      duration: sb.duration ?? sb.Duration ?? 3,
-      prompt: sb.prompt ?? sb.Prompt ?? sb.description ?? sb.Description ?? '',
-      image_url: sb.image_url ?? sb.ImageURL ?? '',
-      image_remote_url: sb.image_remote_url ?? sb.ImageRemoteURL ?? '',
-      selected: sb.selected === true,
-    }));
+    return list.map((sb, i) => {
+      const description = sb.description ?? sb.Description ?? '';
+      const dialogueRaw = sb.dialogue ?? sb.Dialogue ?? '';
+      const dialogue = dialogueRaw || extractDialogueFromDescription(description);
+      return {
+        shot_number: sb.shot_number ?? sb.ShotNumber ?? (i + 1),
+        scene: sb.scene ?? sb.Scene ?? '',
+        description,
+        camera: sb.camera ?? sb.Camera ?? '固定镜头',
+        duration: sb.duration ?? sb.Duration ?? 3,
+        dialogue,
+        prompt: sb.prompt ?? sb.Prompt ?? description,
+        image_url: sb.image_url ?? sb.ImageURL ?? '',
+        image_remote_url: sb.image_remote_url ?? sb.ImageRemoteURL ?? '',
+        selected: sb.selected === true,
+      };
+    });
+  }
+
+  function saveStoryboardDialogue(shotNumber, dialogue) {
+    if (!currentProject || !currentEpisode) return Promise.resolve();
+    const url = '/api/projects/' + encodeURIComponent(currentProject.id)
+      + '/episodes/' + encodeURIComponent(currentEpisode.id)
+      + '/shots/' + shotNumber + '/storyboard';
+    return apiFetch(url, {
+      method: 'PUT',
+      body: JSON.stringify({ dialogue }),
+    }).then(r => {
+      if (!r.ok) return r.json().then(d => Promise.reject(new Error(d.error || '保存对白失败')));
+      const sb = storyboards.find(s => s.shot_number === shotNumber);
+      if (sb) sb.dialogue = dialogue;
+      return r.json();
+    });
   }
 
   function getSelectedShotNumbers() {
@@ -2042,16 +2264,25 @@
 
   function renderNarrationPanel() {
     const dur = timelineVideoDuration();
+    const exportedDur = timeline && timeline.exported_duration;
+    const hasBaseExport = !!(timeline && timeline.exported_video_url);
     if (els.narrationDurationHint) {
-      els.narrationDurationHint.textContent = dur > 0
-        ? ('成片时长：' + dur.toFixed(1) + ' 秒')
-        : '成片时长：—';
+      if (exportedDur > 0) {
+        els.narrationDurationHint.textContent = '基准成片：' + exportedDur.toFixed(1) + ' 秒（已导出）';
+      } else if (dur > 0) {
+        els.narrationDurationHint.textContent = '预估时长：' + dur.toFixed(1) + ' 秒（请先导出成片）';
+      } else {
+        els.narrationDurationHint.textContent = '成片时长：—';
+      }
     }
     const plan = timeline && timeline.narration;
     const segs = plan && plan.segments ? plan.segments : [];
     if (!els.narrationSegments) return;
     if (!segs.length) {
-      els.narrationSegments.innerHTML = '<div class="empty-state-sm"><p>点击「生成旁白方案」根据成片时长自动撰写解说词</p></div>';
+      const tip = hasBaseExport
+        ? '点击「生成旁白方案」，按已导出成片实际时长撰写全片故事解说'
+        : '请先点击「导出成片」（无旁白），再生成旁白方案';
+      els.narrationSegments.innerHTML = '<div class="empty-state-sm"><p>' + tip + '</p></div>';
     } else {
       els.narrationSegments.innerHTML = segs.map((seg, i) => `
         <div class="narration-seg-item" data-seg-index="${i}">
@@ -2085,6 +2316,10 @@
     }
     if (timelineVideoDuration() <= 0) {
       toast('时间线没有视频片段，请先载入分镜视频', 'warning');
+      return;
+    }
+    if (!timeline || !timeline.exported_video_url) {
+      toast('请先导出无旁白成片，再生成旁白解说', 'warning');
       return;
     }
     toast('正在生成旁白方案…', 'info');
@@ -2159,8 +2394,15 @@
       signal: AbortSignal.timeout(10 * 60 * 1000),
     }).then(r => r.json()).then(res => {
       if (res.error) throw new Error(res.error);
+      if (res.timeline) timeline = res.timeline;
       showVideoResult(res.video_url);
-      toast('导出完成', 'success');
+      renderTimelineEditor();
+      const hasNarration = timeline && timeline.narration && timeline.narration.audio_url;
+      if (!hasNarration && res.duration) {
+        toast('无旁白成片已导出（' + res.duration.toFixed(1) + 's），可生成旁白解说', 'success');
+      } else {
+        toast('导出完成', 'success');
+      }
     }).catch(err => toast('导出失败: ' + (err.message || err), 'error'));
   }
 
@@ -2515,21 +2757,23 @@
     const versions = clipsForShot(shotNum);
     const sortedVersions = versions.slice().sort((a, b) => (a.version || 0) - (b.version || 0));
     const clip = primaryClipForShot(shotNum);
-    const videoTitle = clip && clip.file_url ? `第 ${shotNum} 镜 — 视频 v${clip.version}` : '';
-    const previewBtn = clip && clip.file_url
-      ? `<button type="button" class="btn btn-sm btn-outline sb-media-preview-btn sb-col-btn" data-preview-type="video" data-url="${escapeHtml(clip.file_url)}" data-title="${escapeHtml(videoTitle)}">▶ 预览视频</button>`
+    const playURL = (clip && (clip.composed_file_url || clip.file_url)) || '';
+    const videoTitle = playURL ? `第 ${shotNum} 镜 — 视频 v${clip.version}` : '';
+    const previewBtn = playURL
+      ? `<button type="button" class="btn btn-sm btn-outline sb-media-preview-btn sb-col-btn" data-preview-type="video" data-url="${escapeHtml(playURL)}" data-title="${escapeHtml(videoTitle)}">▶ 预览视频</button>`
       : '<button type="button" class="btn btn-sm btn-outline sb-col-btn" disabled title="暂无视频">▶ 预览视频</button>';
 
     let videoBlock = '<div class="sb-thumb sb-thumb-empty">暂无视频</div>';
     let videoMeta = '';
-    if (clip && clip.file_url) {
+    if (clip && playURL) {
       const poster = sb.image_url ? ` poster="${escapeHtml(sb.image_url)}"` : '';
       videoBlock = `<div class="sb-thumb sb-thumb-video">
-          <video src="${escapeHtml(clip.file_url)}" muted playsinline preload="metadata"${poster}></video>
+          <video src="${escapeHtml(playURL)}" muted playsinline preload="metadata"${poster}></video>
           <span class="sb-thumb-play" aria-hidden="true">▶</span>
-          <button type="button" class="sb-thumb-hit sb-media-preview-btn" data-preview-type="video" data-url="${escapeHtml(clip.file_url)}" data-title="${escapeHtml(videoTitle)}" title="点击放大预览" aria-label="预览视频"></button>
+          <button type="button" class="sb-thumb-hit sb-media-preview-btn" data-preview-type="video" data-url="${escapeHtml(playURL)}" data-title="${escapeHtml(videoTitle)}" title="点击放大预览" aria-label="预览视频"></button>
         </div>`;
-      videoMeta = `<div class="sb-media-video-meta">v${clip.version}${clip.is_selected ? ' ✓' : ''}${clip.source === 'fallback' ? ' ·兜底' : ''}</div>`;
+      const composedTag = clip.composed_file_url ? ' · 含对白' : '';
+      videoMeta = `<div class="sb-media-video-meta">v${clip.version}${clip.is_selected ? ' ✓' : ''}${clip.source === 'fallback' ? ' ·兜底' : ''}${composedTag}</div>`;
     }
 
     const versionBtnLabel = sortedVersions.length
@@ -2545,6 +2789,7 @@
         ${previewBtn}
         <span class="sb-media-col-title">视频</span>
         <button class="btn btn-sm btn-primary sb-gen-video-btn sb-col-btn" type="button" data-shot="${shotNum}">🎬 生成视频</button>
+        <button class="btn btn-sm btn-outline sb-compose-btn sb-col-btn" type="button" data-shot="${shotNum}" title="TTS 对白 + 字幕烧录">🗣 合成对白</button>
       </div>
       ${videoBlock}
       ${videoMeta}
@@ -2668,19 +2913,28 @@
       return;
     }
     const icons = { role: '👤', scene: '🏞️', prop: '📦' };
-    listEl.innerHTML = shown.map(a => `
+    listEl.innerHTML = shown.map(a => {
+      const voiceHint = (a.type === 'role' && a.voice_id)
+        ? (' · 🎙 ' + voiceLabel(a.voice_id))
+        : (a.type === 'role' ? ' · 未分配音色' : '');
+      return `
       <div class="asset-item" data-id="${a.id}" onclick="window._app.editAsset(${a.id})">
         <div class="asset-thumb">${a.file_url ? '<img src="' + escapeHtml(a.file_url) + '" alt="">' : (icons[a.type] || '📋')}</div>
         <div class="asset-info">
           <div class="asset-name">${escapeHtml(a.name)}</div>
-          <div class="asset-type-label">${a.type} ${escapeHtml(a.desc ? '— ' + a.desc.substring(0, 30) : '')}${a.file_url ? ' · 有参考图' : ''}</div>
+          <div class="asset-type-label">${a.type} ${escapeHtml(a.desc ? '— ' + a.desc.substring(0, 30) : '')}${a.file_url ? ' · 有参考图' : ''}${voiceHint}</div>
         </div>
         <div class="asset-actions">
           <button class="btn btn-sm btn-outline" title="编辑" onclick="event.stopPropagation(); window._app.editAsset(${a.id})">✎</button>
           <button class="btn btn-sm btn-outline" title="删除" onclick="event.stopPropagation(); window._app.deleteAsset(${a.id})">×</button>
         </div>
-      </div>
-    `).join('');
+      </div>`;
+    }).join('');
+  }
+
+  function voiceLabel(voiceId) {
+    const v = voiceCatalog.find(x => x.id === voiceId);
+    return v ? v.label : voiceId;
   }
 
   window._app = {
@@ -2720,6 +2974,7 @@
       }).catch(() => toast('切换状态失败', 'error'));
     },
     generateShotVideo: generateShotVideo,
+    composeShot: composeShot,
     selectShotClip: selectShotClip,
     deleteShotClip: deleteShotClip,
   };
@@ -2785,6 +3040,12 @@
               <div class="storyboard-field-value">${escapeHtml(sb.camera || '固定镜头')}</div>
             </div>
             <div class="storyboard-field">
+              <div class="storyboard-field-label">对白</div>
+              <div class="storyboard-field-value">
+                <textarea class="sb-dialogue-input" rows="2" data-shot="${sb.shot_number || i + 1}" placeholder="角色名：台词，例如「石昊：这一战，我不会退。」">${escapeHtml(sb.dialogue || '')}</textarea>
+              </div>
+            </div>
+            <div class="storyboard-field">
               <div class="storyboard-field-label">AI 绘图 Prompt</div>
               <div class="storyboard-field-value">
                 <textarea rows="3">${escapeHtml(sb.prompt || '')}</textarea>
@@ -2806,6 +3067,12 @@
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         generateShotVideo(parseInt(btn.dataset.shot, 10));
+      });
+    });
+    els.storyboardList.querySelectorAll('.sb-compose-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        composeShot(parseInt(btn.dataset.shot, 10));
       });
     });
     if (clipVersionDropdownShot != null && !clipsForShot(clipVersionDropdownShot).length) {
@@ -3180,6 +3447,17 @@
     document.getElementById('asset-name').value = asset ? (asset.name || '') : '';
     document.getElementById('asset-desc').value = asset ? (asset.desc || '') : '';
     document.getElementById('asset-file-url').value = asset ? (asset.file_url || '') : '';
+    const voiceGroup = document.getElementById('asset-voice-group');
+    const voiceSel = document.getElementById('asset-voice-id');
+    if (voiceGroup) voiceGroup.style.display = type === 'role' ? 'block' : 'none';
+    loadVoiceCatalog().then(() => {
+      if (!voiceSel) return;
+      const opts = ['<option value="">未分配</option>'].concat(
+        voiceCatalog.map(v => `<option value="${escapeHtml(v.id)}">${escapeHtml(v.label)}</option>`)
+      );
+      voiceSel.innerHTML = opts.join('');
+      voiceSel.value = asset && asset.voice_id ? asset.voice_id : '';
+    });
     els.modalAsset.style.display = 'flex';
   }
 
@@ -3198,6 +3476,7 @@
       desc: document.getElementById('asset-desc').value,
       type: document.getElementById('asset-type').value,
       file_url: document.getElementById('asset-file-url').value.trim(),
+      voice_id: document.getElementById('asset-voice-id') ? document.getElementById('asset-voice-id').value : '',
     };
     if (!data.name) { toast('请输入名称', 'warning'); return; }
 
@@ -3219,12 +3498,31 @@
     renderEpisodeList();
     loadPlanningContent();
     loadChatMessages();
+    loadEpisodePipelineSteps();
+    syncPipelineControlsForCurrentEpisode();
     if (currentProject) {
       loadProjectStoryboards(currentProject.id, currentEpisode?.id);
       loadShotClips();
       if (wbStage === 'video') loadTimeline();
     }
   });
+
+  document.getElementById('btn-run-episode-pipeline')?.addEventListener('click', () => {
+    runEpisodePipeline(document.getElementById('btn-run-episode-pipeline'));
+  });
+
+  document.getElementById('btn-assign-voices')?.addEventListener('click', () => {
+    if (!runWorkflowAction('assign_character_voices', { needsEpisode: false })) return;
+    toast('正在分配角色音色…', 'info');
+  });
+
+  function batchComposeDialogue() {
+    if (!runWorkflowAction('batch_compose_shots', { needsEpisode: true })) return;
+    toast('正在批量合成对白镜头…', 'info');
+  }
+
+  document.getElementById('btn-batch-compose')?.addEventListener('click', batchComposeDialogue);
+  document.getElementById('btn-batch-compose-video')?.addEventListener('click', batchComposeDialogue);
 
   document.getElementById('btn-wb-chat-clear').addEventListener('click', () => {
     clearLocalChatHistory();
@@ -3373,6 +3671,17 @@
       if (card) card.classList.toggle('is-selected', e.target.checked);
       updateStoryboardSelectionUI();
     });
+    els.storyboardList.addEventListener('blur', (e) => {
+      if (!e.target.classList.contains('sb-dialogue-input')) return;
+      const shotNum = parseInt(e.target.dataset.shot, 10);
+      if (Number.isNaN(shotNum)) return;
+      const dialogue = e.target.value.trim();
+      const sb = storyboards.find(s => s.shot_number === shotNum);
+      if (sb && sb.dialogue === dialogue) return;
+      saveStoryboardDialogue(shotNum, dialogue)
+        .then(() => toast('对白已保存', 'success'))
+        .catch(err => toast(err.message || '保存对白失败', 'error'));
+    }, true);
     els.storyboardList.addEventListener('click', (e) => {
       const toggle = e.target.closest('.sb-version-toggle');
       if (toggle) {

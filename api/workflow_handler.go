@@ -330,7 +330,7 @@ func (r *Router) agentWorkGenerateHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Minute)
 	defer cancel()
 
-	agent := &service.AgentChat{DB: r.db.DB, Vendor: r.resolveVendor(), SkillMgr: r.skillMgr}
+	agent := &service.AgentChat{DB: r.db.DB, Vendor: r.resolveVendor(), SkillMgr: r.skillMgr, OutputDir: r.outputDir}
 	content, err := agent.GenerateWork(ctx, projectID, req.EpisodeID, req.Type)
 	if err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
@@ -458,7 +458,7 @@ func (r *Router) chatSendHandler(c *gin.Context) {
 	ctx = service.WithStreamDelta(ctx, streamFn)
 	ctx = service.WithStreamEnd(ctx, streamEndFn)
 
-	agent := &service.AgentChat{DB: r.db.DB, Vendor: r.resolveVendor(), SkillMgr: r.skillMgr}
+	agent := &service.AgentChat{DB: r.db.DB, Vendor: r.resolveVendor(), SkillMgr: r.skillMgr, OutputDir: r.outputDir}
 	resp, err := agent.HandleMessage(ctx, currentUserID(c), projectID, req.EpisodeID, req.Stage, req.Message)
 	if err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
@@ -498,7 +498,7 @@ func (r *Router) chatActionHandler(c *gin.Context) {
 	}
 	ctx = service.WithProgress(ctx, progressFn)
 
-	agent := &service.AgentChat{DB: r.db.DB, Vendor: r.resolveVendor(), SkillMgr: r.skillMgr}
+	agent := &service.AgentChat{DB: r.db.DB, Vendor: r.resolveVendor(), SkillMgr: r.skillMgr, OutputDir: r.outputDir}
 	intent := &service.ChatActionIntent{Type: req.Action, Params: req.Params}
 	resp, err := agent.RunAction(ctx, currentUserID(c), projectID, req.EpisodeID, "general", intent)
 	if err != nil {

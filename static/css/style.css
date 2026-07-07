@@ -1657,11 +1657,46 @@ body {
   box-shadow: var(--shadow-sm);
 }
 
+.wb-episode-steps {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-subtle);
+  overflow-x: auto;
+}
+.wb-episode-steps-inner {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.wb-step-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-raised);
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--transition-fast);
+}
+.wb-step-chip:hover { border-color: var(--accent-indigo); color: var(--text-primary); }
+.wb-step-chip.done { border-color: rgba(34, 197, 94, 0.4); color: #86efac; }
+.wb-step-chip.pending { opacity: 0.85; }
+.wb-step-chip .wb-step-icon { font-size: 10px; }
+
 .workbench-layout {
   display: grid;
   grid-template-columns: 320px 1fr;
   gap: 0;
-  height: calc(100vh - 120px);
+  height: calc(100vh - 168px);
   min-height: 500px;
 }
 
