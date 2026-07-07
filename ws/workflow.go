@@ -158,7 +158,11 @@ func (wfs *WorkflowService) runWorkflow(cm *ConnManager, userID string, req *WSR
 		wfs.finishEpisodePipeline(cm, req, logID, out, err)
 		return
 	case "batch_generate_shot_images":
-		out, err := wfs.runBatchImages(ctx, cm, userID, req)
+		out, err := wfs.runShotImages(ctx, cm, userID, req, true)
+		wfs.finishWorkflow(cm, req, logID, action, out, err)
+		return
+	case "generate_shot_image":
+		out, err := wfs.runShotImages(ctx, cm, userID, req, false)
 		wfs.finishWorkflow(cm, req, logID, action, out, err)
 		return
 	case "generate_shot_video":
@@ -497,11 +501,18 @@ func (wfs *WorkflowService) finishWorkflow(cm *ConnManager, req *WSRequest, logI
 	})
 }
 
-func (wfs *WorkflowService) runBatchImages(ctx context.Context, cm *ConnManager, userID string, req *WSRequest) (workflowOutcome, error) {
+func (wfs *WorkflowService) runShotImages(ctx context.Context, cm *ConnManager, userID string, req *WSRequest, skipExisting bool) (workflowOutcome, error) {
 	if wfs.Queue == nil || wfs.Pipeline == nil {
 		return workflowOutcome{}, fmt.Errorf("生成服务不可用")
 	}
 	shots := req.ShotNumbers
+	if len(shots) == 0 && req.WorkflowParams != nil {
+		if raw := req.WorkflowParams["shot_number"]; raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+				shots = []int{n}
+			}
+		}
+	}
 	if len(shots) == 0 {
 		return workflowOutcome{}, fmt.Errorf("请指定要生成的镜号")
 	}
@@ -526,6 +537,7 @@ func (wfs *WorkflowService) runBatchImages(ctx context.Context, cm *ConnManager,
 	tk.Mode = "images"
 	tk.EpisodeID = req.EpisodeID
 	tk.GenerateShots = shots
+	tk.SkipExistingImages = skipExisting
 	tk.Storyboard = items
 	service.EnrichTaskMeta(wfs.DB, tk)
 	tk.SetState(task.StateWaiting, tk.Title)
@@ -544,6 +556,9 @@ func (wfs *WorkflowService) runBatchImages(ctx context.Context, cm *ConnManager,
 	})
 
 	reply := fmt.Sprintf("已提交 %d 个分镜的图片生成任务", len(shots))
+	if !skipExisting && len(shots) == 1 {
+		reply = fmt.Sprintf("已提交第 %d 镜图片重新生成任务", shots[0])
+	}
 	return workflowOutcome{
 		reply: reply,
 		extra: map[string]interface{}{

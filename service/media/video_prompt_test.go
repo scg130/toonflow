@@ -26,7 +26,7 @@ func TestBuildShotVideoPrompt_motionFirst(t *testing.T) {
 		Camera:      "推镜 dolly in",
 		Prompt:      "Unreal Engine 5 render, Octane, long static render tags...",
 	}
-	pos, neg := buildShotVideoPrompt(shot, "3D动漫", "", "")
+	pos, neg := buildShotVideoPrompt(shot, "3D动漫", "", "", true)
 	if !strings.Contains(pos, "石昊") {
 		t.Fatalf("description missing: %q", pos)
 	}
@@ -38,5 +38,37 @@ func TestBuildShotVideoPrompt_motionFirst(t *testing.T) {
 	}
 	if neg == "" {
 		t.Fatal("negative prompt empty")
+	}
+}
+
+func TestBuildShotVideoPrompt_withDialogue(t *testing.T) {
+	shot := &storyboard.ShotMeta{
+		Description: "石昊怒视前方",
+		Dialogue:    "石昊：你们欺人太甚！",
+		Camera:      "近景",
+	}
+	pos, neg := buildShotVideoPrompt(shot, "3D动漫", "", "", true)
+	if !strings.Contains(pos, "石昊") {
+		t.Fatalf("speaker missing: %q", pos)
+	}
+	if !strings.Contains(pos, "欺人太甚") {
+		t.Fatalf("dialogue line missing: %q", pos)
+	}
+	if !strings.Contains(pos, "lip sync") {
+		t.Fatalf("lip sync instruction missing: %q", pos)
+	}
+	if !strings.Contains(neg, "no lip sync") {
+		t.Fatalf("negative lip sync guard missing: %q", neg)
+	}
+}
+
+func TestBuildShotVideoPrompt_withDialogue_nonHuman(t *testing.T) {
+	shot := &storyboard.ShotMeta{
+		Description: "焦黑树桩在雷光中颤动",
+		Dialogue:    "旁白：天地变色",
+	}
+	pos, _ := buildShotVideoPrompt(shot, "3D动漫", "", "", false)
+	if strings.Contains(pos, "lip sync") {
+		t.Fatalf("non-human shot should not include lip sync: %q", pos)
 	}
 }

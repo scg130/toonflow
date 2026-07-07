@@ -133,7 +133,7 @@ func buildAssetExtractSystemPrompt(videoRatio, artStyle string) string {
 
 每项字段：
 - name (string) 资产名称
-- type (string) role | scene | prop
+- type (string) role | scene | prop（无生命的物体如树桩、残躯、武器、面具等必须 type=prop，禁止标为 role）
 - desc (string) 中文视觉描述（仅角色本体：发型、瞳色、服装、体型、气质；**禁止**手持道具、武器、面具；**禁止**具体背景/场景——背景请单独建 scene 资产，道具请建 prop 资产）
 - character_id (string) 角色唯一 ID（仅 role，如 ShiHao）
 - feature_keywords (string[]) 不可变特征关键词（发型、瞳色、服装、体型等，仅 role）

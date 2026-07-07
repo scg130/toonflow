@@ -11,6 +11,33 @@ import (
 
 var reCharacterIDTag = regexp.MustCompile(`(?i)character_id:\s*([^,]+)`)
 
+var inanimateAssetKeywords = []string{
+	"树桩", "stump", "残躯", "尸骸", " corpse", "枯木", "树干", "石碑", "雕像", "statue",
+	"残骸", "器物", "灵根", "宝石", "gem", "artifact", "weapon", "武器", "剑", "刀",
+	"面具", "mask", "道具", "prop", "inanimate",
+}
+
+// IsInanimateAsset reports props and misclassified role entries that must not use character_id.
+func IsInanimateAsset(a ProjectAsset) bool {
+	if a.Type == "prop" {
+		return true
+	}
+	if a.Type == "scene" {
+		return false
+	}
+	blob := strings.ToLower(strings.TrimSpace(a.Name + " " + a.Desc))
+	for _, kw := range inanimateAssetKeywords {
+		if strings.Contains(blob, strings.ToLower(kw)) {
+			return true
+		}
+	}
+	return false
+}
+
+func assetUsesCharacterID(a ProjectAsset) bool {
+	return a.Type == "role" && !IsInanimateAsset(a)
+}
+
 // FormatAssetsForStoryboardPrompt builds an asset catalog block for storyboard LLM prompts.
 func FormatAssetsForStoryboardPrompt(assets []ProjectAsset) string {
 	if len(assets) == 0 {
@@ -24,7 +51,11 @@ func FormatAssetsForStoryboardPrompt(assets []ProjectAsset) string {
 		}
 		switch a.Type {
 		case "role":
-			fmt.Fprintf(&b, "- id=%d type=role name=%s character_id=%s", a.ID, a.Name, CharacterIDFromName(a.Name))
+			if IsInanimateAsset(a) {
+				fmt.Fprintf(&b, "- id=%d type=prop name=%s (inanimate, no character_id)", a.ID, a.Name)
+			} else {
+				fmt.Fprintf(&b, "- id=%d type=role name=%s character_id=%s", a.ID, a.Name, CharacterIDFromName(a.Name))
+			}
 		case "prop":
 			fmt.Fprintf(&b, "- id=%d type=prop name=%s", a.ID, a.Name)
 		case "scene":
@@ -64,13 +95,51 @@ func LinkStoryboardAssets(items []task.StoryboardItem, assets []ProjectAsset) []
 				items[i].AssetIDs = append(items[i].AssetIDs, a.ID)
 			}
 		}
-		items[i] = SanitizeStoryboardItemPrompt(items[i], assets)
 		items[i] = injectCharacterConsistencyPrompt(items[i], assets)
+		items[i] = SanitizeStoryboardItemPrompt(items[i], assets)
 	}
 	return items
 }
 
-// SanitizeStoryboardItemPrompt removes mistaken character_id tags for props/scenes.
+// SanitizeFinalImagePrompt cleans the assembled image API prompt before generation.
+func SanitizeFinalImagePrompt(prompt string, shot task.StoryboardItem, assets []ProjectAsset) string {
+	prompt = StripNonRoleCharacterIDs(prompt, assets)
+	if !ShotHasHumanRole(shot, assets) {
+		prompt = stripHumanRenderTags(prompt)
+	}
+	return collapsePromptCommas(prompt)
+}
+
+func stripHumanRenderTags(prompt string) string {
+	repl := strings.NewReplacer(
+		"consistent character design", "consistent visual design",
+		"subsurface scattering skin translucency", "surface material detail",
+		"natural character motion", "slow environmental motion",
+	)
+	out := repl.Replace(prompt)
+	var kept []string
+	for _, seg := range strings.Split(out, ",") {
+		s := strings.TrimSpace(seg)
+		if s == "" {
+			continue
+		}
+		lower := strings.ToLower(s)
+		if strings.Contains(lower, "character_id") || strings.Contains(lower, "style: consistent") {
+			continue
+		}
+		kept = append(kept, s)
+	}
+	if len(kept) == 0 {
+		return "environment and props only, no human character, inanimate object focus"
+	}
+	return strings.Join(kept, ", ")
+}
+
+// ShotHasHumanRole reports whether the shot should use human character rendering tags.
+func ShotHasHumanRole(shot task.StoryboardItem, assets []ProjectAsset) bool {
+	return shotHasRoleAsset(shot, assets)
+}
+
 func SanitizeStoryboardItemPrompt(shot task.StoryboardItem, assets []ProjectAsset) task.StoryboardItem {
 	shot.Prompt = StripNonRoleCharacterIDs(shot.Prompt, assets)
 	if !shotHasRoleAsset(shot, assets) {
@@ -117,7 +186,7 @@ func StripNonRoleCharacterIDs(prompt string, assets []ProjectAsset) string {
 func nonRoleCharacterIDKeys(assets []ProjectAsset) map[string]bool {
 	out := map[string]bool{}
 	for _, a := range assets {
-		if a.ParentID > 0 || (a.Type != "prop" && a.Type != "scene") {
+		if a.ParentID > 0 || !usesCharacterIDKey(a) {
 			continue
 		}
 		name := strings.TrimSpace(a.Name)
@@ -125,6 +194,13 @@ func nonRoleCharacterIDKeys(assets []ProjectAsset) map[string]bool {
 		out[strings.ToLower(CharacterIDFromName(name))] = true
 	}
 	return out
+}
+
+func usesCharacterIDKey(a ProjectAsset) bool {
+	if a.Type == "scene" || a.Type == "prop" {
+		return true
+	}
+	return IsInanimateAsset(a)
 }
 
 func isNonRoleCharacterID(val string, nonRole map[string]bool) bool {
@@ -165,12 +241,12 @@ func shotHasRoleAsset(shot task.StoryboardItem, assets []ProjectAsset) bool {
 		byID[a.ID] = a
 	}
 	for _, id := range shot.AssetIDs {
-		if a, ok := byID[id]; ok && a.Type == "role" {
+		if a, ok := byID[id]; ok && assetUsesCharacterID(a) {
 			return true
 		}
 	}
 	for _, a := range MatchShotAssets(shot, assets) {
-		if a.Type == "role" {
+		if assetUsesCharacterID(a) {
 			return true
 		}
 	}
@@ -181,14 +257,17 @@ func inanimateShotHint(shot task.StoryboardItem, assets []ProjectAsset) string {
 	matched := MatchShotAssets(shot, assets)
 	var parts []string
 	for _, a := range matched {
-		if a.Type != "prop" && a.Type != "scene" {
-			continue
+		if IsInanimateAsset(a) || a.Type == "prop" || a.Type == "scene" {
+			name := strings.TrimSpace(a.Name)
+			if name == "" {
+				continue
+			}
+			kind := a.Type
+			if IsInanimateAsset(a) && a.Type == "role" {
+				kind = "prop"
+			}
+			parts = append(parts, name+" inanimate "+kind+", no human character")
 		}
-		name := strings.TrimSpace(a.Name)
-		if name == "" {
-			continue
-		}
-		parts = append(parts, name+" inanimate "+a.Type+", no human character")
 	}
 	if len(parts) > 0 {
 		return strings.Join(parts, "; ")
@@ -209,7 +288,7 @@ func injectCharacterConsistencyPrompt(shot task.StoryboardItem, assets []Project
 	seen := map[string]bool{}
 	for _, id := range shot.AssetIDs {
 		a, ok := byID[id]
-		if !ok || a.Type != "role" {
+		if !ok || !assetUsesCharacterID(a) {
 			continue
 		}
 		cid := CharacterIDFromName(a.Name)
@@ -221,7 +300,7 @@ func injectCharacterConsistencyPrompt(shot task.StoryboardItem, assets []Project
 	}
 	if len(roleTags) == 0 {
 		for _, a := range MatchShotAssets(shot, assets) {
-			if a.Type != "role" {
+			if !assetUsesCharacterID(a) {
 				continue
 			}
 			cid := CharacterIDFromName(a.Name)

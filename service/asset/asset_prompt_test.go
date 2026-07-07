@@ -64,6 +64,33 @@ func TestStripNonRoleCharacterIDs(t *testing.T) {
 	}
 }
 
+func TestSanitizeStoryboardItemPrompt_misclassifiedInanimateRole(t *testing.T) {
+	assets := []ProjectAsset{{ID: 3, Name: "焦黑树桩", Type: "role", Desc: "charred black tree stump, inanimate"}}
+	shot := task.StoryboardItem{
+		ShotNumber:  1,
+		Description: "极低角度仰拍，焦黑树桩矗立在死寂虚空中",
+		Prompt:      "3D anime, character_id: 焦黑树桩, style: consistent, wide shot",
+		AssetIDs:    []int{3},
+	}
+	out := SanitizeStoryboardItemPrompt(shot, assets)
+	if strings.Contains(strings.ToLower(out.Prompt), "character_id") {
+		t.Fatalf("inanimate role should not keep character_id: %q", out.Prompt)
+	}
+}
+
+func TestSanitizeFinalImagePrompt_stripsHumanTags(t *testing.T) {
+	assets := []ProjectAsset{{ID: 3, Name: "焦黑树桩", Type: "prop"}}
+	shot := task.StoryboardItem{Description: "焦黑树桩特写"}
+	raw := "wide shot, character_id: 焦黑树桩, consistent character design, subsurface scattering skin translucency"
+	got := SanitizeFinalImagePrompt(raw, shot, assets)
+	if strings.Contains(strings.ToLower(got), "character_id") {
+		t.Fatalf("expected no character_id: %q", got)
+	}
+	if strings.Contains(got, "skin translucency") {
+		t.Fatalf("expected no skin tags: %q", got)
+	}
+}
+
 func TestSanitizeStoryboardItemPrompt_propOnlyShot(t *testing.T) {
 	assets := []ProjectAsset{{ID: 3, Name: "焦黑树桩", Type: "prop", Desc: "charred tree stump"}}
 	shot := task.StoryboardItem{

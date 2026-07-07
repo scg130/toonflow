@@ -50,6 +50,7 @@
     compose_shot: '合成对白镜头',
     batch_compose_shots: '批量合成对白',
     batch_generate_shot_images: '批量生成图片',
+    generate_shot_image: '生成图片',
     batch_generate_shot_videos: '批量生成视频',
     generate_shot_video: '生成视频',
     delete_shot_clip: '删除视频版本',
@@ -66,6 +67,7 @@
     compose_shot: '合成中',
     batch_compose_shots: '合成中',
     batch_generate_shot_images: '生成中',
+    generate_shot_image: '生成中',
     batch_generate_shot_videos: '生成中',
     generate_shot_video: '生成中',
     delete_shot_clip: '删除中',
@@ -88,6 +90,7 @@
   let lastTaskToastKey = '';
   let voiceCatalog = [];
   let episodePipelineSteps = [];
+  let episodePipelineStepsForEpisodeId = null;
 
   const stepPanelMap = {
     generate_skeleton: 'planning',
@@ -513,8 +516,10 @@
           syncPipelineControlsForCurrentEpisode();
         }
         // 流水线批量生图进度：刷新当前分集分镜
-        if (msg.data.action === 'batch_generate_shot_images' && currentProject && currentEpisode && epId === currentEpisode.id) {
-          loadProjectStoryboards(currentProject.id, currentEpisode.id);
+        if (msg.data.action === 'batch_generate_shot_images' || msg.data.action === 'generate_shot_image') {
+          if (currentProject && currentEpisode && epId === currentEpisode.id) {
+            loadProjectStoryboards(currentProject.id, currentEpisode.id);
+          }
         }
       }
       if (msg.data && msg.data.action === 'episode_pipeline_paused') {
@@ -774,6 +779,7 @@
       currentProject = proj;
       currentEpisode = null;
       episodePipelineSteps = [];
+      episodePipelineStepsForEpisodeId = null;
       assets = normalizeAssetList(proj.assets);
       renderAssets();
       els.projectName.textContent = proj.name;
@@ -829,18 +835,28 @@
     if (!bar || !currentProject || !currentEpisode) {
       if (bar) bar.style.display = 'none';
       episodePipelineSteps = [];
+      episodePipelineStepsForEpisodeId = null;
       return Promise.resolve([]);
     }
+    const episodeId = currentEpisode.id;
+    episodePipelineStepsForEpisodeId = episodeId;
+    episodePipelineSteps = DEFAULT_EPISODE_PIPELINE_STEPS.map(s => ({ ...s, done: false }));
     renderEpisodePipelineSteps();
-    return apiFetch('/api/projects/' + currentProject.id + '/episodes/' + currentEpisode.id + '/pipeline-plan')
+    return apiFetch('/api/projects/' + currentProject.id + '/episodes/' + episodeId + '/pipeline-plan')
       .then(r => r.json())
       .then(data => {
+        if (!currentEpisode || currentEpisode.id !== episodeId || episodePipelineStepsForEpisodeId !== episodeId) {
+          return episodePipelineSteps;
+        }
         episodePipelineSteps = (data && data.steps && data.steps.length)
           ? data.steps
           : DEFAULT_EPISODE_PIPELINE_STEPS.map(s => ({ ...s, done: false }));
         renderEpisodePipelineSteps();
         return episodePipelineSteps;
       }).catch(() => {
+        if (!currentEpisode || currentEpisode.id !== episodeId || episodePipelineStepsForEpisodeId !== episodeId) {
+          return episodePipelineSteps;
+        }
         episodePipelineSteps = DEFAULT_EPISODE_PIPELINE_STEPS.map(s => ({ ...s, done: false }));
         renderEpisodePipelineSteps();
         return episodePipelineSteps;
@@ -1678,8 +1694,28 @@
     }
     if (action === 'generate_shot_image') {
       const shot = data && data.action_result && data.action_result.result && data.action_result.result.shot_number;
-      if (shot) {
-        submitShotImagesViaWS([shot], '为第 ' + shot + ' 镜生成图片', { skipUserMessage: true });
+      const fromChat = shot && !data.task_id;
+      if (fromChat) {
+        loadProjectAssets(currentProject.id).then(list => {
+          if (!list || list.length === 0) {
+            toast('请先从剧本提取资产后再生图', 'warning');
+            switchWorkbenchPanel('assets');
+            return;
+          }
+          runWorkflowViaWS(
+            'generate_shot_image',
+            '为第 ' + shot + ' 镜生成图片',
+            null,
+            '生成中',
+            { shotNumbers: [shot], skipUserMessage: true }
+          );
+        });
+        return;
+      }
+      isGenerating = true;
+      loadTasks();
+      if (currentProject) {
+        loadProjectStoryboards(currentProject.id, currentEpisode?.id);
       }
       return;
     }
@@ -1736,7 +1772,7 @@
         return;
       }
       runWorkflowViaWS(
-        'batch_generate_shot_images',
+        wsOpts.forceRegenerate ? 'generate_shot_image' : 'batch_generate_shot_images',
         userLabel || ('为 ' + shotNumbers.length + ' 个分镜生成图片'),
         null,
         '生成中',
@@ -2808,7 +2844,8 @@
         selectedShots,
         selectedShots.length === 1
           ? ('为第 ' + selectedShots[0] + ' 镜生成图片')
-          : ('批量生成图片（' + selectedShots.length + ' 镜）')
+          : ('批量生成图片（' + selectedShots.length + ' 镜）'),
+        selectedShots.length === 1 ? { forceRegenerate: true } : undefined
       );
     }
     if (mode === 'video') {
@@ -2846,7 +2883,7 @@
   }
 
   function generateShotImage(shotNumber) {
-    return submitShotImagesViaWS([shotNumber], '为第 ' + shotNumber + ' 镜生成图片');
+    return submitShotImagesViaWS([shotNumber], '为第 ' + shotNumber + ' 镜生成图片', { forceRegenerate: true });
   }
 
   // ======================== 资产 CRUD ========================

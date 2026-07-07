@@ -120,7 +120,7 @@ func ShotImageParams(db *sql.DB, projectID string, shot task.StoryboardItem) (re
 		}
 		label := assetTypeLabel(a.Type)
 		cid := CharacterIDFromName(a.Name)
-		if a.Type == "role" {
+		if a.Type == "role" && !IsInanimateAsset(a) {
 			part := fmt.Sprintf("%s「%s」character_id: %s, style: consistent", label, a.Name, cid)
 			if d := RoleAssetDescForShot(a.Desc, shot); d != "" {
 				part += ": " + d

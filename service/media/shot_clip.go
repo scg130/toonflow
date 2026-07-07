@@ -1,9 +1,11 @@
 package media
 
 import (
+	"toonflow/service/asset"
 	"toonflow/service/storyboard"
 	"toonflow/service/project"
 	"toonflow/service/internal/fsutil"
+	"toonflow/task"
 	"context"
 	"database/sql"
 	"fmt"
@@ -94,7 +96,9 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 
 	stylePrompt := project.LookupArtStylePrompt(db, artStyle)
 	styleAnchor := project.LoadProjectStyleAnchor(db, projectID)
-	prompt, negativePrompt := buildShotVideoPrompt(shot, artStyle, stylePrompt, styleAnchor)
+	assets, _ := asset.LoadProjectAssets(db, projectID)
+	humanSubject := len(assets) == 0 || asset.ShotHasHumanRole(shotToItem(shot), assets)
+	prompt, negativePrompt := buildShotVideoPrompt(shot, artStyle, stylePrompt, styleAnchor, humanSubject)
 	logger.CtxTrace(ctx, "shot video prompt shot=%d prompt=%s", shotNumber, prompt)
 
 	width, height := videoSizeForRatio(videoRatio)
@@ -167,6 +171,18 @@ func derefClips(ptrs []*ShotClip) []ShotClip {
 		out[i] = *p
 	}
 	return out
+}
+
+func shotToItem(shot *storyboard.ShotMeta) task.StoryboardItem {
+	if shot == nil {
+		return task.StoryboardItem{}
+	}
+	return task.StoryboardItem{
+		ShotNumber:  shot.ShotNumber,
+		Description: shot.Description,
+		Prompt:      shot.Prompt,
+		Camera:      shot.Camera,
+	}
 }
 
 func generateOneShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputDir, projectID, episodeID string,

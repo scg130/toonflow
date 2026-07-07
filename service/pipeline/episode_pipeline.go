@@ -117,7 +117,7 @@ func episodeStepDone(db *sql.DB, projectID, episodeID, stepID string) (bool, err
 			return false, err
 		}
 		if len(items) == 0 {
-			return true, nil
+			return false, nil
 		}
 		need, err := shotsNeedingImages(db, projectID, episodeID)
 		return len(need) == 0, err
@@ -127,7 +127,7 @@ func episodeStepDone(db *sql.DB, projectID, episodeID, stepID string) (bool, err
 			return false, err
 		}
 		if len(items) == 0 {
-			return true, nil
+			return false, nil
 		}
 		need, err := shotsNeedingVideos(db, projectID, episodeID)
 		return len(need) == 0, err
@@ -137,7 +137,7 @@ func episodeStepDone(db *sql.DB, projectID, episodeID, stepID string) (bool, err
 			return false, err
 		}
 		if len(items) == 0 {
-			return true, nil
+			return false, nil
 		}
 		return shotsDialogueComposed(db, projectID, episodeID)
 	default:
@@ -405,6 +405,7 @@ func runEpisodeBatchImages(ctx context.Context, deps EpisodePipelineDeps, userID
 		return nil
 	}
 	tk.GenerateShots = needShots
+	tk.SkipExistingImages = true
 	tk.Storyboard = items
 	core.EnrichTaskMeta(deps.DB, tk)
 	tk.SetState(task.StateWaiting, tk.Title)

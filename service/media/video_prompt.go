@@ -1,6 +1,7 @@
 package media
 
 import (
+	"fmt"
 	"strings"
 	"unicode/utf8"
 
@@ -9,7 +10,7 @@ import (
 )
 
 // buildShotVideoPrompt returns motion-focused prompts for image-to-video (not image render tags).
-func buildShotVideoPrompt(shot *storyboard.ShotMeta, artStyle, stylePrompt, styleAnchor string) (string, string) {
+func buildShotVideoPrompt(shot *storyboard.ShotMeta, artStyle, stylePrompt, styleAnchor string, humanSubject bool) (string, string) {
 	parts := make([]string, 0, 12)
 
 	if d := strings.TrimSpace(shot.Description); d != "" {
@@ -18,10 +19,14 @@ func buildShotVideoPrompt(shot *storyboard.ShotMeta, artStyle, stylePrompt, styl
 	if ac := strings.TrimSpace(shot.ActionContinue); ac != "" {
 		parts = append(parts, "action continuation: "+ac)
 	}
+	dialogue := resolveShotDialogue(shot)
+	parts = appendDialogueVideoInstructions(parts, dialogue, humanSubject)
 	if cam := camera.MapCameraToVideoMotion(shot.Camera); cam != "" {
 		parts = append(parts, cam)
-	} else {
+	} else if humanSubject {
 		parts = append(parts, "subtle cinematic camera movement with natural character motion")
+	} else {
+		parts = append(parts, "subtle cinematic camera movement, slow environmental motion, inanimate subject")
 	}
 	if len(parts) <= 2 {
 		if trimmed := trimImagePromptForVideo(shot.Prompt); trimmed != "" {
@@ -53,6 +58,9 @@ func buildShotVideoPrompt(shot *storyboard.ShotMeta, artStyle, stylePrompt, styl
 	} else if artStyle != "" {
 		parts = append(parts, artStyle+" animation style")
 	}
+	if !humanSubject {
+		parts = append(parts, "no human character motion, object and environment only")
+	}
 
 	negative := strings.Join([]string{
 		"static image", "frozen frame", "slideshow", "still photo", "no motion",
@@ -62,8 +70,52 @@ func buildShotVideoPrompt(shot *storyboard.ShotMeta, artStyle, stylePrompt, styl
 		"watermark", "text overlay", "logo",
 		"random color shift", "style drift", "temporal discontinuity",
 	}, ", ")
+	if humanSubject && !dialogue.Ignorable && dialogue.PureText != "" {
+		negative += ", closed mouth while speaking, static lips during dialogue, no lip sync, mute expression while talking, wrong speaker lip movement"
+	}
 
 	return strings.Join(parts, ", "), negative
+}
+
+func resolveShotDialogue(shot *storyboard.ShotMeta) ParsedDialogue {
+	if shot == nil {
+		return ParsedDialogue{Ignorable: true}
+	}
+	dialogue := strings.TrimSpace(shot.Dialogue)
+	if dialogue == "" {
+		dialogue = storyboard.ExtractDialogueFromDescription(shot.Description)
+	}
+	return ParseDialogueForTTS(dialogue)
+}
+
+func appendDialogueVideoInstructions(parts []string, dialogue ParsedDialogue, humanSubject bool) []string {
+	if !humanSubject || dialogue.Ignorable || strings.TrimSpace(dialogue.PureText) == "" {
+		return parts
+	}
+	speaker := strings.TrimSpace(dialogue.Speaker)
+	if speaker == "" {
+		speaker = "character"
+	}
+	line := truncateDialogueForVideoPrompt(dialogue.PureText, 80)
+	parts = append(parts,
+		fmt.Sprintf("dialogue performance: %s speaking \"%s\"", speaker, line),
+		fmt.Sprintf("character %s performs matching body language and facial acting while speaking", speaker),
+		fmt.Sprintf("visible lip sync and mouth movement for %s aligned with the spoken line", speaker),
+		"natural jaw and lip motion synchronized with dialogue delivery",
+		"expressive speaking gestures, eye contact and emotional acting tied to the line",
+	)
+	return parts
+}
+
+func truncateDialogueForVideoPrompt(text string, maxRunes int) string {
+	text = strings.TrimSpace(text)
+	if text == "" || maxRunes <= 0 {
+		return text
+	}
+	if utf8.RuneCountInString(text) <= maxRunes {
+		return text
+	}
+	return string([]rune(text)[:maxRunes]) + "…"
 }
 
 func trimImagePromptForVideo(prompt string) string {

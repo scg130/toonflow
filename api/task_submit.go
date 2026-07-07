@@ -72,6 +72,7 @@ func (r *Router) submitImageGenerationTask(userID, projectID, episodeID string, 
 	t.Mode = "images"
 	t.EpisodeID = episodeID
 	t.GenerateShots = shotNumbers
+	t.SkipExistingImages = len(shotNumbers) > 1
 	t.Storyboard = items
 	service.EnrichTaskMeta(r.db.DB, t)
 	t.SetState(task.StateWaiting, t.Title)

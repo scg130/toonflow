@@ -15,6 +15,7 @@ import (
 	"toonflow/adapter"
 	"toonflow/logger"
 	"toonflow/service"
+	"toonflow/service/asset"
 	"toonflow/skill"
 	"toonflow/task"
 	"toonflow/ws"
@@ -135,7 +136,7 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 				service.MergeShotMediaFromStore(p.db, t.ProjectID, t.EpisodeID, item.ShotNumber, &t.Storyboard[idx])
 				item = t.Storyboard[idx]
 			}
-			if service.ShotHasImage(item) {
+			if t.SkipExistingImages && service.ShotHasImage(item) {
 				progress := 30 + float32(seq+1)/float32(total)*50
 				localPct := float32(seq+1) / float32(total) * 100
 				skipMsg := fmt.Sprintf("第 %d 镜已有图片，跳过 (%d/%d)", item.ShotNumber, seq+1, total)
@@ -320,12 +321,18 @@ func (p *Pipeline) parseScript(ctx context.Context, t *task.Task) ([]task.Storyb
 
 func (p *Pipeline) genImage(ctx context.Context, t *task.Task, item task.StoryboardItem, localPath string) (string, error) {
 	var refURL, assetPrompt string
+	var assets []asset.ProjectAsset
 	if p.db != nil && t.ProjectID != "" {
 		item = service.SanitizeStoryboardItemForImage(p.db, t.ProjectID, item)
+		assets, _ = asset.LoadProjectAssets(p.db, t.ProjectID)
 		refURL, assetPrompt, _ = service.ShotImageParams(p.db, t.ProjectID, item)
 	}
 	prompt := service.BuildShotImagePrompt(item, t.Style, service.ResolutionToVideoRatio(t.Resolution), assetPrompt,
 		service.LoadProjectStyleAnchor(p.db, t.ProjectID))
+	if len(assets) > 0 {
+		prompt = asset.SanitizeFinalImagePrompt(prompt, item, assets)
+	}
+	logger.CtxTrace(ctx, "genImage shot=%d prompt=%s", item.ShotNumber, prompt)
 
 	resp, err := service.RequestShotImageWithRetry(ctx, p.adapter, p.imageModel, resToAspect(t.Resolution), prompt, refURL)
 	if err != nil {
