@@ -70,23 +70,67 @@ func (v *OpenAIVendor) TextRequest(ctx interface{}, model string, params TextPar
 		c = context.Background()
 	}
 
+	stream := params.OnDelta != nil
+	jsonMode := params.JSONMode && !stream
+
+	once := func() (*TextResponse, error) {
+		resp, err := v.doChatRequest(c, model, params, stream, jsonMode)
+		if err != nil && jsonMode {
+			// Best-effort JSON mode: on any failure retry once without it so
+			// structured calls degrade to plain output + fallback parsers.
+			if resp2, err2 := v.doChatRequest(c, model, params, stream, false); err2 == nil {
+				return resp2, nil
+			}
+		}
+		return resp, err
+	}
+
+	// Retry transient upstream failures for non-streaming calls.
+	maxAttempts := 1
+	if !stream {
+		maxAttempts = 3
+	}
+	var resp *TextResponse
+	var err error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		resp, err = once()
+		if err == nil || !IsTransientTextError(err) || attempt == maxAttempts {
+			break
+		}
+		select {
+		case <-c.Done():
+			return nil, c.Err()
+		case <-time.After(time.Duration(attempt) * 2 * time.Second):
+		}
+	}
+	return resp, err
+}
+
+func (v *OpenAIVendor) doChatRequest(c context.Context, model string, params TextParams, stream, jsonMode bool) (*TextResponse, error) {
+	type responseFormat struct {
+		Type string `json:"type"`
+	}
 	type request struct {
-		Model       string        `json:"model"`
-		Messages    []TextMessage `json:"messages"`
-		Temperature *float32      `json:"temperature,omitempty"`
-		MaxTokens   int           `json:"max_tokens,omitempty"`
-		Stream      bool          `json:"stream,omitempty"`
+		Model          string          `json:"model"`
+		Messages       []TextMessage   `json:"messages"`
+		Temperature    *float32        `json:"temperature,omitempty"`
+		MaxTokens      int             `json:"max_tokens,omitempty"`
+		Stream         bool            `json:"stream,omitempty"`
+		ResponseFormat *responseFormat `json:"response_format,omitempty"`
 	}
 
 	reqBody := request{
 		Model:     model,
 		Messages:  params.Messages,
 		MaxTokens: params.MaxTokens,
-		Stream:    params.OnDelta != nil,
+		Stream:    stream,
 	}
 	if params.Temperature != 0 {
 		t := params.Temperature
 		reqBody.Temperature = &t
+	}
+	if jsonMode {
+		reqBody.ResponseFormat = &responseFormat{Type: "json_object"}
 	}
 
 	payload, err := json.Marshal(reqBody)

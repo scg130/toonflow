@@ -45,11 +45,7 @@ func NormalizeStoryboardItems(items []task.StoryboardItem) []task.StoryboardItem
 		if it.Camera == "" {
 			it.Camera = "固定镜头"
 		}
-		if strings.TrimSpace(it.Dialogue) == "" {
-			if dlg := ExtractDialogueFromDescription(it.Description); dlg != "" {
-				it.Dialogue = dlg
-			}
-		}
+		it.Dialogue = strings.TrimSpace(it.Dialogue)
 		out = append(out, it)
 	}
 	return out
@@ -111,6 +107,11 @@ func MergeStoryboardMedia(existing, incoming []task.StoryboardItem) []task.Story
 func ParseStoryboardResponse(text string) ([]task.StoryboardItem, error) {
 	text = strings.TrimSpace(text)
 
+	// Preferred: provider JSON mode returns an object wrapper {"shots":[...]}.
+	if wrapped := parseWrappedStoryboard(text); len(wrapped) > 0 {
+		return NormalizeStoryboardItems(wrapped), nil
+	}
+
 	var items []task.StoryboardItem
 	if err := json.Unmarshal([]byte(text), &items); err == nil && len(items) > 0 {
 		return NormalizeStoryboardItems(items), nil
@@ -136,6 +137,33 @@ func ParseStoryboardResponse(text string) ([]task.StoryboardItem, error) {
 
 	items = fallbackParseShots(text)
 	return NormalizeStoryboardItems(items), nil
+}
+
+// parseWrappedStoryboard extracts shots from an object wrapper the model returns
+// under JSON mode, e.g. {"shots":[...]} (also tolerates "storyboard"/"items" keys).
+func parseWrappedStoryboard(text string) []task.StoryboardItem {
+	start := strings.Index(text, "{")
+	end := strings.LastIndex(text, "}")
+	if start < 0 || end <= start {
+		return nil
+	}
+	var wrapper struct {
+		Shots      []task.StoryboardItem `json:"shots"`
+		Storyboard []task.StoryboardItem `json:"storyboard"`
+		Items      []task.StoryboardItem `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(text[start:end+1]), &wrapper); err != nil {
+		return nil
+	}
+	switch {
+	case len(wrapper.Shots) > 0:
+		return wrapper.Shots
+	case len(wrapper.Storyboard) > 0:
+		return wrapper.Storyboard
+	case len(wrapper.Items) > 0:
+		return wrapper.Items
+	}
+	return nil
 }
 
 func parseMarkdownShots(text string) []task.StoryboardItem {

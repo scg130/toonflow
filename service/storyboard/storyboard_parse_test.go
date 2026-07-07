@@ -8,6 +8,28 @@ import (
 	"toonflow/task"
 )
 
+func TestParseStoryboardResponse_objectWrapper(t *testing.T) {
+	// JSON-mode returns an object wrapper.
+	obj := `{"shots":[{"shot_number":1,"scene":"虚空","description":"焦黑树桩","duration":4,"dialogue":"石昊：走了","prompt":"wide"},{"shot_number":2,"scene":"虚空","description":"石昊起身","duration":3,"prompt":"close"}]}`
+	items, err := ParseStoryboardResponse(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 shots from wrapper, got %d", len(items))
+	}
+	if items[1].Dialogue != "" || items[0].Dialogue != "石昊：走了" {
+		t.Fatalf("dialogue field not carried from wrapper: %+v", items)
+	}
+
+	// Bare array must still parse (fallback path).
+	arr := `[{"shot_number":1,"scene":"s","description":"d","duration":3,"prompt":"p"}]`
+	items2, err := ParseStoryboardResponse(arr)
+	if err != nil || len(items2) != 1 {
+		t.Fatalf("bare array fallback failed: %d %v", len(items2), err)
+	}
+}
+
 const sampleTableStoryboard = `
 #### **【第一幕：最后的温柔】 (00:00 - 00:12)**
 

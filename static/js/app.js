@@ -2002,24 +2002,11 @@
     return '';
   }
 
-  function extractDialogueFromDescription(desc) {
-    if (!desc) return '';
-    const text = String(desc);
-    for (const line of text.split('\n')) {
-      const t = line.trim();
-      if (/^(.+?)[:：]/.test(t)) return t;
-    }
-    const m = text.match(/([\u4e00-\u9fa5\w·]+)\s*[:：]\s*([^\n。；;]+)/);
-    if (m) return m[1] + '：' + m[2].trim();
-    return '';
-  }
-
   function normalizeStoryboards(list) {
     if (!Array.isArray(list)) return [];
     return list.map((sb, i) => {
       const description = sb.description ?? sb.Description ?? '';
-      const dialogueRaw = sb.dialogue ?? sb.Dialogue ?? '';
-      const dialogue = dialogueRaw || extractDialogueFromDescription(description);
+      const dialogue = (sb.dialogue ?? sb.Dialogue ?? '').trim();
       return {
         shot_number: sb.shot_number ?? sb.ShotNumber ?? (i + 1),
         scene: sb.scene ?? sb.Scene ?? '',

@@ -7,17 +7,19 @@ import (
 	"toonflow/task"
 )
 
+// Clause-stripping patterns are intentionally GENERIC (structural markers only:
+// handheld-prop verbs and background/scene markers). Do NOT hardcode specific
+// item names (e.g. a particular mask or plant) here — that only patches one
+// project's asset and rots quickly. Whether a specific prop/scene is kept is
+// decided by shotMentionsProp / shotMentionsScene against the shot's own text.
 var (
 	rolePropClausePatterns = []*regexp.Regexp{
 		regexp.MustCompile(`(?i)[^,，;；\n]*(one hand )?hold(ing|s)?[^,，;；\n]*`),
-		regexp.MustCompile(`[^,，;；\n]*(面具|mask|兽首)[^,，;；\n]*`),
 		regexp.MustCompile(`[^,，;；\n]*[一]?手[^,，;；\n]*(轻)?[握持拿][^,，;；\n]*`),
 	}
 	roleSceneClausePatterns = []*regexp.Regexp{
 		regexp.MustCompile(`(?i)[^,，;；\n]*(background|backdrop)[^,，;；\n]*`),
 		regexp.MustCompile(`[^,，;；\n]*(身后|背景|远景)[^,，;；\n]*`),
-		regexp.MustCompile(`(?i)[^,，;；\n]*red maple[^,，;；\n]*`),
-		regexp.MustCompile(`[^,，;；\n]*红枫[^,，;；\n]*`),
 	}
 )
 

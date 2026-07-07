@@ -48,6 +48,7 @@ func ExtractAssetsFromEpisode(ctx context.Context, db *sql.DB, v adapter.Vendor,
 			{Role: "user", Content: script},
 		},
 		MaxTokens: 6000,
+		JSONMode:  true,
 	})
 	if err != nil {
 		return 0, err
@@ -66,9 +67,21 @@ func ExtractAssetsFromEpisode(ctx context.Context, db *sql.DB, v adapter.Vendor,
 		TurnaroundViews []turnaroundView `json:"turnaround_views"`
 	}
 	var raw []assetItemJSON
-	text := jsonutil.ExtractJSONArray(resp.Content)
-	if err := json.Unmarshal([]byte(text), &raw); err != nil {
-		return 0, fmt.Errorf("parse assets: %w", err)
+	// Preferred: JSON-mode object wrapper {"assets":[...]}.
+	if s, e := strings.Index(resp.Content, "{"), strings.LastIndex(resp.Content, "}"); s >= 0 && e > s {
+		var wrapper struct {
+			Assets []assetItemJSON `json:"assets"`
+		}
+		if err := json.Unmarshal([]byte(resp.Content[s:e+1]), &wrapper); err == nil && len(wrapper.Assets) > 0 {
+			raw = wrapper.Assets
+		}
+	}
+	// Fallback: bare JSON array.
+	if len(raw) == 0 {
+		text := jsonutil.ExtractJSONArray(resp.Content)
+		if err := json.Unmarshal([]byte(text), &raw); err != nil {
+			return 0, fmt.Errorf("parse assets: %w", err)
+		}
 	}
 	items := make([]extractAssetItem, 0, len(raw))
 	for _, r := range raw {
@@ -129,9 +142,9 @@ func buildAssetExtractSystemPrompt(videoRatio, artStyle string) string {
 	if videoRatio == "9:16" {
 		ratioNote = "9:16 vertical"
 	}
-	return fmt.Sprintf(`你是短剧资产策划。从剧本提取角色/场景/道具，输出 JSON 数组（仅 JSON，无说明文字）。
+	return fmt.Sprintf(`你是短剧资产策划。从剧本提取角色/场景/道具，仅输出一个 JSON 对象 {"assets":[...]}（仅 JSON，无说明文字、无代码围栏）。
 
-每项字段：
+assets 每项字段：
 - name (string) 资产名称
 - type (string) role | scene | prop（无生命的物体如树桩、残躯、武器、面具等必须 type=prop，禁止标为 role）
 - desc (string) 中文视觉描述（仅角色本体：发型、瞳色、服装、体型、气质；**禁止**手持道具、武器、面具；**禁止**具体背景/场景——背景请单独建 scene 资产，道具请建 prop 资产）

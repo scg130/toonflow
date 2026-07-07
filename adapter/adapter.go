@@ -1,6 +1,32 @@
 package adapter
 
-import "sync"
+import (
+	"strings"
+	"sync"
+)
+
+// IsTransientTextError reports whether a chat/text API error looks transient
+// (a network blip or an upstream 429/5xx/"upstream_error") and is therefore
+// worth retrying. Genuine client errors (real 404 route, 401/403 auth, 400
+// bad request) are not retried.
+func IsTransientTextError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	if strings.Contains(s, "upstream_error") {
+		return true
+	}
+	if strings.Contains(s, "request failed") || strings.Contains(s, "timeout") ||
+		strings.Contains(s, "timed out") || strings.Contains(s, "connection reset") ||
+		strings.Contains(s, "connection refused") || strings.Contains(s, "eof") {
+		return true
+	}
+	return strings.Contains(s, "error 408") || strings.Contains(s, "error 425") ||
+		strings.Contains(s, "error 429") || strings.Contains(s, "error 500") ||
+		strings.Contains(s, "error 502") || strings.Contains(s, "error 503") ||
+		strings.Contains(s, "error 504")
+}
 
 // VendorConfig describes a vendor's capabilities and available models.
 type VendorConfig struct {
@@ -42,7 +68,11 @@ type TextParams struct {
 	Temperature    float32       `json:"temperature,omitempty"`
 	MaxTokens      int           `json:"max_tokens,omitempty"`
 	ResponseFormat string        `json:"response_format,omitempty"`
-	OnDelta        func(delta string) error `json:"-"`
+	// JSONMode requests provider-enforced JSON output (response_format json_object).
+	// Only honored for non-streaming calls; adapters degrade gracefully (retry
+	// without it) when the provider rejects the parameter for any reason.
+	JSONMode bool                     `json:"-"`
+	OnDelta  func(delta string) error `json:"-"`
 }
 
 // TextResponse is the result of a text generation request.

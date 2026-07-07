@@ -72,13 +72,11 @@ func (a *AgentChat) HandleMessage(ctx context.Context, userID, projectID, episod
 	core.ReportStreamEnd(ctx)
 	core.ReportProgress(ctx, "chat", 25, "AI 回复完成")
 
+	// Trust the model's ACTION decision (governed by the whitelist rules in the
+	// system prompt). Safety nets remain: parseActionFromReply gates on the
+	// Allowed() whitelist, and intent.Validate() enforces hard preconditions.
+	// We intentionally do NOT second-guess intent with brittle keyword lists.
 	reply, intent := parseActionFromReply(resp.Content)
-	if intent != nil && (ShouldBlockChatAction(userMsg) || !IsExplicitExecutionRequest(userMsg)) {
-		intent = nil
-		if strings.TrimSpace(reply) == "" {
-			reply = SanitizeWorkContent(resp.Content)
-		}
-	}
 	if intent != nil {
 		EnrichIntentFromUserMessage(intent, userMsg)
 		if err := intent.Validate(episodeID); err != nil {

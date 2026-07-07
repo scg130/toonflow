@@ -81,9 +81,6 @@ func ComposeShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputDi
 		return nil, err
 	}
 	dialogue := strings.TrimSpace(shot.Dialogue)
-	if dialogue == "" {
-		dialogue = storyboard.ExtractDialogueFromDescription(shot.Description)
-	}
 	parsed := ParseDialogueForTTS(dialogue)
 	if parsed.Ignorable {
 		return nil, fmt.Errorf("%s", ExplainComposeSkipReason(shotNumber, dialogue, parsed))
@@ -174,11 +171,7 @@ func BatchComposeShots(ctx context.Context, db *sql.DB, v adapter.Vendor, output
 	var composed int
 	var urls []string
 	for _, it := range items {
-		dlg := strings.TrimSpace(it.Dialogue)
-		if dlg == "" {
-			dlg = storyboard.ExtractDialogueFromDescription(it.Description)
-		}
-		parsed := ParseDialogueForTTS(dlg)
+		parsed := ParseDialogueForTTS(strings.TrimSpace(it.Dialogue))
 		if parsed.Ignorable {
 			continue
 		}

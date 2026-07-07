@@ -81,11 +81,7 @@ func resolveShotDialogue(shot *storyboard.ShotMeta) ParsedDialogue {
 	if shot == nil {
 		return ParsedDialogue{Ignorable: true}
 	}
-	dialogue := strings.TrimSpace(shot.Dialogue)
-	if dialogue == "" {
-		dialogue = storyboard.ExtractDialogueFromDescription(shot.Description)
-	}
-	return ParseDialogueForTTS(dialogue)
+	return ParseDialogueForTTS(strings.TrimSpace(shot.Dialogue))
 }
 
 func appendDialogueVideoInstructions(parts []string, dialogue ParsedDialogue, humanSubject bool) []string {

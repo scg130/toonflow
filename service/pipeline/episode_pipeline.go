@@ -213,11 +213,7 @@ func shotsDialogueComposed(db *sql.DB, projectID, episodeID string) (bool, error
 	}
 	hasDialogue := false
 	for _, it := range items {
-		dlg := strings.TrimSpace(it.Dialogue)
-		if dlg == "" {
-			dlg = storyboard.ExtractDialogueFromDescription(it.Description)
-		}
-		if media.ParseDialogueForTTS(dlg).Ignorable {
+		if media.ParseDialogueForTTS(strings.TrimSpace(it.Dialogue)).Ignorable {
 			continue
 		}
 		hasDialogue = true

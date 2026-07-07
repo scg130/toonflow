@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -16,6 +15,7 @@ import (
 	"toonflow/adapter"
 	"toonflow/service/internal/ffmpeg"
 	"toonflow/service/internal/fsutil"
+	"toonflow/service/internal/jsonutil"
 	"toonflow/service/storyboard"
 	"toonflow/service/voice"
 )
@@ -41,8 +41,6 @@ type NarrationPlan struct {
 	AudioURL      string             `json:"audio_url,omitempty"`
 	Status        string             `json:"status"` // draft | synthesized
 }
-
-var reJSONArray = regexp.MustCompile(`\[[\s\S]*\]`)
 
 // TimelineVideoDuration returns estimated export duration (trims, speed, transitions).
 func TimelineVideoDuration(tl *TimelineEdit) float64 {
@@ -120,8 +118,8 @@ func GenerateNarrationPlan(ctx context.Context, db *sql.DB, v adapter.Vendor, ou
 - 旁白与对白是两条音轨：对白在画面里，旁白是上层解说，内容必须互补而非重复。
 
 ## 时长与覆盖
-- 只输出 JSON 数组，不要 markdown 或其它说明；
-- 每项字段：start (秒), end (秒), text (中文旁白), shot_number (可选镜号整数)；
+- 只输出一个 JSON 对象 {"segments":[...]}，不要 markdown 或其它说明；
+- segments 每项字段：start (秒), end (秒), text (中文旁白), shot_number (可选镜号整数)；
 - **每个时间线视频片段必须对应一条旁白**，start/end 与该片段起止时间一致；
 - 旁白连续覆盖 0~%.1f 秒，段间空白不超过 0.2 秒；
 - 全片旁白总字数约 %d 字（按 %.1f 秒口播估算），宁可精简也要念完；
@@ -143,17 +141,18 @@ func GenerateNarrationPlan(ctx context.Context, db *sql.DB, v adapter.Vendor, ou
 ## 改编策略
 %s
 
-示例：[{"start":0,"end":4.0,"text":"界海边缘，石昊独自站在废墟之上，这一战，他已无退路。","shot_number":1}]`,
+示例：{"segments":[{"start":0,"end":4.0,"text":"界海边缘，石昊独自站在废墟之上，这一战，他已无退路。","shot_number":1}]}`,
 		total, total, total, wordsBudget, total, clipLines, dialogueLines,
 		truncateRunes(script, 8000), truncateRunes(skeleton, 2000), truncateRunes(strategy, 2000))
 
 		resp, err := v.TextRequest(ctx, adapter.DefaultTextModel, adapter.TextParams{
 			Messages: []adapter.TextMessage{
-				{Role: "system", Content: "你只输出合法 JSON 数组。旁白是第三人称故事解说，禁止复述角色对白原文。"},
+				{Role: "system", Content: "你只输出合法 JSON 对象 {\"segments\":[...]}。旁白是第三人称故事解说，禁止复述角色对白原文。"},
 				{Role: "user", Content: prompt},
 			},
 		Temperature: 0.6,
 		MaxTokens:   4000,
+		JSONMode:    true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("生成旁白方案失败: %w", err)
@@ -294,11 +293,20 @@ func parseNarrationSegments(content string) ([]NarrationSegment, error) {
 	if raw == "" {
 		return nil, fmt.Errorf("AI 未返回旁白内容")
 	}
-	if m := reJSONArray.FindString(raw); m != "" {
-		raw = m
+	// Preferred: JSON-mode object wrapper {"segments":[...]}.
+	if start := strings.Index(raw, "{"); start >= 0 {
+		if end := strings.LastIndex(raw, "}"); end > start {
+			var wrapper struct {
+				Segments []NarrationSegment `json:"segments"`
+			}
+			if err := json.Unmarshal([]byte(raw[start:end+1]), &wrapper); err == nil && len(wrapper.Segments) > 0 {
+				return wrapper.Segments, nil
+			}
+		}
 	}
+	// Fallback: bare JSON array.
 	var segments []NarrationSegment
-	if err := json.Unmarshal([]byte(raw), &segments); err != nil {
+	if err := json.Unmarshal([]byte(jsonutil.ExtractJSONArray(raw)), &segments); err != nil {
 		return nil, fmt.Errorf("解析旁白 JSON 失败: %w", err)
 	}
 	return segments, nil
@@ -475,9 +483,6 @@ func buildShotDialogueReference(db *sql.DB, projectID, episodeID string) string 
 	var b strings.Builder
 	for _, it := range items {
 		dlg := strings.TrimSpace(it.Dialogue)
-		if dlg == "" {
-			dlg = storyboard.ExtractDialogueFromDescription(it.Description)
-		}
 		if dlg == "" {
 			continue
 		}
