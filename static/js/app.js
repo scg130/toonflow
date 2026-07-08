@@ -111,7 +111,7 @@
     { id: 'generate_storyboard', label: '分镜', panel: 'storyboard' },
     { id: 'extract_assets', label: '提取资产', panel: 'assets' },
     { id: 'assign_character_voices', label: '分配音色', panel: 'assets' },
-    { id: 'batch_generate_shot_images', label: '批量生图', panel: 'storyboard' },
+    { id: 'batch_generate_shot_images', label: '批量生关键帧', panel: 'storyboard' },
     { id: 'batch_generate_shot_videos', label: '批量生视频', panel: 'storyboard' },
     { id: 'batch_compose_shots', label: '对白合成', panel: 'video' },
   ];
@@ -1443,7 +1443,7 @@
     episodePipelineEpisodeId = epId;
     const st = ensurePipelineRecord(epId);
     st.active = true;
-    st.lines = ['🚀 已开始：策划 → 分镜 → 资产 → 音色 → 生图 → 生视频 → 对白合成\n（可在输入框上方暂停 / 继续）'];
+    st.lines = ['🚀 已开始：策划 → 分镜 → 资产 → 音色 → 关键帧 → 关键帧视频 → 对白合成\n（可在输入框上方暂停 / 继续）'];
     st.progress = 2;
     st.progressMsg = '流水线启动中...';
     st.done = false;

@@ -102,13 +102,19 @@ type ImageResponse struct {
 
 // VideoParams holds parameters for video generation requests.
 type VideoParams struct {
-	Prompt    string  `json:"prompt"`
-	ImageURL  string  `json:"image_url,omitempty"`
-	Model     string  `json:"model"`
-	Duration  float32 `json:"duration,omitempty"`
-	Width     int     `json:"width,omitempty"`
-	Height    int     `json:"height,omitempty"`
-	Negative  string  `json:"negative_prompt,omitempty"`
+	Prompt   string  `json:"prompt"`
+	ImageURL string  `json:"image_url,omitempty"`
+	Model    string  `json:"model"`
+	Duration float32 `json:"duration,omitempty"`
+	Width    int     `json:"width,omitempty"`
+	Height   int     `json:"height,omitempty"`
+	Negative string  `json:"negative_prompt,omitempty"`
+	// FrameRate overrides the output frame rate (fps). 0 falls back to the vendor default (24).
+	FrameRate int `json:"frame_rate,omitempty"`
+	// Keyframes are >=2 publicly reachable image URLs. When provided, the vendor
+	// generates a smooth interpolated transition through them (keyframe mode),
+	// yielding seamless continuity between consecutive same-scene shots.
+	Keyframes []string `json:"keyframes,omitempty"`
 }
 
 // VideoResponse is the result of a video generation request.

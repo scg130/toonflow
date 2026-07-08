@@ -592,19 +592,27 @@ func (v *AgnesAIVendor) VideoRequest(ctx interface{}, model string, params Video
 		c = context.Background()
 	}
 
-	frameRate := 24
+	frameRate := params.FrameRate
+	if frameRate <= 0 {
+		frameRate = 24
+	}
 	numFrames := FramesForVideoDuration(params.Duration, frameRate)
 
+	type extraBody struct {
+		Image []string `json:"image,omitempty"`
+		Mode  string   `json:"mode,omitempty"`
+	}
 	type reqBody struct {
-		Model             string `json:"model"`
-		Prompt            string `json:"prompt"`
-		Image             string `json:"image,omitempty"`
-		Height            int    `json:"height,omitempty"`
-		Width             int    `json:"width,omitempty"`
-		NumFrames         int    `json:"num_frames,omitempty"`
-		FrameRate         int    `json:"frame_rate,omitempty"`
-		NegativePrompt    string `json:"negative_prompt,omitempty"`
-		NumInferenceSteps int    `json:"num_inference_steps,omitempty"`
+		Model             string     `json:"model"`
+		Prompt            string     `json:"prompt"`
+		Image             string     `json:"image,omitempty"`
+		Height            int        `json:"height,omitempty"`
+		Width             int        `json:"width,omitempty"`
+		NumFrames         int        `json:"num_frames,omitempty"`
+		FrameRate         int        `json:"frame_rate,omitempty"`
+		NegativePrompt    string     `json:"negative_prompt,omitempty"`
+		NumInferenceSteps int        `json:"num_inference_steps,omitempty"`
+		ExtraBody         *extraBody `json:"extra_body,omitempty"`
 	}
 	width := params.Width
 	height := params.Height
@@ -624,8 +632,29 @@ func (v *AgnesAIVendor) VideoRequest(ctx interface{}, model string, params Video
 		NegativePrompt:    params.Negative,
 		NumInferenceSteps: 45,
 	}
+
+	// Prefer keyframe interpolation when >=2 valid keyframes are supplied: the model
+	// morphs smoothly from the first keyframe (previous shot's last frame) to the last
+	// (this shot's target composition), producing seamless same-scene continuity
+	// instead of a hard cut between two independently generated clips.
+	var keyframes []string
+	for _, kf := range params.Keyframes {
+		kf = strings.TrimSpace(kf)
+		if IsCDNImageURL(kf) {
+			keyframes = append(keyframes, kf)
+		}
+	}
 	imageURL := strings.TrimSpace(params.ImageURL)
-	if imageURL != "" {
+	mode := "keyframes"
+	if len(keyframes) >= 2 {
+		body.ExtraBody = &extraBody{Image: keyframes, Mode: mode}
+		if !strings.Contains(strings.ToLower(body.Prompt), "keyframe") {
+			body.Prompt = "Generate a smooth cinematic transition between the keyframes, maintaining visual consistency and natural camera movement. " + body.Prompt
+		}
+		logger.CtxTrace(c, "agnes video api keyframes=%d", len(keyframes))
+	} else if len(params.Keyframes) > 0 {
+		return nil, fmt.Errorf("关键帧视频至少需要 2 张有效关键帧图片（当前 %d 张）", len(keyframes))
+	} else if imageURL != "" {
 		if !IsCDNImageURL(imageURL) {
 			return nil, fmt.Errorf("图生视频须使用 Agnes CDN 图片 URL（https://），不能传 base64 或本地路径")
 		}
@@ -633,10 +662,10 @@ func (v *AgnesAIVendor) VideoRequest(ctx interface{}, model string, params Video
 		logger.CtxTrace(c, "agnes video api image_url=%s", imageURL)
 	}
 	if body.NegativePrompt == "" {
-		body.NegativePrompt = "static image, frozen frame, no motion, blurry, low quality, distorted, watermark"
+		body.NegativePrompt = "static image, frozen frame, no motion, blurry, low quality, distorted, watermark, flicker, stutter, jitter, ghosting, morphing artifacts"
 	}
-	logger.CtxTrace(c, "agnes video api request model=%s %dx%d frames=%d steps=%d has_image=%v",
-		model, width, height, numFrames, body.NumInferenceSteps, imageURL != "")
+	logger.CtxTrace(c, "agnes video api request model=%s %dx%d frames=%d fps=%d steps=%d has_image=%v keyframes=%d",
+		model, width, height, numFrames, frameRate, body.NumInferenceSteps, imageURL != "", len(keyframes))
 
 	payload, err := json.Marshal(body)
 	if err != nil {

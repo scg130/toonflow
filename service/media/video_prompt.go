@@ -7,6 +7,7 @@ import (
 
 	"toonflow/service/internal/camera"
 	"toonflow/service/storyboard"
+	"toonflow/task"
 )
 
 // buildShotVideoPrompt returns motion-focused prompts for image-to-video (not image render tags).
@@ -15,6 +16,10 @@ func buildShotVideoPrompt(shot *storyboard.ShotMeta, artStyle, stylePrompt, styl
 
 	if d := strings.TrimSpace(shot.Description); d != "" {
 		parts = append(parts, d)
+	}
+	if seq := formatBeatsForVideoPrompt(shot.Beats, shot.Duration); seq != "" {
+		parts = append(parts, seq)
+		parts = append(parts, "smooth keyframe interpolation through all timed beats, continuous seamless motion, no hard cuts within shot")
 	}
 	if ac := strings.TrimSpace(shot.ActionContinue); ac != "" {
 		parts = append(parts, "action continuation: "+ac)
@@ -75,6 +80,31 @@ func buildShotVideoPrompt(shot *storyboard.ShotMeta, artStyle, stylePrompt, styl
 	}
 
 	return strings.Join(parts, ", "), negative
+}
+
+// formatBeatsForVideoPrompt renders an intra-shot timed action plan as an explicit
+// time-node instruction so a single generation animates the whole sequence in order,
+// e.g. "timed sequence over 12.0s: [0.0s] ...; [4.0s] ...; [8.0s] ...".
+func formatBeatsForVideoPrompt(beats []task.ShotBeat, dur float64) string {
+	if len(beats) < 2 {
+		return ""
+	}
+	nodes := make([]string, 0, len(beats))
+	for _, b := range beats {
+		action := strings.TrimSpace(b.Action)
+		if action == "" {
+			continue
+		}
+		nodes = append(nodes, fmt.Sprintf("[%.1fs] %s", b.Time, action))
+	}
+	if len(nodes) < 2 {
+		return ""
+	}
+	header := "timed sequence"
+	if dur > 0 {
+		header = fmt.Sprintf("timed sequence over %.1fs", dur)
+	}
+	return header + ": " + strings.Join(nodes, "; ") + "; continuous seamless motion between beats, no cuts"
 }
 
 func resolveShotDialogue(shot *storyboard.ShotMeta) ParsedDialogue {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -48,10 +49,70 @@ func NormalizeStoryboardItems(items []task.StoryboardItem) []task.StoryboardItem
 		}
 		it.Dialogue = strings.TrimSpace(it.Dialogue)
 		it.SceneLink = resolveSceneLink(it.SceneLink, it.Scene, prevScene, len(out) == 0)
+		it.Beats = ensureShotBeats(it.Beats, it.Duration, it.Description)
 		prevScene = strings.TrimSpace(it.Scene)
 		out = append(out, it)
 	}
 	return out
+}
+
+// ensureShotBeats returns a cleaned intra-shot timed plan with at least two beats.
+// Every shot is 10–18s and uses keyframe image + keyframe video generation.
+func ensureShotBeats(beats []task.ShotBeat, dur float64, description string) []task.ShotBeat {
+	if dur <= 0 {
+		dur = duration.DefaultShotDurationSec
+	}
+	cleaned := normalizeShotBeats(beats, dur)
+	if len(cleaned) >= 2 {
+		return cleaned
+	}
+	desc := strings.TrimSpace(description)
+	if desc == "" {
+		desc = "场景动作推进"
+	}
+	return []task.ShotBeat{
+		{Time: 0, Action: desc + "，开端"},
+		{Time: dur * 0.3, Action: desc + "，发展"},
+		{Time: dur * 0.65, Action: desc + "，高潮"},
+		{Time: dur * 0.9, Action: desc + "，收束"},
+	}
+}
+
+func normalizeShotBeats(beats []task.ShotBeat, dur float64) []task.ShotBeat {
+	if len(beats) == 0 {
+		return nil
+	}
+	cleaned := make([]task.ShotBeat, 0, len(beats))
+	for _, b := range beats {
+		action := strings.TrimSpace(b.Action)
+		if action == "" {
+			continue
+		}
+		t := b.Time
+		if t < 0 {
+			t = 0
+		}
+		if t > dur {
+			t = dur
+		}
+		cleaned = append(cleaned, task.ShotBeat{
+			Time: t, Action: action,
+			ImageURL: b.ImageURL, ImageRemoteURL: b.ImageRemoteURL,
+		})
+	}
+	if len(cleaned) < 2 {
+		return nil
+	}
+	sort.SliceStable(cleaned, func(i, j int) bool { return cleaned[i].Time < cleaned[j].Time })
+	dedup := cleaned[:0]
+	for i, b := range cleaned {
+		if i > 0 && b.Time-dedup[len(dedup)-1].Time < 0.05 {
+			b.Time = dedup[len(dedup)-1].Time + 0.05
+		}
+		dedup = append(dedup, b)
+	}
+	dedup[0].Time = 0
+	return dedup
 }
 
 // NormalizeSceneLink maps a model-provided scene-link value to a canonical enum.

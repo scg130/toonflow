@@ -67,7 +67,8 @@ var (
 	MergeStoryboardMedia         = svcstoryboard.MergeStoryboardMedia
 	ShotHasImage                 = svcstoryboard.ShotHasImage
 	MergeShotMediaFromStore      = svcstoryboard.MergeShotMediaFromStore
-	UpdateStoryboardShotMedia    = svcstoryboard.UpdateStoryboardShotMedia
+	UpdateStoryboardShotMedia     = svcstoryboard.UpdateStoryboardShotMedia
+	UpdateStoryboardShotKeyframes = svcstoryboard.UpdateStoryboardShotKeyframes
 )
 
 // --- media ---
@@ -89,6 +90,7 @@ var (
 	ComposeShotClip             = svcmedia.ComposeShotClip
 	BatchComposeShots           = svcmedia.BatchComposeShots
 	RequestShotImageWithRetry   = svcmedia.RequestShotImageWithRetry
+	BuildBeatImagePrompt        = svcmedia.BuildBeatImagePrompt
 	SortShotNumbers             = svcmedia.SortShotNumbers
 )
 

@@ -102,26 +102,29 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 	logger.CtxTrace(ctx, "shot video prompt shot=%d prompt=%s", shotNumber, prompt)
 
 	width, height := videoSizeForRatio(videoRatio)
-	storyboardImage, err := ResolveShotImageCDNURL(ctx, db, v, outputDir, projectID, episodeID, shot)
+
+	// Continuity: prepend previous shot's last keyframe for same-scene links.
+	continuityFrame := ""
+	switch {
+	case opts != nil && adapter.IsCDNImageURL(opts.ContinuityImageURL):
+		continuityFrame = opts.ContinuityImageURL
+		logger.CtxTrace(ctx, "shot video continuity keyframe shot=%d url=%s", shotNumber, continuityFrame)
+	case shot.SceneLink == task.SceneLinkContinuous:
+		if url := resolvePrevShotLastKeyframe(ctx, db, outputDir, projectID, episodeID, shotNumber, v); url != "" {
+			continuityFrame = url
+			logger.CtxTrace(ctx, "shot video derived continuity keyframe shot=%d url=%s", shotNumber, continuityFrame)
+		}
+	}
+
+	keyframeURLs, err := ResolveShotKeyframeCDNURLs(ctx, db, v, outputDir, projectID, episodeID, shot)
 	if err != nil {
 		return nil, err
 	}
-	imageInput := storyboardImage
-	switch {
-	case opts != nil && adapter.IsCDNImageURL(opts.ContinuityImageURL):
-		// Caller (batch) supplied the previous shot's last frame.
-		imageInput = opts.ContinuityImageURL
-		logger.CtxTrace(ctx, "shot video continuity frame shot=%d url=%s", shotNumber, imageInput)
-	case shot.SceneLink == task.SceneLinkContinuous:
-		// Same-scene shot regenerated on its own: derive continuity from the
-		// previous shot's selected clip so it still flows seamlessly.
-		if url := resolvePrevShotContinuityFrame(ctx, db, v, outputDir, projectID, episodeID, shotNumber); url != "" {
-			imageInput = url
-			logger.CtxTrace(ctx, "shot video derived continuity frame shot=%d url=%s", shotNumber, imageInput)
-		}
+	if continuityFrame != "" && (len(keyframeURLs) == 0 || keyframeURLs[0] != continuityFrame) {
+		keyframeURLs = append([]string{continuityFrame}, keyframeURLs...)
 	}
-	if imageInput == "" {
-		return nil, fmt.Errorf("请先生成第 %d 镜图片后再生成视频", shotNumber)
+	if len(keyframeURLs) < 2 {
+		return nil, fmt.Errorf("第 %d 镜至少需要 2 张关键帧图片，请先生成关键帧", shotNumber)
 	}
 
 	duration := ResolveShotVideoDuration(shot.Duration)
@@ -143,7 +146,7 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 	var candidates []*ShotClip
 	for vi := 0; vi < versions; vi++ {
 		clip, genErr := generateOneShotClip(ctx, db, v, outputDir, projectID, episodeID, shotNumber, shot,
-			prompt, negativePrompt, imageInput, videoModel, width, height, duration, version+vi)
+			prompt, negativePrompt, keyframeURLs, videoModel, width, height, duration, version+vi)
 		if genErr != nil {
 			return nil, genErr
 		}
@@ -222,8 +225,24 @@ func shotToItem(shot *storyboard.ShotMeta) task.StoryboardItem {
 	}
 }
 
+// resolvePrevShotLastKeyframe returns the previous shot's last beat CDN URL for continuity.
+func resolvePrevShotLastKeyframe(ctx context.Context, db *sql.DB, outputDir, projectID, episodeID string, shotNumber int, v adapter.Vendor) string {
+	if shotNumber <= 1 {
+		return ""
+	}
+	prev, err := storyboard.LoadShot(db, projectID, episodeID, shotNumber-1)
+	if err != nil || prev == nil {
+		return ""
+	}
+	if u := LastBeatCDNURL(prev); u != "" {
+		return u
+	}
+	// Fallback: extract last frame from previous clip if keyframes missing.
+	return resolvePrevShotContinuityFrame(ctx, db, v, outputDir, projectID, episodeID, shotNumber)
+}
+
 func generateOneShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputDir, projectID, episodeID string,
-	shotNumber int, shot *storyboard.ShotMeta, prompt, negativePrompt, imageInput, videoModel string,
+	shotNumber int, shot *storyboard.ShotMeta, prompt, negativePrompt string, keyframeURLs []string, videoModel string,
 	width, height int, duration float64, version int) (*ShotClip, error) {
 
 	clipID := fmt.Sprintf("clip_%d", time.Now().UnixNano())
@@ -233,19 +252,21 @@ func generateOneShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outp
 	}
 	localFile := filepath.Join(clipDir, fmt.Sprintf("shot_%03d_v%d.mp4", shotNumber, version))
 
-	if v == nil || imageInput == "" {
-		return nil, fmt.Errorf("请先生成第 %d 镜图片后再生成视频", shotNumber)
+	if v == nil || len(keyframeURLs) < 2 {
+		return nil, fmt.Errorf("第 %d 镜至少需要 2 张关键帧图片才能生成视频", shotNumber)
 	}
 
-	err := RequestShotVideoWithRetry(ctx, v, videoModel, adapter.VideoParams{
-		Prompt:   prompt,
-		ImageURL: imageInput,
-		Model:    videoModel,
-		Duration: float32(duration),
-		Width:    width,
-		Height:   height,
-		Negative: negativePrompt,
-	}, localFile)
+	params := adapter.VideoParams{
+		Prompt:    prompt,
+		Model:     videoModel,
+		Duration:  float32(duration),
+		Width:     width,
+		Height:    height,
+		Negative:  negativePrompt,
+		Keyframes: keyframeURLs,
+	}
+
+	err := RequestShotVideoWithRetry(ctx, v, videoModel, params, localFile)
 	if err != nil {
 		return nil, err
 	}

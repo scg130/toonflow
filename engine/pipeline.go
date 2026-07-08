@@ -141,7 +141,7 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 			if t.SkipExistingImages && service.ShotHasImage(item) {
 				progress := 30 + float32(seq+1)/float32(total)*50
 				localPct := float32(seq+1) / float32(total) * 100
-				skipMsg := fmt.Sprintf("第 %d 镜已有图片，跳过 (%d/%d)", item.ShotNumber, seq+1, total)
+				skipMsg := fmt.Sprintf("第 %d 镜关键帧已就绪，跳过 (%d/%d)", item.ShotNumber, seq+1, total)
 				service.ReportStepProgress(ctx, localPct, skipMsg)
 				t.UpdateProgress(progress)
 				p.broadcast(t, skipMsg, progress, map[string]interface{}{
@@ -156,23 +156,21 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 			progress := 30 + float32(seq+1)/float32(total)*50
 			localPct := float32(seq) / float32(total) * 100
 			service.ReportStepProgress(ctx, localPct,
-				fmt.Sprintf("正在生成第 %d 镜图片 (%d/%d)", item.ShotNumber, seq+1, total))
+				fmt.Sprintf("正在生成第 %d 镜关键帧图片 (%d/%d)", item.ShotNumber, seq+1, total))
 			t.UpdateProgress(progress)
-			p.broadcast(t, fmt.Sprintf("生成中 (%d/%d)", seq+1, total), progress, map[string]interface{}{
+			p.broadcast(t, fmt.Sprintf("关键帧生图中 (%d/%d)", seq+1, total), progress, map[string]interface{}{
 				"current_shot": seq + 1,
 				"total_shots":  total,
 			})
 
-			localPath := filepath.Join(taskDir, fmt.Sprintf("shot_%03d.png", item.ShotNumber))
-			remoteURL, err := p.genImage(ctx, t, item, localPath)
+			beats, err := p.genShotKeyframes(ctx, t, item, taskDir)
 			if err != nil {
 				return fmt.Errorf("shot %d: %w", item.ShotNumber, err)
 			}
-
-			imageURL := fmt.Sprintf("/output/%s/shot_%03d.png", t.ID, item.ShotNumber)
-			t.Storyboard[idx].ImageURL = imageURL
-			if remoteURL != "" {
-				t.Storyboard[idx].ImageRemoteURL = remoteURL
+			t.Storyboard[idx].Beats = beats
+			if len(beats) > 0 {
+				t.Storyboard[idx].ImageURL = beats[0].ImageURL
+				t.Storyboard[idx].ImageRemoteURL = beats[0].ImageRemoteURL
 			}
 			if p.db != nil && t.ProjectID != "" {
 				_, _, assetIDs := service.ShotImageParams(p.db, t.ProjectID, item)
@@ -181,32 +179,37 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 				}
 			}
 
-			absLocalPath, _ := filepath.Abs(localPath)
+			absLocalPath := ""
+			if len(beats) > 0 && beats[0].ImageURL != "" {
+				if lp, ok := resolveOutputFilePath(p.cfg.OutputDir, beats[0].ImageURL); ok {
+					absLocalPath = lp
+				}
+			}
 
 			t.Images = append(t.Images, task.ImageArtifact{
 				ShotNumber: item.ShotNumber,
 				LocalPath:  absLocalPath,
-				DataURL:    imageURL,
+				DataURL:    t.Storyboard[idx].ImageURL,
 				Status:     "done",
 			})
 
-			p.broadcast(t, fmt.Sprintf("图片完成 (%d/%d)", seq+1, total), progress, map[string]interface{}{
+			p.broadcast(t, fmt.Sprintf("关键帧完成 (%d/%d)", seq+1, total), progress, map[string]interface{}{
 				"current_shot": seq + 1,
 				"total_shots":  total,
 				"shot":         t.Storyboard[idx],
 			})
 			if p.db != nil && t.ProjectID != "" && t.EpisodeID != "" {
-				_ = service.UpdateStoryboardShotMedia(p.db, t.ProjectID, t.EpisodeID, item.ShotNumber, imageURL, remoteURL)
+				_ = service.UpdateStoryboardShotKeyframes(p.db, t.ProjectID, t.EpisodeID, item.ShotNumber, beats)
 			}
 			donePct := float32(seq+1) / float32(total) * 100
 			service.ReportStepProgress(ctx, donePct,
-				fmt.Sprintf("第 %d 镜图片完成 (%d/%d)", item.ShotNumber, seq+1, total))
+				fmt.Sprintf("第 %d 镜关键帧完成 (%d/%d)", item.ShotNumber, seq+1, total))
 		}
 
 		if mode == "images" {
 			t.SetState(task.StateDone, "finish")
 			t.UpdateProgress(100)
-			p.broadcast(t, "图片生成完成", 100, map[string]interface{}{
+			p.broadcast(t, "关键帧生成完成", 100, map[string]interface{}{
 				"storyboard": t.Storyboard,
 			})
 			logger.CtxTrace(ctx, "pipeline done task=%s mode=%s", t.ID, mode)
@@ -319,6 +322,63 @@ func (p *Pipeline) parseScript(ctx context.Context, t *task.Task) ([]task.Storyb
 	}
 
 	return parseStoryboardText(resp.Content, t.Resolution), nil
+}
+
+func (p *Pipeline) genShotKeyframes(ctx context.Context, t *task.Task, item task.StoryboardItem, taskDir string) ([]task.ShotBeat, error) {
+	if len(item.Beats) < 2 {
+		return nil, fmt.Errorf("第 %d 镜缺少 beats 时间节点，请重新生成分镜", item.ShotNumber)
+	}
+	var artStyle, videoRatio string
+	if p.db != nil && t.ProjectID != "" {
+		_ = p.db.QueryRow("SELECT art_style, video_ratio FROM o_project WHERE id = ?", t.ProjectID).Scan(&artStyle, &videoRatio)
+	}
+	item = service.SanitizeStoryboardItemForImage(p.db, t.ProjectID, item)
+	refURL, assetPrompt, _ := service.ShotImageParams(p.db, t.ProjectID, item)
+	assets, _ := asset.LoadProjectAssets(p.db, t.ProjectID)
+	styleAnchor := service.LoadProjectStyleAnchor(p.db, t.ProjectID)
+	aspect := service.ResolutionToVideoRatio(t.Resolution)
+
+	beats := make([]task.ShotBeat, len(item.Beats))
+	copy(beats, item.Beats)
+	for i := range beats {
+		if beats[i].ImageURL != "" || beats[i].ImageRemoteURL != "" {
+			continue
+		}
+		prompt := service.BuildBeatImagePrompt(item, beats[i], t.Style, videoRatio, assetPrompt, styleAnchor)
+		if len(assets) > 0 {
+			prompt = asset.SanitizeFinalImagePrompt(prompt, item, assets)
+		}
+		logger.CtxTrace(ctx, "genKeyframe shot=%d beat=%d prompt=%s", item.ShotNumber, i, prompt)
+		resp, err := service.RequestShotImageWithRetry(ctx, p.adapter, p.imageModel, aspect, prompt, refURL)
+		if err != nil {
+			if service.IsContentPolicyViolation(err) {
+				return nil, fmt.Errorf("%s: %w", service.UserFacingImagePolicyMessage(item.ShotNumber), err)
+			}
+			return nil, err
+		}
+		localPath := filepath.Join(taskDir, fmt.Sprintf("shot_%03d_k%d.png", item.ShotNumber, i))
+		if err := saveGeneratedImage(ctx, localPath, resp); err != nil {
+			return nil, err
+		}
+		beats[i].ImageURL = fmt.Sprintf("/output/%s/shot_%03d_k%d.png", t.ID, item.ShotNumber, i)
+		beats[i].ImageRemoteURL = publishRemoteFromImage(ctx, p.adapter, localPath, resp)
+	}
+	return beats, nil
+}
+
+func publishRemoteFromImage(ctx context.Context, v adapter.Vendor, localPath string, resp *adapter.ImageResponse) string {
+	if resp != nil && adapter.IsCDNImageURL(resp.RemoteURL) {
+		return resp.RemoteURL
+	}
+	if resp != nil && adapter.IsCDNImageURL(resp.DataURL) {
+		return resp.DataURL
+	}
+	if pub, ok := v.(adapter.ImageCDNPublisher); ok {
+		if u, err := pub.PublishImageForVideo(ctx, localPath); err == nil && adapter.IsCDNImageURL(u) {
+			return u
+		}
+	}
+	return ""
 }
 
 func (p *Pipeline) genImage(ctx context.Context, t *task.Task, item task.StoryboardItem, localPath string) (string, error) {

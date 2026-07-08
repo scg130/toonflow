@@ -32,7 +32,7 @@ var episodePipelineOrder = []EpisodePipelineStep{
 	{ID: "generate_storyboard", Label: "分镜", Panel: "storyboard"},
 	{ID: "extract_assets", Label: "提取资产", Panel: "assets"},
 	{ID: "assign_character_voices", Label: "分配音色", Panel: "assets"},
-	{ID: "batch_generate_shot_images", Label: "批量生图", Panel: "storyboard"},
+	{ID: "batch_generate_shot_images", Label: "批量生关键帧", Panel: "storyboard"},
 	{ID: "batch_generate_shot_videos", Label: "批量生视频", Panel: "storyboard"},
 	{ID: "batch_compose_shots", Label: "对白合成", Panel: "video"},
 }
@@ -169,7 +169,7 @@ func shotsNeedingImages(db *sql.DB, projectID, episodeID string) ([]int, error) 
 	}
 	var need []int
 	for _, it := range items {
-		if strings.TrimSpace(it.ImageURL) == "" {
+		if !storyboard.ShotHasAllBeatImages(it) {
 			need = append(need, it.ShotNumber)
 		}
 	}
@@ -372,7 +372,7 @@ func executeEpisodeStep(ctx context.Context, deps EpisodePipelineDeps, chatAgent
 		if len(shots) == 0 {
 			return true, nil
 		}
-		core.ReportProgress(ctx, step.ID, float32(pass)*12+5, fmt.Sprintf("批量生图（%d 镜）...", len(shots)))
+		core.ReportProgress(ctx, step.ID, float32(pass)*12+5, fmt.Sprintf("批量生关键帧（%d 镜）...", len(shots)))
 		stepCtx := core.WithStepProgress(ctx, step.ID, float32(pass)*12+5, 10)
 		if err := runEpisodeBatchImages(stepCtx, deps, userID, projectID, episodeID, shots); err != nil {
 			return false, err
@@ -455,7 +455,7 @@ func runEpisodeBatchImages(ctx context.Context, deps EpisodePipelineDeps, userID
 	core.EnrichTaskMeta(deps.DB, tk)
 	tk.SetState(task.StateWaiting, tk.Title)
 	if deps.NotifyTask != nil {
-		deps.NotifyTask(tk, "批量生图任务已接收")
+		deps.NotifyTask(tk, "批量生关键帧任务已接收")
 	}
 
 	done := make(chan error, 1)
@@ -463,7 +463,7 @@ func runEpisodeBatchImages(ctx context.Context, deps EpisodePipelineDeps, userID
 		runCtx = core.InheritPipelineContext(ctx, runCtx)
 		t.SetState(task.StateDrawing, t.Title)
 		if deps.NotifyTask != nil {
-			deps.NotifyTask(t, "批量生图中")
+			deps.NotifyTask(t, "批量生关键帧中")
 		}
 		err := deps.Pipeline.Execute(runCtx, t)
 		if err != nil {

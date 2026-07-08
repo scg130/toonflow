@@ -114,9 +114,16 @@ func GenerateShotClipsSequential(ctx context.Context, db *sql.DB, v adapter.Vend
 		core.ReportStepProgress(ctx, donePct,
 			fmt.Sprintf("第 %d 镜视频完成 (%d/%d)", shotNum, i+1, total))
 
-		// Prepare the continuity frame only when the NEXT shot is a same-scene link.
+		// Prepare continuity keyframe for the next same-scene shot.
 		continuityURL = ""
 		if i+1 < total && linkByShot[ordered[i+1]] == task.SceneLinkContinuous {
+			if prevShot, ldErr := storyboard.LoadShot(db, projectID, episodeID, shotNum); ldErr == nil {
+				if u := LastBeatCDNURL(prevShot); u != "" {
+					continuityURL = u
+					logger.CtxTrace(ctx, "batch video shot=%d last beat keyframe for next shot", shotNum)
+					continue
+				}
+			}
 			local, ok := fsutil.PublicURLToLocal(outputDir, clip.FileURL)
 			if !ok {
 				continue

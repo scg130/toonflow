@@ -1,12 +1,13 @@
 package duration
 
 const (
-	DefaultShotDurationSec = 4.0
-	MinShotDurationSec     = 3.0
-	MaxShotDurationSec     = 5.0
+	DefaultShotDurationSec = 10.0
+	MinShotDurationSec     = 10.0
+	// MaxShotDurationSec matches Agnes single-video ceiling (18s ≈ 441 frames @24fps).
+	MaxShotDurationSec = 18.0
 )
 
-// ResolveShotVideoDuration normalizes per-shot video length for I2V (Douyin short-drama rhythm).
+// ResolveShotVideoDuration normalizes per-shot video length for keyframe I2V (10–18s).
 func ResolveShotVideoDuration(d float64) float64 {
 	if d <= 0 {
 		return DefaultShotDurationSec

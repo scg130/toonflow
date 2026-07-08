@@ -74,6 +74,21 @@ type StoryboardItem struct {
 	AssetIDs       []int   `json:"asset_ids,omitempty"`
 	ImageURL       string  `json:"image_url,omitempty"`
 	ImageRemoteURL string  `json:"image_remote_url,omitempty"` // Agnes CDN, e.g. platform-outputs.agnes-ai.space (~24h)
+	// Beats is an intra-shot timed action plan. When a shot spans several beats over a
+	// longer duration, the model lists what happens at each time node so a single
+	// image-to-video generation renders the whole sequence continuously (seamless,
+	// no stitching). Empty for short single-beat shots.
+	Beats []ShotBeat `json:"beats,omitempty"`
+}
+
+// ShotBeat is one time node inside a shot: at Time seconds (from the shot start),
+// Action describes what should be happening on screen. Each beat gets its own
+// keyframe still (ImageURL / ImageRemoteURL) which feeds Agnes keyframe video mode.
+type ShotBeat struct {
+	Time           float64 `json:"time"`
+	Action         string  `json:"action"`
+	ImageURL       string  `json:"image_url,omitempty"`
+	ImageRemoteURL string  `json:"image_remote_url,omitempty"`
 }
 
 // SceneLink values describe how a shot connects to the previous shot.

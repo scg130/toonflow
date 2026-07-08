@@ -3,6 +3,8 @@ package storyboard
 import (
 	"database/sql"
 	"fmt"
+
+	"toonflow/task"
 )
 
 // ShotMeta holds one storyboard shot's generation fields.
@@ -19,6 +21,7 @@ type ShotMeta struct {
 	SceneLink      string
 	ImageURL       string
 	ImageRemoteURL string
+	Beats          []task.ShotBeat
 }
 
 // LoadShot loads one shot's metadata from the episode storyboard.
@@ -51,6 +54,7 @@ func LoadShot(db *sql.DB, projectID, episodeID string, shotNumber int) (*ShotMet
 				SceneLink:      it.SceneLink,
 				ImageURL:       it.ImageURL,
 				ImageRemoteURL: it.ImageRemoteURL,
+				Beats:          it.Beats,
 			}, nil
 		}
 	}

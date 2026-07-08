@@ -83,9 +83,47 @@ func PersistStoryboardDurations(db *sql.DB, projectID, episodeID string) error {
 	return SaveStoryboardItems(db, projectID, episodeID, items)
 }
 
-// ShotHasImage reports whether a storyboard shot already has generated image media.
+// ShotHasImage reports whether a storyboard shot has generated keyframe media.
 func ShotHasImage(it task.StoryboardItem) bool {
-	return strings.TrimSpace(it.ImageURL) != "" || strings.TrimSpace(it.ImageRemoteURL) != ""
+	return ShotHasAllBeatImages(it)
+}
+
+// ShotHasAllBeatImages reports whether every beat has keyframe images.
+func ShotHasAllBeatImages(it task.StoryboardItem) bool {
+	if len(it.Beats) < 2 {
+		return strings.TrimSpace(it.ImageURL) != "" || strings.TrimSpace(it.ImageRemoteURL) != ""
+	}
+	for _, b := range it.Beats {
+		if strings.TrimSpace(b.ImageURL) == "" && strings.TrimSpace(b.ImageRemoteURL) == "" {
+			return false
+		}
+	}
+	return true
+}
+
+// UpdateStoryboardShotKeyframes persists beat keyframe image URLs for one shot.
+func UpdateStoryboardShotKeyframes(db *sql.DB, projectID, episodeID string, shotNumber int, beats []task.ShotBeat) error {
+	items, err := LoadStoryboardItems(db, projectID, episodeID)
+	if err != nil || len(items) == 0 {
+		return err
+	}
+	updated := false
+	for i := range items {
+		if items[i].ShotNumber != shotNumber {
+			continue
+		}
+		items[i].Beats = beats
+		if len(beats) > 0 {
+			items[i].ImageURL = beats[0].ImageURL
+			items[i].ImageRemoteURL = beats[0].ImageRemoteURL
+		}
+		updated = true
+		break
+	}
+	if !updated {
+		return fmt.Errorf("shot %d not found", shotNumber)
+	}
+	return SaveStoryboardItems(db, projectID, episodeID, items)
 }
 
 // MergeShotMediaFromStore copies image fields for one shot from DB into dst.
@@ -109,6 +147,9 @@ func MergeShotMediaFromStore(db *sql.DB, projectID, episodeID string, shotNumber
 		}
 		if len(it.AssetIDs) > 0 && len(dst.AssetIDs) == 0 {
 			dst.AssetIDs = it.AssetIDs
+		}
+		if len(it.Beats) > 0 {
+			dst.Beats = it.Beats
 		}
 		return
 	}
