@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"toonflow/ws"
 	"toonflow/config"
 	"toonflow/logger"
+	"toonflow/service"
 )
 
 func main() {
@@ -40,6 +42,13 @@ func main() {
 	}
 	defer db.Close()
 	logger.Default.Info("system", "Database initialized")
+	if n, err := service.RecoverStalePipelineUIStates(db.DB); err != nil {
+		logger.Default.Error("system", "recover stale pipeline UI state failed", err)
+		log.Printf("Warning: recover stale pipeline UI state: %v", err)
+	} else if n > 0 {
+		logger.Default.Info("system", fmt.Sprintf("Recovered %d stale pipeline UI state(s)", n))
+		log.Printf("Recovered %d stale pipeline UI state(s)", n)
+	}
 
 	// Initialize skill manager
 	skillMgr := skill.NewManager(cfg.SkillsDir)

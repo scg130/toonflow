@@ -112,37 +112,51 @@ func TestStoryboardScorePenalizesSingleShot(t *testing.T) {
 	}
 }
 
-func TestStoryboardScorePrefersDenseLongShots(t *testing.T) {
-	thin := make([]task.StoryboardItem, 12)
-	for i := range thin {
-		thin[i] = task.StoryboardItem{Description: "x", Duration: 10, Beats: []task.ShotBeat{{Time: 0, Action: "a"}, {Time: 5, Action: "b"}}}
+func TestStoryboardScorePrefersThreeBeats(t *testing.T) {
+	three := make([]task.StoryboardItem, 2)
+	for i := range three {
+		three[i] = task.StoryboardItem{Description: "arc", Duration: 15, Beats: []task.ShotBeat{
+			{Time: 0, Action: "a"}, {Time: 7, Action: "b"}, {Time: 14, Action: "c"},
+		}}
 	}
-	dense := []task.StoryboardItem{
-		{Description: "arc1", Duration: 15, Beats: make([]task.ShotBeat, 5)},
-		{Description: "arc2", Duration: 16, Beats: make([]task.ShotBeat, 6)},
-		{Description: "arc3", Duration: 14, Beats: make([]task.ShotBeat, 5)},
-		{Description: "arc4", Duration: 15, Beats: make([]task.ShotBeat, 5)},
-	}
-	for i := range dense {
-		for j := range dense[i].Beats {
-			dense[i].Beats[j] = task.ShotBeat{Time: float64(j), Action: "beat"}
+	five := make([]task.StoryboardItem, 2)
+	for i := range five {
+		five[i] = task.StoryboardItem{Description: "arc", Duration: 15, Beats: make([]task.ShotBeat, 5)}
+		for j := range five[i].Beats {
+			five[i].Beats[j] = task.ShotBeat{Time: float64(j * 3), Action: "beat"}
 		}
 	}
-	if StoryboardScore(dense) <= StoryboardScore(thin) {
-		t.Fatalf("dense long shots should score higher than many thin shots: dense=%d thin=%d", StoryboardScore(dense), StoryboardScore(thin))
+	if StoryboardScore(three) <= StoryboardScore(five) {
+		t.Fatalf("3-beat shot should score higher than 5-beat shot: three=%d five=%d", StoryboardScore(three), StoryboardScore(five))
 	}
 }
 
-func TestEnsureShotBeatsDensifies(t *testing.T) {
+func TestEnsureShotBeatsCapsAtThree(t *testing.T) {
 	out := NormalizeStoryboardItems([]task.StoryboardItem{{
 		ShotNumber: 1, Description: "石昊挥拳", Duration: 15,
+		Beats: []task.ShotBeat{
+			{Time: 0, Action: "起手"}, {Time: 3, Action: "a"}, {Time: 6, Action: "b"},
+			{Time: 9, Action: "c"}, {Time: 12, Action: "命中"},
+		},
+	}})
+	if len(out) != 1 {
+		t.Fatalf("expected 1 item")
+	}
+	if len(out[0].Beats) != 3 {
+		t.Fatalf("15s shot should cap at 3 beats, got %d", len(out[0].Beats))
+	}
+}
+
+func TestEnsureShotBeatsDensifiesToTwo(t *testing.T) {
+	out := NormalizeStoryboardItems([]task.StoryboardItem{{
+		ShotNumber: 1, Description: "石昊挥拳", Duration: 10,
 		Beats: []task.ShotBeat{{Time: 0, Action: "起手"}, {Time: 7, Action: "命中"}},
 	}})
 	if len(out) != 1 {
 		t.Fatalf("expected 1 item")
 	}
-	if len(out[0].Beats) < 5 {
-		t.Fatalf("15s shot should densify to >=5 beats, got %d", len(out[0].Beats))
+	if len(out[0].Beats) != 2 {
+		t.Fatalf("10s shot should have 2 beats, got %d", len(out[0].Beats))
 	}
 }
 

@@ -146,6 +146,7 @@ var (
 	InitPipelineUIState       = svcpipeline.InitPipelineUIState
 	AppendPipelineUIProgress  = svcpipeline.AppendPipelineUIProgress
 	FinalizePipelineUIState   = svcpipeline.FinalizePipelineUIState
+	RecoverStalePipelineUIStates = svcpipeline.RecoverStalePipelineUIStates
 	SetPipelineUIPaused       = svcpipeline.SetPipelineUIPaused
 	ListPipelineUIStates      = svcpipeline.ListPipelineUIStates
 )

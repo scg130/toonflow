@@ -5,6 +5,10 @@ const (
 	MinShotDurationSec     = 10.0
 	// MaxShotDurationSec matches Agnes single-video ceiling (18s ≈ 441 frames @24fps).
 	MaxShotDurationSec = 18.0
+	// MinBeatsPerShot is the minimum keyframe count for Agnes keyframe interpolation.
+	MinBeatsPerShot = 2
+	// MaxBeatsPerShot is Agnes mode=keyframes hard limit (at most 3 images per call).
+	MaxBeatsPerShot = 3
 )
 
 // ResolveShotVideoDuration normalizes per-shot video length for keyframe I2V (10–18s).

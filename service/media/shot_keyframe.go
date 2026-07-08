@@ -11,6 +11,7 @@ import (
 
 	"toonflow/adapter"
 	"toonflow/service/asset"
+	"toonflow/service/internal/duration"
 	"toonflow/service/internal/fsutil"
 	"toonflow/service/project"
 	"toonflow/service/storyboard"
@@ -22,7 +23,26 @@ func ShotHasAllBeatImages(it task.StoryboardItem) bool {
 	return storyboard.ShotHasAllBeatImages(it)
 }
 
-// ResolveShotKeyframeCDNURLs returns Agnes CDN URLs for all beat keyframes in time order.
+// SelectEvenKeyframeURLs picks up to n URLs evenly spaced across the slice.
+func SelectEvenKeyframeURLs(urls []string, n int) []string {
+	if n <= 0 || len(urls) == 0 {
+		return nil
+	}
+	if len(urls) <= n {
+		return urls
+	}
+	if n == 1 {
+		return []string{urls[0]}
+	}
+	out := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		idx := int(float64(i)*float64(len(urls)-1)/float64(n-1) + 0.5)
+		out = append(out, urls[idx])
+	}
+	return out
+}
+
+// ResolveShotKeyframeCDNURLs returns Agnes CDN URLs for beat keyframes in time order (capped at MaxBeatsPerShot).
 func ResolveShotKeyframeCDNURLs(ctx context.Context, db *sql.DB, v adapter.Vendor, outputDir, projectID, episodeID string, shot *storyboard.ShotMeta) ([]string, error) {
 	if shot == nil {
 		return nil, fmt.Errorf("invalid shot")
@@ -63,7 +83,7 @@ func ResolveShotKeyframeCDNURLs(ctx context.Context, db *sql.DB, v adapter.Vendo
 	if len(urls) < 2 {
 		return nil, fmt.Errorf("第 %d 镜至少需要 2 张关键帧图片才能生成视频", shot.ShotNumber)
 	}
-	return urls, nil
+	return SelectEvenKeyframeURLs(urls, duration.MaxBeatsPerShot), nil
 }
 
 func beatCDNURL(b task.ShotBeat) string {
@@ -111,6 +131,7 @@ func GenerateShotKeyframeImages(ctx context.Context, db *sql.DB, v adapter.Vendo
 	if len(shot.Beats) < 2 {
 		return nil, fmt.Errorf("第 %d 镜缺少时间节点方案(beats)，请重新生成分镜", shotNumber)
 	}
+	shot.Beats = storyboard.CapShotBeats(shot.Beats, shot.Duration, shot.Description)
 	if imageModel == "" {
 		imageModel = adapter.DefaultImageModel
 	}

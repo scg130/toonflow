@@ -2,6 +2,7 @@ package media
 
 import (
 	"toonflow/service/asset"
+	"toonflow/service/internal/duration"
 	"toonflow/service/storyboard"
 	"toonflow/service/project"
 	"toonflow/service/internal/fsutil"
@@ -86,6 +87,7 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 	if err != nil {
 		return nil, err
 	}
+	shot.Beats = storyboard.CapShotBeats(shot.Beats, shot.Duration, shot.Description)
 
 	var artStyle, videoModel, videoRatio string
 	_ = db.QueryRow("SELECT art_style, COALESCE(NULLIF(video_model,''), ''), video_ratio FROM o_project WHERE id = ?", projectID).
@@ -120,8 +122,15 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 	if err != nil {
 		return nil, err
 	}
-	if continuityFrame != "" && (len(keyframeURLs) == 0 || keyframeURLs[0] != continuityFrame) {
-		keyframeURLs = append([]string{continuityFrame}, keyframeURLs...)
+	slots := duration.MaxBeatsPerShot
+	if continuityFrame != "" {
+		slots = duration.MaxBeatsPerShot - 1
+		keyframeURLs = SelectEvenKeyframeURLs(keyframeURLs, slots)
+		if len(keyframeURLs) == 0 || keyframeURLs[0] != continuityFrame {
+			keyframeURLs = append([]string{continuityFrame}, keyframeURLs...)
+		}
+	} else {
+		keyframeURLs = SelectEvenKeyframeURLs(keyframeURLs, slots)
 	}
 	if len(keyframeURLs) < 2 {
 		return nil, fmt.Errorf("第 %d 镜至少需要 2 张关键帧图片，请先生成关键帧", shotNumber)

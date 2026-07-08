@@ -14,6 +14,7 @@ type PipelineUIState struct {
 	Active      bool     `json:"active"`
 	Paused      bool     `json:"paused"`
 	Done        bool     `json:"done"`
+	Interrupted bool     `json:"interrupted,omitempty"`
 	Progress    float32  `json:"progress"`
 	ProgressMsg string   `json:"progress_msg"`
 	Lines       []string `json:"lines"`
@@ -91,6 +92,44 @@ func FinalizePipelineUIState(db *sql.DB, projectID, episodeID, finalLine string)
 	return savePipelineUIState(db, projectID, episodeID, false, true, st.Progress, st.ProgressMsg, st.Lines)
 }
 
+// RecoverStalePipelineUIStates finalizes persisted pipeline rows left unfinished after crash/restart.
+func RecoverStalePipelineUIStates(db *sql.DB) (int, error) {
+	if db == nil {
+		return 0, nil
+	}
+	rows, err := db.Query(`SELECT project_id, episode_id FROM o_pipeline_ui_state WHERE done = 0`)
+	if err != nil {
+		return 0, err
+	}
+	type pipelineKey struct {
+		projectID string
+		episodeID string
+	}
+	var pending []pipelineKey
+	for rows.Next() {
+		var key pipelineKey
+		if rows.Scan(&key.projectID, &key.episodeID) != nil {
+			continue
+		}
+		pending = append(pending, key)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, key := range pending {
+		if EpisodePipelines.Get(key.projectID, key.episodeID) != nil {
+			continue
+		}
+		if err := FinalizePipelineUIState(db, key.projectID, key.episodeID,
+			"⚠️ 流水线已中断（服务重启或连接断开），请重新一键执行"); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
+}
+
 // ListPipelineUIStates returns saved UI states merged with active in-memory runs.
 func ListPipelineUIStates(db *sql.DB, projectID string) ([]PipelineUIState, error) {
 	if db == nil || projectID == "" {
@@ -135,7 +174,12 @@ func ListPipelineUIStates(db *sql.DB, projectID string) ([]PipelineUIState, erro
 		active := EpisodePipelines.Get(projectID, epID) != nil
 		st.Active = active
 		if !active {
-			st.Paused = false
+			if st.Done {
+				st.Paused = false
+			}
+			if !st.Done && len(st.Lines) > 0 {
+				st.Interrupted = true
+			}
 		}
 		if len(st.Lines) == 0 && !active {
 			continue

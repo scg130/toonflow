@@ -49,8 +49,8 @@
     assign_character_voices: '自动分配音色',
     compose_shot: '合成对白镜头',
     batch_compose_shots: '批量合成对白',
-    batch_generate_shot_images: '批量生成图片',
-    generate_shot_image: '生成图片',
+    batch_generate_shot_images: '批量生关键帧',
+    generate_shot_image: '生成关键帧',
     batch_generate_shot_videos: '批量生成视频',
     generate_shot_video: '生成视频',
     delete_shot_clip: '删除视频版本',
@@ -91,6 +91,7 @@
   let voiceCatalog = [];
   let episodePipelineSteps = [];
   let episodePipelineStepsForEpisodeId = null;
+  let episodePipelineActiveStepId = null;
 
   const stepPanelMap = {
     generate_skeleton: 'planning',
@@ -334,7 +335,8 @@
 
     ws.onopen = () => {
       setWSStatus('connected');
-      toast('WebSocket 已连接', 'success');
+      finishPendingWorkflowUI();
+      if (currentProject) syncActivePipelinesFromServer();
     };
 
     ws.onmessage = (event) => {
@@ -411,8 +413,53 @@
     } else {
       storyboards.push(shot);
     }
-    renderStoryboards();
+    refreshShotKeyframeUI(shot.shot_number);
     updateVideoTracksFromStoryboards();
+  }
+
+  function refreshShotKeyframeUI(shotNumber) {
+    const idx = storyboards.findIndex(s => s.shot_number === shotNumber);
+    if (idx < 0 || !els.storyboardList) {
+      renderStoryboards();
+      return;
+    }
+    const card = els.storyboardList.querySelector('.storyboard-card[data-index="' + idx + '"]');
+    if (!card) {
+      renderStoryboards();
+      return;
+    }
+    const sb = storyboards[idx];
+    const stats = shotKeyframeStats(sb);
+    const beatMeta = stats.total > 1 ? ` · ${stats.total}拍点` : '';
+    const kfMeta = stats.total > 0 ? ` · ${stats.ready}/${stats.total}关键帧` : '';
+    const linkMeta = sb.scene_link === 'continuous' ? ' · 续接' : (sb.scene_link === 'transition' ? ' · 转场' : '');
+    const durationEl = card.querySelector('.storyboard-card-duration');
+    if (durationEl) durationEl.textContent = `${sb.duration || 3}s${beatMeta}${kfMeta}${linkMeta}`;
+    const beatsField = card.querySelector('.sb-beats-field');
+    if (beatsField) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = renderStoryboardBeatsSection(sb);
+      const next = tmp.firstElementChild;
+      if (next) beatsField.replaceWith(next);
+    }
+    const kfCol = card.querySelector('.sb-media-col-keyframes');
+    if (kfCol) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = renderStoryboardKeyframesColumn(sb, idx);
+      const next = tmp.firstElementChild;
+      if (next) {
+        kfCol.replaceWith(next);
+        next.querySelectorAll('.sb-gen-image-btn').forEach(btn => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            generateShotImage(parseInt(btn.dataset.shot, 10));
+          });
+        });
+      }
+    } else {
+      renderStoryboards();
+    }
+    updateStoryboardSelectionUI();
   }
 
   function applyTaskFinishSideEffects(msg) {
@@ -447,7 +494,10 @@
         applyShotStoryboardUpdate(msg.data.shot);
       }
       if (msg.step === 'gen_image' || (msg.data.state === 'drawing' && msg.data.shot)) {
-        setStatus('🎨 AI 绘图中 (' + (msg.data.current_shot || '?') + '/' + (msg.data.total_shots || '?') + ')');
+        const beatHint = msg.data.current_beat && msg.data.total_beats
+          ? (' · 拍点 ' + msg.data.current_beat + '/' + msg.data.total_beats)
+          : '';
+        setStatus('🎨 关键帧生成中 (' + (msg.data.current_shot || '?') + '/' + (msg.data.total_shots || '?') + ')' + beatHint);
         if (msg.progress > 0) updateProgress(msg.progress);
       }
       if (handleGenerationTaskUpdate(msg)) return;
@@ -503,26 +553,8 @@
       if (msg.data && msg.data.project_id && currentProject && msg.data.project_id !== currentProject.id) {
         return;
       }
-      updateChatProgress(msg.msg || '处理中...', msg.progress);
-      setStatus(msg.msg || '处理中...');
-      if (msg.data && msg.data.pipeline) {
-        const epId = msg.data.episode_id;
-        if (epId) {
-          if (!pipelineByEpisode[epId]) markPipelineEpisode(epId, false);
-          savePipelineProgress(epId, msg.msg, msg.progress);
-          pushPipelineStatusLine(msg.msg || '流水线执行中…', epId);
-        }
-        if (currentEpisode && epId === currentEpisode.id) {
-          syncPipelineControlsForCurrentEpisode();
-        }
-        // 流水线批量生图进度：刷新当前分集分镜
-        if (msg.data.action === 'batch_generate_shot_images' || msg.data.action === 'generate_shot_image') {
-          if (currentProject && currentEpisode && epId === currentEpisode.id) {
-            loadProjectStoryboards(currentProject.id, currentEpisode.id);
-          }
-        }
-      }
-      if (msg.data && msg.data.action === 'episode_pipeline_paused') {
+      const progressAction = msg.data && msg.data.action;
+      if (progressAction === 'episode_pipeline_paused') {
         const epId = msg.data.episode_id;
         if (epId) {
           markPipelineEpisode(epId, true);
@@ -530,22 +562,54 @@
         }
         if (currentEpisode && currentEpisode.id === epId) {
           syncPipelineControlsForCurrentEpisode();
+          setStatus('⏸ 流水线已暂停');
+          updateChatProgress('⏸ 流水线已暂停', msg.progress || (pipelineByEpisode[epId] && pipelineByEpisode[epId].progress) || 0);
         }
+        return;
       }
-      if (msg.data && msg.data.action === 'episode_pipeline_resumed') {
+      if (progressAction === 'episode_pipeline_resumed') {
         const epId = msg.data.episode_id;
+        const resumeMsg = (msg.msg || '').includes('断点恢复')
+          ? ('▶ ' + (msg.msg || '流水线已从断点恢复'))
+          : '▶ 流水线已继续';
         if (epId) {
           markPipelineEpisode(epId, false);
-          const resumeMsg = (msg.msg || '').includes('断点恢复')
-            ? ('▶ ' + (msg.msg || '流水线已从断点恢复'))
-            : '▶ 流水线已继续';
           pushPipelineStatusLine(resumeMsg, epId);
         }
         if (currentEpisode && currentEpisode.id === epId) {
           syncPipelineControlsForCurrentEpisode();
+          setStatus(resumeMsg);
+          updateChatProgress(resumeMsg, msg.progress || (pipelineByEpisode[epId] && pipelineByEpisode[epId].progress) || 0);
         }
+        return;
       }
-      const progressAction = msg.data && msg.data.action;
+      if (msg.data && msg.data.pipeline) {
+        const epId = msg.data.episode_id;
+        applyPipelineProgress(epId, msg);
+        if (currentEpisode && epId === currentEpisode.id) {
+          syncPipelineControlsForCurrentEpisode();
+        }
+        if (msg.data.action === 'batch_generate_shot_images' || msg.data.action === 'generate_shot_image') {
+          if (currentProject && currentEpisode && epId === currentEpisode.id) {
+            if (msg.data.status && msg.data.status.shot) {
+              applyShotStoryboardUpdate(msg.data.status.shot);
+            } else if (msg.data.shot) {
+              applyShotStoryboardUpdate(msg.data.shot);
+            } else {
+              loadProjectStoryboards(currentProject.id, currentEpisode.id);
+            }
+          }
+        }
+        if (msg.data.action === 'batch_generate_shot_videos' || msg.data.action === 'generate_shot_video') {
+          if (currentProject && currentEpisode && epId === currentEpisode.id) {
+            loadShotClips();
+          }
+        }
+      } else {
+        const label = pipelineProgressLabel(msg);
+        updateChatProgress(label, msg.progress);
+        setStatus(label);
+      }
       if (progressAction && planningActionMap[progressAction] && msg.progress > 0 && msg.progress < 100) {
         showPlanningWorkInProgress(progressAction, msg.msg);
       }
@@ -563,19 +627,15 @@
       const state = msg.data && msg.data.state;
       if (state === 'running') {
         if (epId) {
-          markPipelineEpisode(epId, false);
-          savePipelineProgress(epId, msg.msg, msg.progress);
-          pushPipelineStatusLine(msg.msg || '流水线执行中...', epId);
+          applyPipelineProgress(epId, msg);
         }
-        if (currentEpisode && currentEpisode.id === epId) {
+        if (currentEpisode && currentEpisode.id === epId && !(pipelineByEpisode[epId] && pipelineByEpisode[epId].paused)) {
           syncPipelineControlsForCurrentEpisode();
-          setStatus(msg.msg || '流水线执行中...');
         }
       } else if (state === 'paused') {
         if (epId) {
           markPipelineEpisode(epId, true);
-          savePipelineProgress(epId, msg.msg || '已暂停', msg.progress);
-          pushPipelineStatusLine('⏸ 流水线已暂停', epId);
+          applyPipelineProgress(epId, { msg: '⏸ 流水线已暂停', progress: msg.progress, data: msg.data });
         }
         if (currentEpisode && currentEpisode.id === epId) {
           syncPipelineControlsForCurrentEpisode();
@@ -587,6 +647,7 @@
           pushPipelineStatusLine('⚠️ ' + msg.msg, epId);
         }
         clearEpisodePipelineUI(epId);
+        episodePipelineActiveStepId = null;
         if (currentEpisode && currentEpisode.id === epId && state === 'done') {
           updateChatProgress('', 0);
         }
@@ -626,7 +687,7 @@
         }
         break;
       case 'gen_image':
-        setStatus('🎨 AI 绘图中 (' + (msg.data?.current_shot || '?') + '/' + (msg.data?.total_shots || '?') + ')');
+        setStatus('🎨 关键帧生成中 (' + (msg.data?.current_shot || '?') + '/' + (msg.data?.total_shots || '?') + ')');
         updateProgress(msg.progress);
         if (msg.data && msg.data.shot) {
           const shot = normalizeStoryboards([msg.data.shot])[0];
@@ -876,8 +937,9 @@
       : DEFAULT_EPISODE_PIPELINE_STEPS.map(s => ({ ...s, done: false }));
     bar.style.display = 'flex';
     inner.innerHTML = steps.map(step => {
-      const icon = step.done ? '✓' : '○';
-      const cls = step.done ? 'done' : 'pending';
+      const isRunning = step.id === episodePipelineActiveStepId;
+      const icon = step.done ? '✓' : (isRunning ? '◉' : '○');
+      const cls = step.done ? 'done' : (isRunning ? 'running' : 'pending');
       return `<button type="button" class="wb-step-chip ${cls}" data-step-id="${escapeHtml(step.id)}" data-panel="${escapeHtml(step.panel || stepPanelMap[step.id] || 'storyboard')}" title="${escapeHtml(step.id)}">
         <span class="wb-step-icon">${icon}</span>${escapeHtml(step.label)}
       </button>`;
@@ -1089,7 +1151,7 @@
   }
 
   function getDefaultChatWelcome() {
-    return '你好！我是 AI-VIDEO 创作助手。\n\n建议流程：\n1. 导入原文\n2. 事件分析 + AI 分集\n3. 选择一集，生成故事骨架 → 改编策略 → 剧本\n4. 生成分镜 → 提取资产 → 图片 → 视频\n\n操作方式：\n· 点击界面按钮 → 直接执行对应步骤\n· 聊天对话 → 仅在你明确要求且 AI 输出 ACTION 时才执行流程；否则为普通问答\n\n直接告诉我你想做什么即可。';
+    return '你好！我是 AI-VIDEO 创作助手。\n\n建议流程：\n1. 导入原文\n2. 事件分析 + AI 分集\n3. 选择一集，生成故事骨架 → 改编策略 → 剧本\n4. 生成分镜 → 提取资产 → 关键帧 → 视频\n\n操作方式：\n· 点击界面按钮 → 直接执行对应步骤\n· 聊天对话 → 仅在你明确要求且 AI 输出 ACTION 时才执行流程；否则为普通问答\n\n直接告诉我你想做什么即可。';
   }
 
   function chatLocalKey(episodeId) {
@@ -1181,34 +1243,115 @@
       .then(r => r.json())
       .then(list => {
         const next = {};
+        let anyActive = false;
+        let currentInterrupted = false;
         (list || []).forEach(row => {
           if (!row.episode_id) return;
+          const active = !!row.active;
+          if (active) anyActive = true;
+          const interrupted = !!row.interrupted || (!active && !row.done && Array.isArray(row.lines) && row.lines.length > 0);
           next[row.episode_id] = {
-            active: !!row.active,
+            active,
             paused: !!row.paused,
-            done: !!row.done,
+            done: !!row.done || interrupted,
+            interrupted,
+            currentStepId: '',
             lines: Array.isArray(row.lines) ? row.lines.slice() : [],
             progress: row.progress || 0,
             progressMsg: row.progress_msg || '',
           };
+          if (currentEpisode && currentEpisode.id === row.episode_id && interrupted) {
+            currentInterrupted = true;
+          }
         });
         pipelineByEpisode = next;
+        if (!anyActive) finishPendingWorkflowUI();
         renderEpisodeList();
         renderEpisodeSelect();
         syncPipelineControlsForCurrentEpisode();
         if (currentEpisode) restorePipelineChatUI(currentEpisode.id);
+        if (currentInterrupted) {
+          setStatus('就绪');
+          updateChatProgress('', 0);
+        }
         scrollChatToBottom();
-      }).catch(() => {});
+      }).catch(() => {
+        finishPendingWorkflowUI();
+      });
+  }
+
+  function pipelineStepIdFromMsg(msg) {
+    const d = msg && msg.data;
+    if (!d) return '';
+    return (d.status && d.status.step_id) || d.action || '';
+  }
+
+  function pipelineProgressLabel(msg) {
+    const text = (msg && msg.msg) || '';
+    const stepId = pipelineStepIdFromMsg(msg);
+    const status = (msg && msg.data && msg.data.status) || {};
+    const shot = status.shot || 0;
+    const seq = status.shot_seq || 0;
+    const total = status.shot_total || 0;
+    const shotHint = seq > 0 && total > 0
+      ? ` (${seq}/${total})`
+      : '';
+
+    if (stepId === 'batch_generate_shot_videos') {
+      if (/串行生视频|生视频|生成.*视频/.test(text)) return text;
+      if (seq > 0) return `正在生成第 ${shot || seq} 镜视频${shotHint}`;
+      return text || '串行生视频...';
+    }
+    if (stepId === 'batch_generate_shot_images') {
+      if (/完成/.test(text)) return text;
+      if (/正在生成|关键帧/.test(text) && seq > 0) return text;
+      if (seq > 0) return `正在生成第 ${shot || seq} 镜关键帧${shotHint}`;
+      return text || '批量生关键帧...';
+    }
+    if (stepId === 'batch_compose_shots') {
+      return text || '批量合成对白镜头...';
+    }
+    if (text) return text;
+    const label = workflowUserLabels[stepId];
+    return label ? `正在${label}...` : '处理中...';
+  }
+
+  function syncPipelineStepUI(stepId, message) {
+    if (!episodePipelineSteps.length) return;
+    if (stepId) episodePipelineActiveStepId = stepId;
+    const idx = stepId ? episodePipelineSteps.findIndex(s => s.id === stepId) : -1;
+    if (idx > 0) {
+      for (let i = 0; i < idx; i++) episodePipelineSteps[i].done = true;
+    }
+    if (message && /完成/.test(message) && idx >= 0) {
+      episodePipelineSteps[idx].done = true;
+      episodePipelineActiveStepId = null;
+      loadEpisodePipelineSteps();
+      return;
+    }
+    renderEpisodePipelineSteps();
+  }
+
+  function applyPipelineProgress(epId, msg) {
+    if (!epId || !msg) return;
+    const label = pipelineProgressLabel(msg);
+    const progress = msg.progress;
+    const stepId = pipelineStepIdFromMsg(msg);
+    const st = ensurePipelineRecord(epId);
+    st.active = true;
+    if (stepId) st.currentStepId = stepId;
+    if (label) st.progressMsg = label;
+    if (progress != null && !isNaN(progress)) st.progress = progress;
+    syncPipelineStepUI(stepId, label);
+    if (currentEpisode && currentEpisode.id === epId) {
+      updateChatProgress(st.progressMsg, st.progress || 0);
+      if (!st.paused) setStatus(st.progressMsg);
+    }
+    if (!st.paused) pushPipelineStatusLine(label, epId);
   }
 
   function savePipelineProgress(episodeId, message, progress) {
-    if (!episodeId) return;
-    const st = ensurePipelineRecord(episodeId);
-    if (message) st.progressMsg = message;
-    if (progress != null && !isNaN(progress)) st.progress = progress;
-    if (currentEpisode && currentEpisode.id === episodeId) {
-      updateChatProgress(st.progressMsg || message || '', st.progress || 0);
-    }
+    applyPipelineProgress(episodeId, { msg: message, progress: progress, data: {} });
   }
 
   function renderPipelineStatusBubble(st) {
@@ -1241,7 +1384,10 @@
     if (!st || !st.lines.length) return;
     renderPipelineStatusBubble(st);
     if (isPipelineActiveRecord(st)) {
-      updateChatProgress(st.progressMsg || st.lines[st.lines.length - 1], st.progress || 0);
+      const latest = st.lines[st.lines.length - 1] || st.progressMsg || '';
+      if (st.currentStepId) episodePipelineActiveStepId = st.currentStepId;
+      syncPipelineStepUI(st.currentStepId, latest);
+      updateChatProgress(latest, st.progress || 0);
     }
   }
 
@@ -1316,6 +1462,7 @@
     st.done = false;
     renderEpisodeList();
     renderEpisodeSelect();
+    syncPipelineControlsForCurrentEpisode();
   }
 
   function clearPipelineEpisode(episodeId) {
@@ -1336,6 +1483,36 @@
     renderEpisodeSelect();
   }
 
+  function syncPipelineRunButton() {
+    const btn = document.getElementById('btn-run-episode-pipeline');
+    if (!btn) return;
+    const epId = currentEpisode && currentEpisode.id;
+    const st = epId && pipelineByEpisode[epId];
+    const origLabel = '⚡ 一键执行本集';
+    if (st && isPipelineActiveRecord(st)) {
+      btn.disabled = true;
+      if (!pendingWorkflowUI || pendingWorkflowUI.btn !== btn) {
+        const saved = pendingWorkflowUI && pendingWorkflowUI.origLabel;
+        pendingWorkflowUI = {
+          btn: btn,
+          origLabel: saved && saved !== '执行中...' && saved !== '⏳ 执行中...' && saved !== '⏸ 已暂停'
+            ? saved
+            : origLabel,
+        };
+      }
+      btn.textContent = st.paused ? '⏸ 已暂停' : '⏳ 执行中...';
+      return;
+    }
+    if (pendingWorkflowUI && pendingWorkflowUI.btn === btn) {
+      finishPendingWorkflowUI();
+      return;
+    }
+    btn.disabled = false;
+    if (btn.textContent === '执行中...' || btn.textContent === '⏳ 执行中...' || btn.textContent === '⏸ 已暂停') {
+      btn.textContent = origLabel;
+    }
+  }
+
   function syncPipelineControlsForCurrentEpisode() {
     const epId = currentEpisode && currentEpisode.id;
     const st = epId && pipelineByEpisode[epId];
@@ -1344,6 +1521,7 @@
       episodePipelineActive = true;
       episodePipelinePaused = st.paused;
       setPipelineControlsVisible(true, st.paused);
+      syncPipelineRunButton();
       return;
     }
     episodePipelineActive = false;
@@ -1352,6 +1530,7 @@
       episodePipelineEpisodeId = null;
     }
     setPipelineControlsVisible(false, false);
+    syncPipelineRunButton();
   }
 
   function clearEpisodePipelineUI(episodeId) {
@@ -1455,8 +1634,8 @@
     setStatus('分集流水线执行中...');
     if (btn) {
       btn.disabled = true;
-      pendingWorkflowUI = { btn: btn, origLabel: btn.textContent };
-      btn.textContent = '执行中...';
+      pendingWorkflowUI = { btn: btn, origLabel: btn.textContent || '⚡ 一键执行本集' };
+      btn.textContent = '⏳ 执行中...';
     }
   }
 
@@ -1692,7 +1871,7 @@
           }
           runWorkflowViaWS(
             'generate_shot_image',
-            '为第 ' + shot + ' 镜生成图片',
+            '为第 ' + shot + ' 镜生成关键帧',
             null,
             '生成中',
             { shotNumbers: [shot], skipUserMessage: true }
@@ -1746,7 +1925,7 @@
       return Promise.resolve();
     }
     if (!shotNumbers || !shotNumbers.length) {
-      toast('请勾选分镜，或点击卡片上的「🎨 生成图片」', 'warning');
+      toast('请勾选分镜，或点击卡片上的「🎨 生成关键帧」', 'warning');
       return Promise.resolve();
     }
     if (isGenerating) {
@@ -1761,7 +1940,7 @@
       }
       runWorkflowViaWS(
         wsOpts.forceRegenerate ? 'generate_shot_image' : 'batch_generate_shot_images',
-        userLabel || ('为 ' + shotNumbers.length + ' 个分镜生成图片'),
+        userLabel || ('为 ' + shotNumbers.length + ' 个分镜生成关键帧'),
         null,
         '生成中',
         { shotNumbers: shotNumbers, skipUserMessage: !!wsOpts.skipUserMessage }
@@ -1798,10 +1977,10 @@
       }
       const missingImage = shots.filter(n => {
         const sb = storyboards.find(s => s.shot_number === n);
-        return !sb || !sb.image_url;
+        return !shotHasAllKeyframes(sb);
       });
       if (missingImage.length) {
-        toast('请先生成图片：第 ' + missingImage.join('、') + ' 镜', 'warning');
+        toast('请先生成关键帧：第 ' + missingImage.join('、') + ' 镜', 'warning');
         return;
       }
     }
@@ -1990,11 +2169,50 @@
     return '';
   }
 
+  function normalizeBeat(b, i) {
+    if (!b || typeof b !== 'object') return { time: i * 3, action: '', image_url: '', image_remote_url: '' };
+    return {
+      time: b.time ?? b.Time ?? 0,
+      action: (b.action ?? b.Action ?? '').trim(),
+      image_url: b.image_url ?? b.ImageURL ?? '',
+      image_remote_url: b.image_remote_url ?? b.ImageRemoteURL ?? '',
+    };
+  }
+
+  function getShotBeats(sb) {
+    const raw = sb && (sb.beats ?? sb.Beats);
+    if (!Array.isArray(raw) || raw.length === 0) return [];
+    return raw.map(normalizeBeat).sort((a, b) => a.time - b.time);
+  }
+
+  function shotKeyframeStats(sb) {
+    const beats = getShotBeats(sb);
+    if (beats.length < 2) {
+      const ready = !!(sb && (sb.image_url || sb.image_remote_url)) ? 1 : 0;
+      return { total: 1, ready, beats };
+    }
+    const ready = beats.filter(b => b.image_url || b.image_remote_url).length;
+    return { total: beats.length, ready, beats };
+  }
+
+  function shotHasAllKeyframes(sb) {
+    if (!sb) return false;
+    const { total, ready } = shotKeyframeStats(sb);
+    return ready >= total && total > 0;
+  }
+
+  function formatBeatTime(sec) {
+    const n = Number(sec);
+    if (!Number.isFinite(n)) return '0s';
+    return (Math.round(n * 10) / 10) + 's';
+  }
+
   function normalizeStoryboards(list) {
     if (!Array.isArray(list)) return [];
     return list.map((sb, i) => {
       const description = sb.description ?? sb.Description ?? '';
       const dialogue = (sb.dialogue ?? sb.Dialogue ?? '').trim();
+      const beats = getShotBeats(sb);
       return {
         shot_number: sb.shot_number ?? sb.ShotNumber ?? (i + 1),
         scene: sb.scene ?? sb.Scene ?? '',
@@ -2005,6 +2223,8 @@
         prompt: sb.prompt ?? sb.Prompt ?? description,
         image_url: sb.image_url ?? sb.ImageURL ?? '',
         image_remote_url: sb.image_remote_url ?? sb.ImageRemoteURL ?? '',
+        scene_link: sb.scene_link ?? sb.SceneLink ?? '',
+        beats,
         selected: sb.selected === true,
       };
     });
@@ -2084,8 +2304,8 @@
   function generateShotVideo(shotNumber) {
     if (!currentProject || !currentEpisode) { toast('请先选择项目与集', 'warning'); return Promise.resolve(); }
     const sb = storyboards.find(s => s.shot_number === shotNumber);
-    if (!sb || !sb.image_url) {
-      toast('请先生成该分镜图片', 'warning');
+    if (!sb || !shotHasAllKeyframes(sb)) {
+      toast('请先生成该镜全部关键帧', 'warning');
       return Promise.resolve();
     }
     runWorkflowViaWS(
@@ -2741,26 +2961,92 @@
     els.modalMediaPreview.style.display = 'none';
   }
 
-  function renderStoryboardImageColumn(sb, i) {
+  function renderStoryboardBeatsSection(sb) {
+    const beats = getShotBeats(sb);
+    if (!beats.length) {
+      return `<div class="storyboard-field sb-beats-field">
+        <div class="storyboard-field-label">关键帧拍点</div>
+        <div class="storyboard-field-value sb-beats-empty">暂无拍点。请用「AI 生成分镜」重新生成（每镜 10–18s，2–3 个关键帧拍点）。</div>
+      </div>`;
+    }
+    const items = beats.map((b, bi) => {
+      const hasImg = !!(b.image_url || b.image_remote_url);
+      const imgTag = hasImg ? '<span class="sb-beat-keyframe-tag is-ready" title="关键帧已生成">✓</span>' : '<span class="sb-beat-keyframe-tag" title="待生成关键帧">○</span>';
+      return `<div class="sb-beat-item" title="${escapeHtml(b.action || '')}">
+        ${imgTag}
+        <span class="sb-beat-time">${formatBeatTime(b.time)}</span>
+        <span class="sb-beat-action">${escapeHtml(b.action || '（未填写动作）')}</span>
+      </div>`;
+    }).join('');
+    return `<div class="storyboard-field sb-beats-field">
+      <div class="storyboard-field-label">关键帧拍点 <span class="sb-beats-count">${beats.length} 拍</span></div>
+      <div class="storyboard-field-value sb-beats-timeline">${items}</div>
+    </div>`;
+  }
+
+  function renderKeyframeGridCells(sb, beats, titleBase) {
+    const ready = beats.filter(b => b.image_url || b.image_remote_url).slice(0, 3);
+    if (!ready.length) {
+      const total = beats.length;
+      const hint = total > 0
+        ? `已规划 ${total} 个拍点，生成后显示缩略图`
+        : '暂无关键帧';
+      return `<div class="sb-keyframes-panel sb-keyframes-panel-empty"><div class="sb-keyframes-empty-hint">${hint}</div></div>`;
+    }
+    const cells = ready.map((b) => {
+      const url = b.image_url || b.image_remote_url || '';
+      const beatTitle = `${titleBase} · ${formatBeatTime(b.time)}`;
+      const timeLabel = formatBeatTime(b.time);
+      return `<div class="sb-keyframe-cell has-image" title="${escapeHtml(b.action || '')}">
+        <div class="sb-keyframe-thumb-wrap">
+          <div class="sb-thumb sb-thumb-image sb-keyframe-thumb">
+            <img src="${escapeHtml(url)}?v=${encodeURIComponent(url.length + (b.image_remote_url || '').length)}" alt="${escapeHtml(beatTitle)}" loading="lazy" decoding="async">
+            <button type="button" class="sb-thumb-hit sb-media-preview-btn" data-preview-type="image" data-url="${escapeHtml(url)}" data-title="${escapeHtml(beatTitle)}" title="点击放大查看" aria-label="放大查看关键帧"></button>
+          </div>
+          <span class="sb-keyframe-badge">${timeLabel}</span>
+        </div>
+      </div>`;
+    }).join('');
+    const rowCount = Math.min(3, Math.ceil(ready.length / 3));
+    return `<div class="sb-keyframes-panel"><div class="sb-keyframes-grid" style="--kf-rows:${rowCount}">${cells}</div></div>`;
+  }
+
+  function renderStoryboardKeyframesColumn(sb, i) {
     const shotNum = sb.shot_number || i + 1;
-    const imageTitle = `第 ${shotNum} 镜 — 图片`;
-    const previewBtn = sb.image_url
-      ? `<button type="button" class="btn btn-sm btn-outline sb-media-preview-btn sb-col-btn" data-preview-type="image" data-url="${escapeHtml(sb.image_url)}" data-title="${escapeHtml(imageTitle)}">🖼 预览图片</button>`
-      : '<button type="button" class="btn btn-sm btn-outline sb-col-btn" disabled title="暂无图片">🖼 预览图片</button>';
-    const imageBlock = sb.image_url
-      ? `<div class="sb-thumb sb-thumb-image">
-           <img src="${escapeHtml(sb.image_url)}?v=${encodeURIComponent(sb.image_url.length + (sb.image_remote_url || '').length)}" alt="${escapeHtml(imageTitle)}" loading="lazy" decoding="async">
-           <button type="button" class="sb-thumb-hit sb-media-preview-btn" data-preview-type="image" data-url="${escapeHtml(sb.image_url)}" data-title="${escapeHtml(imageTitle)}" title="点击放大预览" aria-label="预览图片"></button>
-         </div>`
-      : '<div class="sb-thumb sb-thumb-empty">暂无图片</div>';
-    return `<div class="sb-media-col sb-media-col-image">
+    const stats = shotKeyframeStats(sb);
+    const beats = stats.beats;
+    const statusLabel = stats.total > 1
+      ? `${stats.ready}/${stats.total} 关键帧`
+      : (stats.ready ? '已生成' : '待生成');
+    const titleBase = `第 ${shotNum} 镜`;
+
+    let strip = '';
+    if (beats.length >= 1) {
+      strip = renderKeyframeGridCells(sb, beats, titleBase);
+    } else {
+      const url = sb.image_url || '';
+      strip = url
+        ? renderKeyframeGridCells(sb, [{ time: 0, action: '', image_url: url, image_remote_url: sb.image_remote_url || '' }], titleBase)
+        : '<div class="sb-keyframes-panel sb-keyframes-panel-empty"><div class="sb-keyframes-empty-hint">暂无关键帧</div></div>';
+    }
+
+    const firstUrl = (beats[0] && beats[0].image_url) || sb.image_url || '';
+    const previewBtn = firstUrl
+      ? `<button type="button" class="btn btn-sm btn-outline sb-media-preview-btn sb-col-btn" data-preview-type="image" data-url="${escapeHtml(firstUrl)}" data-title="${escapeHtml(titleBase + ' — 首帧')}">🖼 预览首帧</button>`
+      : '<button type="button" class="btn btn-sm btn-outline sb-col-btn" disabled title="暂无关键帧">🖼 预览首帧</button>';
+
+    return `<div class="sb-media-col sb-media-col-keyframes">
       <div class="sb-media-col-toolbar">
         ${previewBtn}
-        <span class="sb-media-col-title">图片</span>
-        <button class="btn btn-sm btn-outline sb-gen-image-btn sb-col-btn" type="button" data-shot="${shotNum}">🎨 生成图片</button>
+        <span class="sb-media-col-title">关键帧 <span class="sb-keyframe-status">${statusLabel}</span></span>
+        <button class="btn btn-sm btn-outline sb-gen-image-btn sb-col-btn" type="button" data-shot="${shotNum}">🎨 生成关键帧</button>
       </div>
-      ${imageBlock}
+      ${strip}
     </div>`;
+  }
+
+  function renderStoryboardImageColumn(sb, i) {
+    return renderStoryboardKeyframesColumn(sb, i);
   }
 
   function renderStoryboardVideoColumn(sb, i) {
@@ -2818,8 +3104,8 @@
       return submitShotImagesViaWS(
         selectedShots,
         selectedShots.length === 1
-          ? ('为第 ' + selectedShots[0] + ' 镜生成图片')
-          : ('批量生成图片（' + selectedShots.length + ' 镜）'),
+          ? ('为第 ' + selectedShots[0] + ' 镜生成关键帧')
+          : ('批量生成关键帧（' + selectedShots.length + ' 镜）'),
         selectedShots.length === 1 ? { forceRegenerate: true } : undefined
       );
     }
@@ -2858,7 +3144,7 @@
   }
 
   function generateShotImage(shotNumber) {
-    return submitShotImagesViaWS([shotNumber], '为第 ' + shotNumber + ' 镜生成图片', { forceRegenerate: true });
+    return submitShotImagesViaWS([shotNumber], '为第 ' + shotNumber + ' 镜生成关键帧', { forceRegenerate: true });
   }
 
   // ======================== 资产 CRUD ========================
@@ -3024,51 +3310,67 @@
       els.storyboardList.innerHTML = '';
       els.storyboardEmpty.style.display = 'block';
       els.storyboardCount.textContent = '0 个分镜';
+      const epLabel = currentEpisode
+        ? (currentEpisode.title || ('EP' + (currentEpisode.episode_num || '')))
+        : '';
+      const emptyP = els.storyboardEmpty && els.storyboardEmpty.querySelector('p');
+      if (emptyP) {
+        emptyP.textContent = epLabel
+          ? `「${epLabel}」暂无分镜。请先在 AI策划 生成剧本，再点「AI 生成分镜」或「一键执行本集」。`
+          : '请先在 AI策划 中生成剧本，再生成分镜';
+      }
       updateStoryboardSelectionUI();
       return;
     }
     els.storyboardEmpty.style.display = 'none';
     els.storyboardCount.textContent = storyboards.length + ' 个分镜';
 
-    els.storyboardList.innerHTML = storyboards.map((sb, i) => `
+    els.storyboardList.innerHTML = storyboards.map((sb, i) => {
+      const stats = shotKeyframeStats(sb);
+      const beatMeta = stats.total > 1 ? ` · ${stats.total}拍点` : '';
+      const kfMeta = stats.total > 0 ? ` · ${stats.ready}/${stats.total}关键帧` : '';
+      const linkMeta = sb.scene_link === 'continuous' ? ' · 续接' : (sb.scene_link === 'transition' ? ' · 转场' : '');
+      return `
       <div class="storyboard-card ${sb.selected === true ? 'is-selected' : ''}" data-index="${i}">
         <div class="storyboard-card-header">
           <label class="storyboard-card-select">
             <input type="checkbox" class="sb-select-cb" data-index="${i}" ${sb.selected === true ? 'checked' : ''}>
             <span class="storyboard-card-title">🎬 第 ${sb.shot_number || i + 1} 镜 — ${escapeHtml(sb.scene || '未命名场景')}</span>
           </label>
-          <span class="storyboard-card-duration">${sb.duration || 3}s</span>
+          <span class="storyboard-card-duration">${sb.duration || 3}s${beatMeta}${kfMeta}${linkMeta}</span>
         </div>
         <div class="storyboard-card-body">
           <div class="storyboard-card-content">
-            <div class="storyboard-field">
-              <div class="storyboard-field-label">画面描述</div>
+            <div class="storyboard-field sb-field-compact">
+              <div class="storyboard-field-label">镜情概要</div>
               <div class="storyboard-field-value">
-                <textarea rows="2">${escapeHtml(sb.description || '')}</textarea>
+                <textarea rows="1" readonly class="sb-text-compact" title="整镜叙事摘要">${escapeHtml(sb.description || '')}</textarea>
               </div>
             </div>
-            <div class="storyboard-field">
+            ${renderStoryboardBeatsSection(sb)}
+            <div class="storyboard-field sb-field-inline">
               <div class="storyboard-field-label">运镜</div>
-              <div class="storyboard-field-value">${escapeHtml(sb.camera || '固定镜头')}</div>
+              <div class="storyboard-field-value sb-inline-text">${escapeHtml(sb.camera || '固定镜头')}</div>
             </div>
-            <div class="storyboard-field">
+            <div class="storyboard-field sb-field-compact">
               <div class="storyboard-field-label">对白</div>
               <div class="storyboard-field-value">
-                <textarea class="sb-dialogue-input" rows="2" data-shot="${sb.shot_number || i + 1}" placeholder="角色名：台词，例如「石昊：这一战，我不会退。」">${escapeHtml(sb.dialogue || '')}</textarea>
+                <textarea class="sb-dialogue-input sb-text-compact" rows="1" data-shot="${sb.shot_number || i + 1}" placeholder="角色名：台词">${escapeHtml(sb.dialogue || '')}</textarea>
               </div>
             </div>
-            <div class="storyboard-field">
-              <div class="storyboard-field-label">AI 绘图 Prompt</div>
+            <details class="storyboard-field sb-prompt-details">
+              <summary class="storyboard-field-label">首帧绘图 Prompt</summary>
               <div class="storyboard-field-value">
-                <textarea rows="3">${escapeHtml(sb.prompt || '')}</textarea>
+                <textarea rows="2" readonly class="sb-text-compact sb-prompt-text" title="首帧关键帧绘图提示词">${escapeHtml(sb.prompt || '')}</textarea>
               </div>
-            </div>
+            </details>
           </div>
           ${renderStoryboardImageColumn(sb, i)}
           ${renderStoryboardVideoColumn(sb, i)}
         </div>
       </div>
-    `).join('');
+    `;
+    }).join('');
     els.storyboardList.querySelectorAll('.sb-gen-image-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -3109,7 +3411,7 @@
   }
 
   function taskModeLabel(mode) {
-    const map = { images: '生成图片', video: '生成视频', full: '一键出片', parse: '解析剧本' };
+    const map = { images: '生成关键帧', video: '生成视频', full: '一键出片', parse: '解析剧本' };
     return map[mode] || mode || '';
   }
 
@@ -3129,7 +3431,7 @@
 
     const counts = { waiting: 0, parsing: 0, storyboarding: 0, drawing: 0, video_gen: 0, merging: 0, done: 0, error: 0 };
     tasks.forEach(t => { if (counts[t.state] !== undefined) counts[t.state]++; });
-    els.taskStats.textContent = `等待:${counts.waiting} 绘图:${counts.drawing} 视频:${counts.video_gen} 完成:${counts.done} 失败:${counts.error}`;
+    els.taskStats.textContent = `等待:${counts.waiting} 关键帧:${counts.drawing} 视频:${counts.video_gen} 完成:${counts.done} 失败:${counts.error}`;
 
     const active = tasks.filter(t => t.state !== 'done' && t.state !== 'error');
     if (els.activeTasks) {
@@ -3160,7 +3462,7 @@
   function stateLabel(s) {
     const map = {
       waiting: '等待中', parsing: '解析中', storyboarding: '分镜中',
-      drawing: '绘图中', video_gen: '生成视频', merging: '合成中',
+      drawing: '关键帧', video_gen: '生成视频', merging: '合成中',
       done: '已完成', error: '失败',
     };
     return map[s] || s;
@@ -3660,10 +3962,10 @@
     if (!currentEpisode) { toast('请先选择一集', 'warning'); return; }
     const shots = getSelectedShotNumbers();
     if (!shots.length) {
-      toast('请勾选分镜，或点击卡片上的「🎨 生成图片」', 'warning');
+      toast('请勾选分镜，或点击卡片上的「🎨 生成关键帧」', 'warning');
       return;
     }
-    submitShotImagesViaWS(shots, '批量生成图片（' + shots.length + ' 镜）');
+    submitShotImagesViaWS(shots, '批量生成关键帧（' + shots.length + ' 镜）');
   });
 
   if (els.btnSelectAllShots) {

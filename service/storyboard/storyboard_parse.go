@@ -56,31 +56,54 @@ func NormalizeStoryboardItems(items []task.StoryboardItem) []task.StoryboardItem
 	return out
 }
 
-// ensureShotBeats returns a cleaned intra-shot timed plan dense enough for keyframe video.
-// Target roughly one keyframe every ~3s (min 4, max 7) so a 10–18s shot carries
-// enough story beats for a single Fluent generation.
+// ensureShotBeats returns a cleaned intra-shot timed plan for Agnes keyframe video.
+// Agnes accepts at most 3 keyframe images per generation; target 2–3 beats per shot.
 func ensureShotBeats(beats []task.ShotBeat, dur float64, description string) []task.ShotBeat {
 	if dur <= 0 {
 		dur = duration.DefaultShotDurationSec
 	}
 	target := targetBeatCount(dur)
 	cleaned := normalizeShotBeats(beats, dur)
+	if len(cleaned) > duration.MaxBeatsPerShot {
+		cleaned = downsampleBeats(cleaned, duration.MaxBeatsPerShot, dur)
+	}
 	if len(cleaned) >= target {
 		return cleaned
 	}
 	return synthesizeShotBeats(cleaned, dur, description, target)
 }
 
+// CapShotBeats normalizes beat count for keyframe image/video generation (2–3 beats).
+func CapShotBeats(beats []task.ShotBeat, dur float64, description string) []task.ShotBeat {
+	return ensureShotBeats(beats, dur, description)
+}
+
 func targetBeatCount(dur float64) int {
-	// ~1 keyframe / 3s keeps Agnes keyframe interpolation smooth without too many API calls.
-	n := int(dur/3.0 + 0.5)
-	if n < 4 {
-		n = 4
+	// 10–11s → 2 keyframes (opening + payoff); 12s+ → 3 (opening + turn + payoff).
+	if dur >= 12 {
+		return duration.MaxBeatsPerShot
 	}
-	if n > 7 {
-		n = 7
+	return duration.MinBeatsPerShot
+}
+
+func downsampleBeats(beats []task.ShotBeat, n int, dur float64) []task.ShotBeat {
+	if n <= 0 || len(beats) == 0 {
+		return nil
 	}
-	return n
+	if len(beats) <= n {
+		return beats
+	}
+	if n == 1 {
+		return []task.ShotBeat{beats[0]}
+	}
+	out := make([]task.ShotBeat, 0, n)
+	for i := 0; i < n; i++ {
+		idx := int(float64(i)*float64(len(beats)-1)/float64(n-1) + 0.5)
+		out = append(out, beats[idx])
+	}
+	out[0].Time = beats[0].Time
+	out[len(out)-1].Time = beats[len(beats)-1].Time
+	return normalizeShotBeats(out, dur)
 }
 
 func synthesizeShotBeats(seed []task.ShotBeat, dur float64, description string, target int) []task.ShotBeat {
@@ -593,14 +616,16 @@ func StoryboardScore(items []task.StoryboardItem) int {
 		}
 		n := len(it.Beats)
 		totalBeats += n
-		if n >= 5 {
-			score += n * 8
-		} else if n >= 4 {
-			score += n * 5
-		} else if n >= 2 {
+		switch {
+		case n == duration.MaxBeatsPerShot:
+			score += n * 10
+		case n == duration.MinBeatsPerShot:
+			score += n * 6
+		case n > duration.MaxBeatsPerShot:
+			score -= (n - duration.MaxBeatsPerShot) * 15
+		case n >= 2:
 			score += n * 2
-		} else if n == 0 && it.Duration >= duration.MinShotDurationSec {
-			// Long slot without a timed plan is under-filled.
+		case n == 0 && it.Duration >= duration.MinShotDurationSec:
 			score -= 12
 		}
 	}

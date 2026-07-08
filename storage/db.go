@@ -17,7 +17,8 @@ type DB struct {
 
 // Init opens (or creates) the SQLite database and runs migrations.
 func Init(dbPath string) (*DB, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	dsn := dbPath + "?_pragma=busy_timeout(5000)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}

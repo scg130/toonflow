@@ -16,6 +16,7 @@ import (
 	"toonflow/logger"
 	"toonflow/service"
 	"toonflow/service/asset"
+	"toonflow/service/storyboard"
 	"toonflow/skill"
 	"toonflow/task"
 	"toonflow/ws"
@@ -163,7 +164,21 @@ func (p *Pipeline) Execute(ctx context.Context, t *task.Task) error {
 				"total_shots":  total,
 			})
 
-			beats, err := p.genShotKeyframes(ctx, t, item, taskDir)
+			beats, err := p.genShotKeyframes(ctx, t, item, taskDir, func(beatIdx int, partial []task.ShotBeat) {
+				t.Storyboard[idx].Beats = partial
+				if len(partial) > 0 {
+					t.Storyboard[idx].ImageURL = partial[0].ImageURL
+					t.Storyboard[idx].ImageRemoteURL = partial[0].ImageRemoteURL
+				}
+				beatProgress := progress + float32(beatIdx+1)/float32(len(partial)+1)*2
+				p.broadcast(t, fmt.Sprintf("第 %d 镜关键帧 %d/%d", item.ShotNumber, beatIdx+1, len(item.Beats)), beatProgress, map[string]interface{}{
+					"current_shot": seq + 1,
+					"total_shots":  total,
+					"current_beat": beatIdx + 1,
+					"total_beats":  len(item.Beats),
+					"shot":         t.Storyboard[idx],
+				})
+			})
 			if err != nil {
 				return fmt.Errorf("shot %d: %w", item.ShotNumber, err)
 			}
@@ -324,7 +339,8 @@ func (p *Pipeline) parseScript(ctx context.Context, t *task.Task) ([]task.Storyb
 	return parseStoryboardText(resp.Content, t.Resolution), nil
 }
 
-func (p *Pipeline) genShotKeyframes(ctx context.Context, t *task.Task, item task.StoryboardItem, taskDir string) ([]task.ShotBeat, error) {
+func (p *Pipeline) genShotKeyframes(ctx context.Context, t *task.Task, item task.StoryboardItem, taskDir string, onBeat func(beatIdx int, beats []task.ShotBeat)) ([]task.ShotBeat, error) {
+	item.Beats = storyboard.CapShotBeats(item.Beats, item.Duration, item.Description)
 	if len(item.Beats) < 2 {
 		return nil, fmt.Errorf("第 %d 镜缺少 beats 时间节点，请重新生成分镜", item.ShotNumber)
 	}
@@ -362,6 +378,9 @@ func (p *Pipeline) genShotKeyframes(ctx context.Context, t *task.Task, item task
 		}
 		beats[i].ImageURL = fmt.Sprintf("/output/%s/shot_%03d_k%d.png", t.ID, item.ShotNumber, i)
 		beats[i].ImageRemoteURL = publishRemoteFromImage(ctx, p.adapter, localPath, resp)
+		if onBeat != nil {
+			onBeat(i, beats)
+		}
 	}
 	return beats, nil
 }

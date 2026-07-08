@@ -644,6 +644,9 @@ func (v *AgnesAIVendor) VideoRequest(ctx interface{}, model string, params Video
 			keyframes = append(keyframes, kf)
 		}
 	}
+	if len(keyframes) > 3 {
+		keyframes = keyframes[:3]
+	}
 	imageURL := strings.TrimSpace(params.ImageURL)
 	mode := "keyframes"
 	if len(keyframes) >= 2 {
