@@ -16,7 +16,12 @@ import (
 	"toonflow/task"
 )
 
-const betweenShotCooldown = 12 * time.Second
+const (
+	// preBatchVideoCooldown lets Agnes recover after a burst of image requests.
+	preBatchVideoCooldown = 45 * time.Second
+	// betweenShotCooldown respects Agnes video rate limit (~2 req/min).
+	betweenShotCooldown = 35 * time.Second
+)
 
 // BatchVideoOutcome is the result of a sequential batch video run.
 type BatchVideoOutcome struct {
@@ -42,9 +47,9 @@ func BatchVideoTaskTimeout(shotCount int) time.Duration {
 func generateShotClipUntilSuccess(ctx context.Context, db *sql.DB, v adapter.Vendor, outputDir, projectID, episodeID string, shotNumber int, continuityURL string) (*ShotClip, error) {
 	var opts *ShotClipOptions
 	if continuityURL != "" {
-		opts = &ShotClipOptions{ContinuityImageURL: continuityURL, Versions: 2}
+		opts = &ShotClipOptions{ContinuityImageURL: continuityURL, Versions: 1}
 	} else {
-		opts = &ShotClipOptions{Versions: 2}
+		opts = &ShotClipOptions{Versions: 1}
 	}
 	return GenerateShotClip(ctx, db, v, outputDir, projectID, episodeID, shotNumber, opts)
 }
@@ -78,6 +83,14 @@ func GenerateShotClipsSequential(ctx context.Context, db *sql.DB, v adapter.Vend
 	var continuityURL string
 	total := len(ordered)
 	status := core.PipelineStatusFromContext(ctx)
+
+	logger.CtxTrace(ctx, "batch video start shots=%d pre_cooldown=%s between_shots=%s", total, preBatchVideoCooldown, betweenShotCooldown)
+	core.ReportStepProgress(ctx, 0, fmt.Sprintf("生图刚结束，等待 %d 秒后开始视频生成…", int(preBatchVideoCooldown.Seconds())))
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(preBatchVideoCooldown):
+	}
 
 	for i, shotNum := range ordered {
 		if err := core.WaitIfPaused(ctx); err != nil {

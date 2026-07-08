@@ -178,6 +178,7 @@ func InheritPipelineContext(parent, child context.Context) context.Context {
 	if st := PipelineStatusFromContext(parent); st != nil {
 		child = WithPipelineStatus(child, st)
 	}
+	child = logger.InheritID(parent, child)
 	return child
 }
 

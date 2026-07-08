@@ -55,6 +55,17 @@ func WithID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, ctxKey{}, id)
 }
 
+// InheritID copies log id from parent onto child when present.
+func InheritID(parent, child context.Context) context.Context {
+	if parent == nil || child == nil {
+		return child
+	}
+	if id := IDFromContext(parent); id != "" {
+		return WithID(child, id)
+	}
+	return child
+}
+
 // IDFromContext returns log id from context, or empty string.
 func IDFromContext(ctx context.Context) string {
 	if ctx == nil {

@@ -3,7 +3,17 @@ package core
 import (
 	"context"
 	"testing"
+
+	"toonflow/logger"
 )
+
+func TestInheritPipelineContextCopiesLogID(t *testing.T) {
+	parent := logger.WithID(context.Background(), "wf_test123")
+	child := InheritPipelineContext(parent, context.Background())
+	if got := logger.IDFromContext(child); got != "wf_test123" {
+		t.Fatalf("log_id=%q want wf_test123", got)
+	}
+}
 
 func TestReportStepProgress(t *testing.T) {
 	var gotStep string

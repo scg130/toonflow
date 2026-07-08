@@ -60,10 +60,13 @@ func sanitizeUserError(msg string) string {
 	if strings.Contains(msg, "403") {
 		return "无权限访问 AI 服务，请检查供应商配置"
 	}
-	if strings.Contains(msg, "429") {
+	if strings.Contains(lower, "at most 3 images") || strings.Contains(msg, "最多 3 张") {
+		return "关键帧视频单次最多 3 张图，请重新生成分镜后再试"
+	}
+	if strings.Contains(msg, "429") || strings.Contains(lower, "rate limit") || strings.Contains(lower, "rate_limit") {
 		return "AI 服务请求过于频繁，请稍后重试"
 	}
-	if strings.Contains(msg, "500") || strings.Contains(msg, "502") || strings.Contains(msg, "503") {
+	if isUpstreamUnavailable(msg, lower) {
 		return "AI 服务暂时不可用，请稍后重试"
 	}
 
@@ -97,6 +100,21 @@ func sanitizeUserError(msg string) string {
 	return msg
 }
 
+func isUpstreamUnavailable(msg, lower string) bool {
+	if strings.Contains(lower, "serviceunavailable") || strings.Contains(lower, "service busy") {
+		return true
+	}
+	for _, code := range []string{"500", "502", "503", "504"} {
+		if strings.Contains(lower, "agnes video error "+code) ||
+			strings.Contains(lower, "agnes image error "+code) ||
+			strings.Contains(lower, "agnes text error "+code) ||
+			strings.Contains(lower, "error "+code+":") {
+			return true
+		}
+	}
+	return false
+}
+
 func isTimeoutError(lower string) bool {
 	return strings.Contains(lower, "context deadline exceeded") ||
 		strings.Contains(lower, "client.timeout exceeded") ||
@@ -117,7 +135,8 @@ func IsRetryableError(err error) bool {
 	if strings.Contains(lower, "401") || strings.Contains(lower, "403") ||
 		strings.Contains(lower, "invalid api key") || strings.Contains(lower, "incorrect api key") ||
 		strings.Contains(lower, "无效的令牌") || strings.Contains(lower, "content policy") ||
-		strings.Contains(lower, "内容审核") || strings.Contains(lower, "违规") {
+		strings.Contains(lower, "内容审核") || strings.Contains(lower, "违规") ||
+		strings.Contains(lower, "at most 3 images") {
 		return false
 	}
 	if isTimeoutError(lower) {

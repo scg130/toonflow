@@ -245,6 +245,7 @@ func (wfs *WorkflowService) runEpisodePipeline(ctx context.Context, cm *ConnMana
 	gate := service.NewPauseGate()
 	pipelineTimeout := service.EpisodePipelineTimeout(len(pending))
 	runCtx, cancel := context.WithTimeout(context.Background(), pipelineTimeout)
+	runCtx = logger.WithID(runCtx, logID)
 	run := &service.EpisodePipelineRun{
 		ID:        logID,
 		ProjectID: req.ProjectID,

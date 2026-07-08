@@ -6,6 +6,23 @@ import (
 	"testing"
 )
 
+func TestUserMessage_keyframesLimit(t *testing.T) {
+	raw := `agnes video error 400: mode=keyframes supports at most 3 images`
+	got := UserMessage(fmt.Errorf("%s", raw))
+	want := "关键帧视频单次最多 3 张图，请重新生成分镜后再试"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestUserMessage_503NotFromNested400(t *testing.T) {
+	raw := `agnes video error 400: {"error":{"code":"400","message":"bad keyframes"}}`
+	got := UserMessage(fmt.Errorf("%s", raw))
+	if got == "AI 服务暂时不可用，请稍后重试" {
+		t.Fatalf("400 should not map to 503, got: %s", got)
+	}
+}
+
 func TestUserMessage_timeoutHidesURL(t *testing.T) {
 	raw := `text request: chat api request failed: Post "https://apihub.agnes-ai.com/v1/chat/completions": context deadline exceeded (Client.Timeout exceeded while awaiting headers)`
 	got := UserMessage(fmt.Errorf("%s", raw))
