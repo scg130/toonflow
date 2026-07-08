@@ -87,6 +87,7 @@ type StoryboardItem struct {
 type ShotBeat struct {
 	Time           float64 `json:"time"`
 	Action         string  `json:"action"`
+	ImagePrompt    string  `json:"image_prompt,omitempty"` // per-beat image prompt generated during storyboarding
 	ImageURL       string  `json:"image_url,omitempty"`
 	ImageRemoteURL string  `json:"image_remote_url,omitempty"`
 }

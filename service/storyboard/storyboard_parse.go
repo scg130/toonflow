@@ -165,7 +165,7 @@ func normalizeShotBeats(beats []task.ShotBeat, dur float64) []task.ShotBeat {
 			t = dur
 		}
 		cleaned = append(cleaned, task.ShotBeat{
-			Time: t, Action: action,
+			Time: t, Action: action, ImagePrompt: b.ImagePrompt,
 			ImageURL: b.ImageURL, ImageRemoteURL: b.ImageRemoteURL,
 		})
 	}

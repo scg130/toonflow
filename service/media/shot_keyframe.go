@@ -111,7 +111,20 @@ func LastBeatCDNURL(shot *storyboard.ShotMeta) string {
 }
 
 // BuildBeatImagePrompt composes an image prompt for one keyframe beat.
+// If the beat carries an image_prompt (generated during storyboarding), it is used
+// directly with minimal context (art style + continuity tags). Otherwise falls back
+// to the old拼接 logic that appends beat.Action to the full shot prompt.
 func BuildBeatImagePrompt(item task.StoryboardItem, beat task.ShotBeat, style, videoRatio, assetPrompt, styleAnchor string) string {
+	if ip := strings.TrimSpace(beat.ImagePrompt); ip != "" {
+		parts := []string{ip}
+		if assetPrompt != "" {
+			parts = append(parts, "asset reference: "+project.SanitizeImagePromptForPolicy(assetPrompt, project.SanitizeLevelLight))
+		}
+		parts = append(parts, style+" art style")
+		parts = append(parts, "frame-to-frame continuity, zero model mutation")
+		parts = append(parts, fmt.Sprintf("keyframe still at %.1fs", beat.Time))
+		return strings.Join(parts, ", ")
+	}
 	base := project.BuildShotImagePrompt(item, style, videoRatio, assetPrompt, styleAnchor)
 	action := strings.TrimSpace(beat.Action)
 	if action == "" {
