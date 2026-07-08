@@ -112,14 +112,53 @@ func TestStoryboardScorePenalizesSingleShot(t *testing.T) {
 	}
 }
 
+func TestStoryboardScorePrefersDenseLongShots(t *testing.T) {
+	thin := make([]task.StoryboardItem, 12)
+	for i := range thin {
+		thin[i] = task.StoryboardItem{Description: "x", Duration: 10, Beats: []task.ShotBeat{{Time: 0, Action: "a"}, {Time: 5, Action: "b"}}}
+	}
+	dense := []task.StoryboardItem{
+		{Description: "arc1", Duration: 15, Beats: make([]task.ShotBeat, 5)},
+		{Description: "arc2", Duration: 16, Beats: make([]task.ShotBeat, 6)},
+		{Description: "arc3", Duration: 14, Beats: make([]task.ShotBeat, 5)},
+		{Description: "arc4", Duration: 15, Beats: make([]task.ShotBeat, 5)},
+	}
+	for i := range dense {
+		for j := range dense[i].Beats {
+			dense[i].Beats[j] = task.ShotBeat{Time: float64(j), Action: "beat"}
+		}
+	}
+	if StoryboardScore(dense) <= StoryboardScore(thin) {
+		t.Fatalf("dense long shots should score higher than many thin shots: dense=%d thin=%d", StoryboardScore(dense), StoryboardScore(thin))
+	}
+}
+
+func TestEnsureShotBeatsDensifies(t *testing.T) {
+	out := NormalizeStoryboardItems([]task.StoryboardItem{{
+		ShotNumber: 1, Description: "石昊挥拳", Duration: 15,
+		Beats: []task.ShotBeat{{Time: 0, Action: "起手"}, {Time: 7, Action: "命中"}},
+	}})
+	if len(out) != 1 {
+		t.Fatalf("expected 1 item")
+	}
+	if len(out[0].Beats) < 5 {
+		t.Fatalf("15s shot should densify to >=5 beats, got %d", len(out[0].Beats))
+	}
+}
+
 func TestMinShotsForScript(t *testing.T) {
 	short := MinShotsForScript("简短剧本")
-	if short < 4 {
-		t.Fatalf("expected min 4 for short script, got %d", short)
+	if short < 3 {
+		t.Fatalf("expected min 3 for short script, got %d", short)
 	}
 	long := strings.Repeat("这是一段较长的剧本内容，包含对白和动作描述。", 100)
-	if MinShotsForScript(long) < 8 {
-		t.Fatalf("expected more shots for long script, got %d", MinShotsForScript(long))
+	got := MinShotsForScript(long)
+	if got < 3 || got > 12 {
+		t.Fatalf("long-shot min should stay in 3–12 for dense strategy, got %d", got)
+	}
+	// Old /180 rule would have asked for many more; denser long-shot rule must be leaner.
+	if got >= len([]rune(long))/180 {
+		t.Fatalf("min shots too high for long-shot strategy: got %d", got)
 	}
 	scenes := "【第一场 柳树下】\n对白\n【第二场 战场】\n动作\n【第三场 回忆】\n结尾"
 	if MinShotsForScript(scenes) < 3 {

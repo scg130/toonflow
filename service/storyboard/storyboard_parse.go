@@ -56,26 +56,72 @@ func NormalizeStoryboardItems(items []task.StoryboardItem) []task.StoryboardItem
 	return out
 }
 
-// ensureShotBeats returns a cleaned intra-shot timed plan with at least two beats.
-// Every shot is 10–18s and uses keyframe image + keyframe video generation.
+// ensureShotBeats returns a cleaned intra-shot timed plan dense enough for keyframe video.
+// Target roughly one keyframe every ~3s (min 4, max 7) so a 10–18s shot carries
+// enough story beats for a single Fluent generation.
 func ensureShotBeats(beats []task.ShotBeat, dur float64, description string) []task.ShotBeat {
 	if dur <= 0 {
 		dur = duration.DefaultShotDurationSec
 	}
+	target := targetBeatCount(dur)
 	cleaned := normalizeShotBeats(beats, dur)
-	if len(cleaned) >= 2 {
+	if len(cleaned) >= target {
 		return cleaned
 	}
+	return synthesizeShotBeats(cleaned, dur, description, target)
+}
+
+func targetBeatCount(dur float64) int {
+	// ~1 keyframe / 3s keeps Agnes keyframe interpolation smooth without too many API calls.
+	n := int(dur/3.0 + 0.5)
+	if n < 4 {
+		n = 4
+	}
+	if n > 7 {
+		n = 7
+	}
+	return n
+}
+
+func synthesizeShotBeats(seed []task.ShotBeat, dur float64, description string, target int) []task.ShotBeat {
 	desc := strings.TrimSpace(description)
 	if desc == "" {
 		desc = "场景动作推进"
 	}
-	return []task.ShotBeat{
-		{Time: 0, Action: desc + "，开端"},
-		{Time: dur * 0.3, Action: desc + "，发展"},
-		{Time: dur * 0.65, Action: desc + "，高潮"},
-		{Time: dur * 0.9, Action: desc + "，收束"},
+	phases := []string{"开端铺垫", "动作推进", "情绪转折", "高潮爆发", "余韵收束", "结果落定", "画面定格"}
+	out := make([]task.ShotBeat, 0, target)
+	for i := 0; i < target; i++ {
+		t := 0.0
+		if target > 1 {
+			t = dur * float64(i) / float64(target-1) * 0.92
+		}
+		action := desc + "，" + phases[i%len(phases)]
+		// Map existing seed beats onto the denser grid by nearest time.
+		if len(seed) > 0 {
+			best := seed[0]
+			bestDist := absFloat(seed[0].Time - t)
+			for _, s := range seed[1:] {
+				if d := absFloat(s.Time - t); d < bestDist {
+					bestDist = d
+					best = s
+				}
+			}
+			// Prefer an explicit seed action when this slot is near a seed beat.
+			span := dur / float64(target)
+			if bestDist <= span*0.75 && strings.TrimSpace(best.Action) != "" {
+				action = strings.TrimSpace(best.Action)
+			}
+		}
+		out = append(out, task.ShotBeat{Time: t, Action: action})
 	}
+	return normalizeShotBeats(out, dur)
+}
+
+func absFloat(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 func normalizeShotBeats(beats []task.ShotBeat, dur float64) []task.ShotBeat {
@@ -465,19 +511,21 @@ func LooksLikeStoryboardTable(text string) bool {
 	return strings.Contains(text, "|") && (reVCInText.MatchString(text) || strings.Contains(text, "镜头号"))
 }
 
-// MinShotsForScript estimates how many shots a script should yield.
+// MinShotsForScript estimates how many LONG shots a script should yield under the
+// keyframe strategy (10–18s/shot, multi beats). Prefer fewer, denser shots.
 func MinShotsForScript(script string) int {
 	script = strings.TrimSpace(script)
 	if script == "" {
 		return 3
 	}
 	runeCount := len([]rune(script))
-	byLength := runeCount / 180
-	if byLength < 4 {
-		byLength = 4
+	// Roughly one long shot per ~400–500 Chinese chars (was /180 under short-shot rules).
+	byLength := runeCount / 450
+	if byLength < 3 {
+		byLength = 3
 	}
-	if byLength > 30 {
-		byLength = 30
+	if byLength > 12 {
+		byLength = 12
 	}
 
 	sceneCount := 0
@@ -494,11 +542,14 @@ func MinShotsForScript(script string) int {
 			sceneCount++
 		}
 	}
-	if sceneCount >= byLength {
-		return sceneCount
-	}
-	if sceneCount >= 3 {
-		return sceneCount
+	// One long shot per scene is usually enough; allow a little room for dialogue scenes.
+	if sceneCount > 0 {
+		if sceneCount+1 > byLength {
+			return sceneCount + 1
+		}
+		if sceneCount > byLength {
+			return sceneCount
+		}
 	}
 	return byLength
 }
@@ -521,6 +572,7 @@ func IsAdequateStoryboard(items []task.StoryboardItem, minShots int) bool {
 }
 
 // StoryboardScore ranks parse quality; higher is better.
+// Prefer fewer dense long-shots (multi-beat coverage) over many thin short shots.
 func StoryboardScore(items []task.StoryboardItem) int {
 	if len(items) == 0 {
 		return 0
@@ -532,7 +584,34 @@ func StoryboardScore(items []task.StoryboardItem) int {
 		}
 		return 2
 	}
-	return len(items) * 10
+	score := 0
+	totalBeats := 0
+	for _, it := range items {
+		score += 15
+		if it.Duration >= duration.MinShotDurationSec {
+			score += int(it.Duration)
+		}
+		n := len(it.Beats)
+		totalBeats += n
+		if n >= 5 {
+			score += n * 8
+		} else if n >= 4 {
+			score += n * 5
+		} else if n >= 2 {
+			score += n * 2
+		} else if n == 0 && it.Duration >= duration.MinShotDurationSec {
+			// Long slot without a timed plan is under-filled.
+			score -= 12
+		}
+	}
+	if len(items) > 0 && totalBeats > 0 {
+		score += (totalBeats * 4) / len(items)
+	}
+	// Strong penalty for over-fragmentation under the long-shot strategy.
+	if len(items) > 8 {
+		score -= (len(items) - 8) * 25
+	}
+	return score
 }
 
 // PickBestStoryboard chooses the highest-quality candidate.
