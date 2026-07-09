@@ -2240,11 +2240,59 @@
     return (Math.round(n * 10) / 10) + 's';
   }
 
-  function getRoleAssetNames() {
-    return assets
+  function hasCJK(text) {
+    return /[\u4e00-\u9fff]/.test(String(text || ''));
+  }
+
+  function roleNameKey(name) {
+    const base = String(name || '').split('·')[0].trim();
+    return base.toLowerCase().replace(/[\s_·-]+/g, '');
+  }
+
+  function collectDialogueSpeakers() {
+    const set = new Set();
+    storyboards.forEach(sb => {
+      (sb.dialogue_lines || []).forEach(ln => {
+        const sp = (ln.speaker || '').trim();
+        if (sp) set.add(sp);
+      });
+    });
+    return set;
+  }
+
+  function buildRoleNamePreferenceMap() {
+    const speakers = collectDialogueSpeakers();
+    const byKey = new Map();
+    const scoreName = (n) => (hasCJK(n) ? 2 : 0) + (speakers.has(n) ? 1 : 0);
+    const add = (name) => {
+      const n = String(name || '').trim();
+      if (!n || n.includes('·')) return;
+      const key = roleNameKey(n);
+      const prev = byKey.get(key);
+      if (!prev || scoreName(n) > scoreName(prev)) byKey.set(key, n);
+    };
+    speakers.forEach(add);
+    assets
       .filter(a => (a.type || a.Type) === 'role')
-      .map(a => String(a.name || a.Name || '').trim())
-      .filter(Boolean);
+      .filter(a => !(a.parent_id || a.ParentID))
+      .forEach(a => add(a.name || a.Name));
+    return byKey;
+  }
+
+  function displayRoleAssetName(name) {
+    const n = String(name || '').trim();
+    if (!n) return '';
+    if (n.includes('·')) {
+      const parts = n.split('·');
+      const base = displayRoleAssetName(parts[0]);
+      return parts.length > 1 ? base + '·' + parts.slice(1).join('·') : base;
+    }
+    return buildRoleNamePreferenceMap().get(roleNameKey(n)) || n;
+  }
+
+  function getRoleAssetNames() {
+    return Array.from(buildRoleNamePreferenceMap().values())
+      .sort((a, b) => a.localeCompare(b, 'zh-CN'));
   }
 
   function parseDialogueLines(d) {
@@ -3330,6 +3378,7 @@
     }
     const icons = { role: '👤', scene: '🏞️', prop: '📦' };
     listEl.innerHTML = shown.map(a => {
+      const displayName = a.type === 'role' ? displayRoleAssetName(a.name) : a.name;
       const voiceHint = (a.type === 'role' && a.voice_id)
         ? (' · 🎙 ' + voiceLabel(a.voice_id))
         : (a.type === 'role' ? ' · 未分配音色' : '');
@@ -3337,7 +3386,7 @@
       <div class="asset-item" data-id="${a.id}" onclick="window._app.editAsset(${a.id})">
         <div class="asset-thumb">${a.file_url ? '<img src="' + escapeHtml(a.file_url) + '" alt="">' : (icons[a.type] || '📋')}</div>
         <div class="asset-info">
-          <div class="asset-name">${escapeHtml(a.name)}</div>
+          <div class="asset-name">${escapeHtml(displayName)}</div>
           <div class="asset-type-label">${a.type} ${escapeHtml(a.desc ? '— ' + a.desc.substring(0, 30) : '')}${a.file_url ? ' · 有参考图' : ''}${voiceHint}</div>
         </div>
         <div class="asset-actions">

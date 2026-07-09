@@ -94,6 +94,7 @@ func ExtractAssetsFromEpisode(ctx context.Context, db *sql.DB, v adapter.Vendor,
 		}
 		items = append(items, it)
 	}
+	AssignChineseRoleNames(items, script)
 
 	count := 0
 	for _, it := range items {
@@ -104,7 +105,7 @@ func ExtractAssetsFromEpisode(ctx context.Context, db *sql.DB, v adapter.Vendor,
 			it.Type = "role"
 		}
 		desc := buildMainAssetDesc(it)
-		parentID, inserted, err := upsertProjectAsset(db, projectID, userID, it.Name, desc, it.Type, 0, "")
+		parentID, inserted, err := upsertProjectAsset(db, projectID, userID, it.Name, desc, it.Type, 0, "", roleCharacterID(it))
 		if err != nil {
 			continue
 		}
@@ -121,7 +122,7 @@ func ExtractAssetsFromEpisode(ctx context.Context, db *sql.DB, v adapter.Vendor,
 		for _, tv := range views {
 			viewName := fmt.Sprintf("%s·%s", it.Name, tv.View)
 			viewDesc := buildTurnaroundDesc(it, tv.View, tv.Desc)
-			_, childInserted, err := upsertProjectAsset(db, projectID, userID, viewName, viewDesc, "role", int(parentID), tv.View)
+			_, childInserted, err := upsertProjectAsset(db, projectID, userID, viewName, viewDesc, "role", int(parentID), tv.View, roleCharacterID(it))
 			if err == nil && childInserted {
 				count++
 			}
@@ -145,10 +146,10 @@ func buildAssetExtractSystemPrompt(videoRatio, artStyle string) string {
 	return fmt.Sprintf(`你是短剧资产策划。从剧本提取角色/场景/道具，仅输出一个 JSON 对象 {"assets":[...]}（仅 JSON，无说明文字、无代码围栏）。
 
 assets 每项字段：
-- name (string) 资产名称
+- name (string) **必须与剧本原文中的中文称呼完全一致**（如「石昊」「柳神」），禁止使用拼音、英文或空格变体作为 name
 - type (string) role | scene | prop（无生命的物体如树桩、残躯、武器、面具等必须 type=prop，禁止标为 role）
 - desc (string) 中文视觉描述（仅角色本体：发型、瞳色、服装、体型、气质；**禁止**手持道具、武器、面具；**禁止**具体背景/场景——背景请单独建 scene 资产，道具请建 prop 资产）
-- character_id (string) 角色唯一 ID（仅 role，如 ShiHao）
+- character_id (string) 角色唯一英文标识（仅 role，如 shi_hao），用于生图一致性；**不得**与 name 相同，不得用 name 代替
 - feature_keywords (string[]) 不可变特征关键词（发型、瞳色、服装、体型等，仅 role）
 - turnaround_views (array, 仅主要 role) 多角度设定卡，每项含：
   - view: front | side | back | three_quarter
@@ -199,9 +200,68 @@ func buildTurnaroundDesc(it extractAssetItem, view, desc string) string {
 		strings.TrimSpace(it.Desc), view, cid)
 }
 
-func upsertProjectAsset(db *sql.DB, projectID, userID, name, desc, assetType string, parentID int, derive string) (int64, bool, error) {
+func roleCharacterID(it extractAssetItem) string {
+	cid := strings.TrimSpace(it.CharacterID)
+	if cid != "" {
+		return cid
+	}
+	if it.Type == "role" && !HasCJK(it.Name) {
+		return CharacterIDFromName(it.Name)
+	}
+	return ""
+}
+
+func findRoleAssetByCharacterID(db *sql.DB, projectID, cid string) (int64, string, error) {
+	if cid == "" {
+		return 0, "", sql.ErrNoRows
+	}
+	needle := "character_id: " + cid
+	var id int64
+	var name string
+	err := db.QueryRow(`
+		SELECT id, name FROM o_assets
+		WHERE project_id = ? AND type = 'role' AND COALESCE(parent_id, 0) = 0
+		  AND (desc LIKE ? OR name = ? OR REPLACE(LOWER(name), ' ', '_') = LOWER(?))
+		ORDER BY id LIMIT 1`,
+		projectID, "%"+needle+"%", cid, cid).Scan(&id, &name)
+	return id, name, err
+}
+
+func renameRoleAssetFamily(db *sql.DB, assetID int64, oldName, newName string) {
+	if oldName == "" || newName == "" || oldName == newName {
+		return
+	}
+	_, _ = db.Exec(`UPDATE o_assets SET name = ? WHERE id = ?`, newName, assetID)
+	prefix := oldName + "·"
+	rows, err := db.Query(`SELECT id, name FROM o_assets WHERE parent_id = ?`, assetID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			continue
+		}
+		if strings.HasPrefix(name, prefix) {
+			suffix := strings.TrimPrefix(name, prefix)
+			_, _ = db.Exec(`UPDATE o_assets SET name = ? WHERE id = ?`, newName+"·"+suffix, id)
+		}
+	}
+}
+
+func upsertProjectAsset(db *sql.DB, projectID, userID, name, desc, assetType string, parentID int, derive, characterID string) (int64, bool, error) {
 	var id int64
 	err := db.QueryRow(`SELECT id FROM o_assets WHERE project_id = ? AND name = ?`, projectID, name).Scan(&id)
+	if err == sql.ErrNoRows && parentID == 0 && assetType == "role" && characterID != "" {
+		if existingID, oldName, findErr := findRoleAssetByCharacterID(db, projectID, characterID); findErr == nil {
+			renameRoleAssetFamily(db, existingID, oldName, name)
+			_, err = db.Exec(`UPDATE o_assets SET desc = ?, type = ?, parent_id = ?, derive = ? WHERE id = ?`,
+				desc, assetType, parentID, derive, existingID)
+			return existingID, false, err
+		}
+	}
 	if err == sql.ErrNoRows {
 		res, insErr := db.Exec(`
 			INSERT INTO o_assets (project_id, user_id, name, desc, type, parent_id, derive)

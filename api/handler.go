@@ -627,10 +627,10 @@ func (r *Router) assetsListHandler(c *gin.Context) {
 	var query string
 	var args []interface{}
 	if projectID != "" {
-		query = "SELECT id, name, desc, type, file_url, COALESCE(voice_id, '') FROM o_assets WHERE project_id = ? ORDER BY id"
+		query = "SELECT id, name, desc, type, file_url, COALESCE(voice_id, ''), COALESCE(parent_id, 0) FROM o_assets WHERE project_id = ? ORDER BY id"
 		args = []interface{}{projectID}
 	} else {
-		query = "SELECT id, name, desc, type, file_url, COALESCE(voice_id, '') FROM o_assets WHERE user_id = ? ORDER BY id"
+		query = "SELECT id, name, desc, type, file_url, COALESCE(voice_id, ''), COALESCE(parent_id, 0) FROM o_assets WHERE user_id = ? ORDER BY id"
 		args = []interface{}{userID}
 	}
 
@@ -643,19 +643,20 @@ func (r *Router) assetsListHandler(c *gin.Context) {
 
 	var assets []map[string]interface{}
 	for rows.Next() {
-		var id int
+		var id, parentID int
 		var name, fileType string
 		var desc, fileURL, voiceID sql.NullString
-		if err := rows.Scan(&id, &name, &desc, &fileType, &fileURL, &voiceID); err != nil {
+		if err := rows.Scan(&id, &name, &desc, &fileType, &fileURL, &voiceID, &parentID); err != nil {
 			continue
 		}
 		assets = append(assets, gin.H{
-			"id":       id,
-			"name":     name,
-			"desc":     desc.String,
-			"type":     fileType,
-			"file_url": fileURL.String,
-			"voice_id": voiceID.String,
+			"id":        id,
+			"name":      name,
+			"desc":      desc.String,
+			"type":      fileType,
+			"file_url":  fileURL.String,
+			"voice_id":  voiceID.String,
+			"parent_id": parentID,
 		})
 	}
 	if len(assets) == 0 {
@@ -791,7 +792,7 @@ func (r *Router) projectAssetsListHandler(c *gin.Context) {
 
 func (r *Router) queryAssetsForProject(projectID string) []map[string]interface{} {
 	rows, err := r.db.Query(
-		"SELECT id, name, desc, type, file_url, COALESCE(voice_id, '') FROM o_assets WHERE project_id = ? ORDER BY id",
+		"SELECT id, name, desc, type, file_url, COALESCE(voice_id, ''), COALESCE(parent_id, 0) FROM o_assets WHERE project_id = ? ORDER BY id",
 		projectID,
 	)
 	if err != nil {
@@ -801,19 +802,20 @@ func (r *Router) queryAssetsForProject(projectID string) []map[string]interface{
 
 	var assets []map[string]interface{}
 	for rows.Next() {
-		var id int
+		var id, parentID int
 		var name, fileType string
 		var desc, fileURL, voiceID sql.NullString
-		if err := rows.Scan(&id, &name, &desc, &fileType, &fileURL, &voiceID); err != nil {
+		if err := rows.Scan(&id, &name, &desc, &fileType, &fileURL, &voiceID, &parentID); err != nil {
 			continue
 		}
 		assets = append(assets, gin.H{
-			"id":       id,
-			"name":     name,
-			"desc":     desc.String,
-			"type":     fileType,
-			"file_url": fileURL.String,
-			"voice_id": voiceID.String,
+			"id":        id,
+			"name":      name,
+			"desc":      desc.String,
+			"type":      fileType,
+			"file_url":  fileURL.String,
+			"voice_id":  voiceID.String,
+			"parent_id": parentID,
 		})
 	}
 	if assets == nil {
