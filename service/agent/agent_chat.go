@@ -232,7 +232,7 @@ func (a *AgentChat) buildSystemPrompt(stage, projectCtx string) string {
 }
 
 func (a *AgentChat) buildWorkGenerationSystemPrompt(projectID, episodeID string) string {
-	return fmt.Sprintf(`你是专业的短剧策划编剧。根据项目资料生成高质量 Markdown 正文。
+	return fmt.Sprintf(`你是专业的抖音 AI 3D 短剧策划编剧。根据项目资料生成高质量 Markdown 正文。
 
 项目背景:
 %s
@@ -240,7 +240,9 @@ func (a *AgentChat) buildWorkGenerationSystemPrompt(projectID, episodeID string)
 要求：
 - 只输出正文（骨架/策略/剧本内容），使用 Markdown 格式
 - 禁止输出 ACTION、SHOT 等控制指令
-- 禁止输出「请在右侧面板查看」等元提示`, a.buildProjectContext(projectID, episodeID, "planning"))
+- 禁止输出「请在右侧面板查看」等元提示
+- 策划须适配 AI 生图局限：短镜头（1–3s）、台词单句≤10字、抽象情绪改写成可见画面元素
+- 节奏遵守：3秒抓人、15秒小爆、结尾强悬念`, a.buildProjectContext(projectID, episodeID, "planning"))
 }
 
 func (a *AgentChat) buildProjectContext(projectID, episodeID, stage string) string {
@@ -380,14 +382,6 @@ func (a *AgentChat) ExecuteAction(ctx context.Context, userID, projectID, episod
 	}
 }
 
-func skeletonPrompt() string {
-	return "请根据项目原文和当前集事件，生成「故事骨架」：包含核心冲突、人物弧线、三幕结构要点。使用 Markdown 格式。"
-}
-
-func strategyPrompt() string {
-	return "请根据故事骨架，生成「改编策略」：说明如何从小说改编为短剧、节奏压缩方案、视觉风格建议。使用 Markdown 格式。"
-}
-
 func (a *AgentChat) generateWork(ctx context.Context, projectID, episodeID, workType, instruction string) (string, error) {
 	if episodeID == "" {
 		return "", fmt.Errorf("请先选择一集")
@@ -425,27 +419,11 @@ func (a *AgentChat) generateScript(ctx context.Context, projectID, episodeID str
 	strategy := a.loadWork(projectID, episodeID, "strategy")
 	contextText := a.episodeContext(projectID, episodeID)
 
-	prompt := fmt.Sprintf(`为「%s」生成完整短剧剧本。
-目标时长: %.0f 分钟，目标字数约 %d 字，画面比例 %s，画风 %s。
-
-%s
-
-故事骨架:
-%s
-
-改编策略:
-%s
-
-## 对白写作要求
-1. 每句台词按单镜 3–5 秒口播估算字数（约 10–20 字/镜），过长句子拆成多句，便于后续分镜一镜一句；
-2. 同一场对话内上下句必须衔接：有问有答、有呼有应，禁止突兀换话题；跨场次切换时须有过渡说明；
-3. 对白须推动情节或揭示情绪，与前后场次动作、场景描述一致；
-4. **剧本对白 ≠ 旁白**：角色台词写在对白块中；第三人称故事解说/旁白不要写进剧本对白，旁白在视频剪辑导出成片后单独生成。
-
-输出格式要求：Markdown，含场次、场景描述、对白、镜头提示。`, title, params.TargetDurationMin, params.TargetWords, params.VideoRatio, params.ArtStyle, contextText, skeleton, strategy)
+	prompt := AIShortDramaScriptUserPrompt(title, params, contextText, skeleton, strategy)
 
 	resp, err := a.Vendor.TextRequest(ctx, adapter.DefaultTextModel, adapter.TextParams{
 		Messages: []adapter.TextMessage{
+			{Role: "system", Content: AIShortDramaScriptSystemPrompt()},
 			{Role: "user", Content: prompt},
 		},
 		MaxTokens: 12000,
