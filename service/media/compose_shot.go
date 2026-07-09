@@ -12,48 +12,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"toonflow/adapter"
 )
-
-var (
-	reDialogueSpeaker   = regexp.MustCompile(`^(.+?)[:：]`)
-	ignoreTTSSpeakers = regexp.MustCompile(`^(环境音|环境声|音效|效果音|sfx|sound ?effect|bgm|背景音|背景音乐|ambient)$`)
-	ignoreTTSText     = regexp.MustCompile(`^(无|无对白|无台词|无旁白|无需配音|none|null|n/a|na|环境音|音效|bgm|sfx|ambient)$`)
-)
-
-// ParsedDialogue holds speaker and speakable text from a storyboard line.
-type ParsedDialogue struct {
-	Speaker   string
-	PureText  string
-	Ignorable bool
-	Raw       string
-}
-
-// ParseDialogueForTTS extracts speaker and text from dialogue field or description.
-func ParseDialogueForTTS(dialogue string) ParsedDialogue {
-	raw := strings.TrimSpace(dialogue)
-	if raw == "" {
-		return ParsedDialogue{Ignorable: true}
-	}
-	speaker := ""
-	if m := reDialogueSpeaker.FindStringSubmatch(raw); len(m) >= 2 {
-		speaker = voice.NormalizeSpeakerName(m[1])
-	}
-	pure := raw
-	if parts := strings.SplitN(raw, "：", 2); len(parts) == 2 {
-		pure = strings.TrimSpace(parts[1])
-	} else if parts := strings.SplitN(raw, ":", 2); len(parts) == 2 {
-		pure = strings.TrimSpace(parts[1])
-	}
-	pure = strings.TrimSpace(strings.NewReplacer("（", "", "）", "", "(", "", ")", "").Replace(pure))
-	ignorable := (speaker != "" && ignoreTTSSpeakers.MatchString(speaker)) ||
-		pure == "" || ignoreTTSText.MatchString(pure)
-	return ParsedDialogue{Speaker: speaker, PureText: pure, Ignorable: ignorable, Raw: raw}
-}
 
 // ComposeShotResult describes one dialogue compose run.
 type ComposeShotResult struct {
@@ -80,10 +43,10 @@ func ComposeShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputDi
 	if err != nil {
 		return nil, err
 	}
-	dialogue := strings.TrimSpace(shot.Dialogue)
-	parsed := ParseDialogueForTTS(dialogue)
-	if parsed.Ignorable {
-		return nil, fmt.Errorf("%s", ExplainComposeSkipReason(shotNumber, dialogue, parsed))
+	lines := storyboard.DialogueLinesForTTS(shot.Dialogue)
+	if len(lines) == 0 {
+		parsed := storyboard.DialogueForTTS(shot.Dialogue)
+		return nil, fmt.Errorf("%s", storyboard.ExplainComposeSkipReason(shotNumber, shot.Dialogue, parsed))
 	}
 
 	videoPath, ok := fsutil.PublicURLToLocal(outputDir, clip.FileURL)
@@ -107,34 +70,15 @@ func ComposeShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputDi
 	outName := fmt.Sprintf("shot_%d_v%d_%d.mp4", shotNumber, clip.Version, time.Now().UnixNano())
 	outPath := filepath.Join(composedDir, outName)
 
-	voiceID := voice.LookupCharacterVoice(db, projectID, parsed.Speaker)
-	audioBytes, err := adapter.SynthesizeSpeech(ctx, v, parsed.PureText, voiceID)
-	if err != nil {
-		return nil, fmt.Errorf("TTS 合成失败: %w", err)
-	}
 	workDir, err := os.MkdirTemp(composedDir, "compose_")
 	if err != nil {
 		return nil, err
 	}
 	defer os.RemoveAll(workDir)
 
-	audioPath := filepath.Join(workDir, "dialogue.mp3")
-	if err := os.WriteFile(audioPath, audioBytes, 0644); err != nil {
+	audioPath, subtitlePath, voiceID, err := synthesizeDialogueTracks(ctx, db, v, workDir, projectID, lines, videoDur)
+	if err != nil {
 		return nil, err
-	}
-
-	var subtitlePath string
-	if parsed.PureText != "" {
-		subtitlePath = filepath.Join(workDir, "dialogue.srt")
-		endSec := int(videoDur - 0.5)
-		if endSec < 1 {
-			endSec = 1
-		}
-		srt := fmt.Sprintf("1\n00:00:00,500 --> 00:00:%02d,000\n%s\n",
-			endSec, parsed.PureText)
-		if err := os.WriteFile(subtitlePath, []byte(srt), 0644); err != nil {
-			return nil, err
-		}
 	}
 
 	if err := ffmpegComposeShot(videoPath, audioPath, subtitlePath, outPath); err != nil {
@@ -146,17 +90,20 @@ func ComposeShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputDi
 	if err != nil {
 		return nil, err
 	}
-	speaker := parsed.Speaker
-	if speaker == "" {
-		speaker = "旁白"
-	}
-	msg := fmt.Sprintf("第 %d 镜对白已合成（%s：%s）", shotNumber, speaker, parsed.PureText)
+	msg := formatComposeMessage(shotNumber, lines)
+	displayText := strings.Join(func() []string {
+		var t []string
+		for _, ln := range lines {
+			t = append(t, ln.PureText)
+		}
+		return t
+	}(), " / ")
 	return &ComposeShotResult{
 		ComposedURL: publicURL,
 		Mode:        "tts",
 		ShotNumber:  shotNumber,
-		Speaker:     speaker,
-		Text:        parsed.PureText,
+		Speaker:     lines[0].Speaker,
+		Text:        displayText,
 		VoiceID:     voiceID,
 		Message:     msg,
 	}, nil
@@ -171,8 +118,7 @@ func BatchComposeShots(ctx context.Context, db *sql.DB, v adapter.Vendor, output
 	var composed int
 	var urls []string
 	for _, it := range items {
-		parsed := ParseDialogueForTTS(strings.TrimSpace(it.Dialogue))
-		if parsed.Ignorable {
+		if !storyboard.HasSpeakableDialogue(it.Dialogue) {
 			continue
 		}
 		url, err := ComposeShotClip(ctx, db, v, outputDir, projectID, episodeID, it.ShotNumber)
@@ -204,23 +150,6 @@ func SelectedClipForShot(db *sql.DB, projectID, episodeID string, shotNumber int
 		}
 	}
 	return nil, fmt.Errorf("第 %d 镜没有可用视频片段", shotNumber)
-}
-
-// ExplainComposeSkipReason returns a user-facing hint when dialogue cannot be composed.
-func ExplainComposeSkipReason(shotNumber int, raw string, parsed ParsedDialogue) string {
-	if strings.TrimSpace(raw) == "" {
-		return fmt.Sprintf("第 %d 镜未填写对白。请在分镜「对白」列（dialogue 字段）填写「角色名：台词」，例如「石昊：这一战，我不会退。」", shotNumber)
-	}
-	if parsed.Speaker != "" && ignoreTTSSpeakers.MatchString(parsed.Speaker) {
-		return fmt.Sprintf("第 %d 镜对白为「%s」，属于音效/环境音，无需 TTS 配音", shotNumber, parsed.Raw)
-	}
-	if ignoreTTSText.MatchString(parsed.PureText) {
-		return fmt.Sprintf("第 %d 镜对白「%s」无法配音，请填写具体台词", shotNumber, parsed.Raw)
-	}
-	if parsed.PureText == "" {
-		return fmt.Sprintf("第 %d 镜对白格式有误，请使用「角色名：台词」，当前：%s", shotNumber, parsed.Raw)
-	}
-	return fmt.Sprintf("第 %d 镜对白无法合成：%s", shotNumber, parsed.Raw)
 }
 
 func ffmpegSupportsSubtitles() bool {
@@ -317,6 +246,119 @@ func buildAtempoChain(ratio float64) string {
 		parts = append(parts, fmt.Sprintf("atempo=%.6f", f))
 	}
 	return strings.Join(parts, ",")
+}
+
+func synthesizeDialogueTracks(ctx context.Context, db *sql.DB, v adapter.Vendor, workDir, projectID string, lines []storyboard.ParsedDialogue, videoDur float64) (audioPath, subtitlePath, primaryVoice string, err error) {
+	partPaths := make([]string, 0, len(lines))
+	for i, ln := range lines {
+		voiceID := voice.LookupCharacterVoice(db, projectID, ln.Speaker)
+		if i == 0 {
+			primaryVoice = voiceID
+		}
+		audioBytes, synErr := adapter.SynthesizeSpeech(ctx, v, ln.PureText, voiceID)
+		if synErr != nil {
+			return "", "", "", fmt.Errorf("TTS 合成失败（%s）: %w", ln.Speaker, synErr)
+		}
+		part := filepath.Join(workDir, fmt.Sprintf("line_%d.mp3", i))
+		if writeErr := os.WriteFile(part, audioBytes, 0644); writeErr != nil {
+			return "", "", "", writeErr
+		}
+		partPaths = append(partPaths, part)
+	}
+	audioPath = filepath.Join(workDir, "dialogue.mp3")
+	if err := concatDialogueAudio(partPaths, audioPath); err != nil {
+		return "", "", "", err
+	}
+	subtitlePath = filepath.Join(workDir, "dialogue.srt")
+	srt := buildDialogueSRT(lines, videoDur)
+	if err := os.WriteFile(subtitlePath, []byte(srt), 0644); err != nil {
+		return "", "", "", err
+	}
+	return audioPath, subtitlePath, primaryVoice, nil
+}
+
+func concatDialogueAudio(parts []string, output string) error {
+	if len(parts) == 1 {
+		in, err := os.ReadFile(parts[0])
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(output, in, 0644)
+	}
+	listPath := output + ".txt"
+	f, err := os.Create(listPath)
+	if err != nil {
+		return err
+	}
+	for _, p := range parts {
+		abs, _ := filepath.Abs(p)
+		fmt.Fprintf(f, "file '%s'\n", strings.ReplaceAll(abs, "'", `'\''`))
+	}
+	f.Close()
+	defer os.Remove(listPath)
+	out, err := exec.Command("ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c:a", "libmp3lame", "-q:a", "4", output).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ffmpeg concat audio: %s", string(out))
+	}
+	return nil
+}
+
+func buildDialogueSRT(lines []storyboard.ParsedDialogue, videoDur float64) string {
+	if len(lines) == 0 {
+		return ""
+	}
+	totalWeight := 0
+	for _, ln := range lines {
+		totalWeight += storyboard.DialogueLineWeight(ln.PureText)
+	}
+	if totalWeight < 1 {
+		totalWeight = 1
+	}
+	start := 0.5
+	usable := videoDur - 1.0
+	if usable < 1 {
+		usable = videoDur * 0.9
+	}
+	if usable < 0.5 {
+		usable = 0.5
+	}
+	var b strings.Builder
+	for i, ln := range lines {
+		share := float64(storyboard.DialogueLineWeight(ln.PureText)) / float64(totalWeight)
+		dur := usable * share
+		if dur < 0.8 {
+			dur = 0.8
+		}
+		end := start + dur
+		if end > videoDur-0.2 {
+			end = videoDur - 0.2
+		}
+		fmt.Fprintf(&b, "%d\n%s --> %s\n%s\n\n", i+1, formatSRTTime(start), formatSRTTime(end), ln.PureText)
+		start = end + 0.15
+	}
+	return b.String()
+}
+
+func formatSRTTime(sec float64) string {
+	if sec < 0 {
+		sec = 0
+	}
+	h := int(sec) / 3600
+	m := (int(sec) % 3600) / 60
+	s := int(sec) % 60
+	ms := int((sec - float64(int(sec))) * 1000)
+	return fmt.Sprintf("%02d:%02d:%02d,%03d", h, m, s, ms)
+}
+
+func formatComposeMessage(shotNumber int, lines []storyboard.ParsedDialogue) string {
+	if len(lines) == 1 {
+		return fmt.Sprintf("第 %d 镜对白已合成（%s：%s）", shotNumber, lines[0].Speaker, lines[0].PureText)
+	}
+	var parts []string
+	for _, ln := range lines {
+		parts = append(parts, fmt.Sprintf("%s：%s", ln.Speaker, ln.PureText))
+	}
+	return fmt.Sprintf("第 %d 镜对白已合成（%d 句：%s）", shotNumber, len(lines), strings.Join(parts, "；"))
 }
 
 // EffectiveClipFileURL returns composed URL when available.

@@ -19,13 +19,13 @@ func buildShotVideoPrompt(shot *storyboard.ShotMeta, artStyle, stylePrompt, styl
 	}
 	if seq := formatBeatsForVideoPrompt(shot.Beats, shot.Duration); seq != "" {
 		parts = append(parts, seq)
-		parts = append(parts, "smooth keyframe interpolation through all timed beats, continuous seamless motion, no hard cuts within shot")
+		parts = append(parts, "smooth keyframe interpolation through all timed beats, continuous seamless motion, no hard cuts within shot, uninterrupted fight choreography, fluid character interaction")
 	}
 	if ac := strings.TrimSpace(shot.ActionContinue); ac != "" {
 		parts = append(parts, "action continuation: "+ac)
 	}
-	dialogue := resolveShotDialogue(shot)
-	parts = appendDialogueVideoInstructions(parts, dialogue, humanSubject)
+	lines := storyboard.DialogueLinesForTTS(shot.Dialogue)
+	parts = appendDialogueVideoInstructions(parts, lines, humanSubject)
 	if cam := camera.MapCameraToVideoMotion(shot.Camera); cam != "" {
 		parts = append(parts, cam)
 	} else if humanSubject {
@@ -45,8 +45,11 @@ func buildShotVideoPrompt(shot *storyboard.ShotMeta, artStyle, stylePrompt, styl
 		parts = append(parts, "transition hint: "+tr)
 	}
 
-	// Temporal coherence encoding (toonflow.doc §4.2 / §4.3)
+	// Temporal coherence + silent video (dialogue audio comes from TTS compose, not I2V).
 	parts = append(parts,
+		"silent video no generated speech",
+		"no dialogue audio in video",
+		"Chinese story visuals only",
 		"temporal encoding enabled",
 		"keyframe interpolation smooth motion",
 		"feature anchoring from first frame",
@@ -74,8 +77,11 @@ func buildShotVideoPrompt(shot *storyboard.ShotMeta, artStyle, stylePrompt, styl
 		"distorted face", "deformed body", "bad anatomy", "extra limbs",
 		"watermark", "text overlay", "logo",
 		"random color shift", "style drift", "temporal discontinuity",
+		"English speech", "English dialogue", "foreign language audio",
+		"voiceover", "narration", "spoken words", "talking audio", "subtitle",
+		"action freeze mid-motion", "discontinuous movement",
 	}, ", ")
-	if humanSubject && !dialogue.Ignorable && dialogue.PureText != "" {
+	if humanSubject && hasSpeakableLines(lines) {
 		negative += ", closed mouth while speaking, static lips during dialogue, no lip sync, mute expression while talking, wrong speaker lip movement"
 	}
 
@@ -107,28 +113,43 @@ func formatBeatsForVideoPrompt(beats []task.ShotBeat, dur float64) string {
 	return header + ": " + strings.Join(nodes, "; ") + "; continuous seamless motion between beats, no cuts"
 }
 
-func resolveShotDialogue(shot *storyboard.ShotMeta) ParsedDialogue {
+func resolveShotDialogue(shot *storyboard.ShotMeta) []storyboard.ParsedDialogue {
 	if shot == nil {
-		return ParsedDialogue{Ignorable: true}
+		return nil
 	}
-	return ParseDialogueForTTS(strings.TrimSpace(shot.Dialogue))
+	return storyboard.DialogueLinesForTTS(shot.Dialogue)
 }
 
-func appendDialogueVideoInstructions(parts []string, dialogue ParsedDialogue, humanSubject bool) []string {
-	if !humanSubject || dialogue.Ignorable || strings.TrimSpace(dialogue.PureText) == "" {
+func hasSpeakableLines(lines []storyboard.ParsedDialogue) bool {
+	for _, ln := range lines {
+		if !ln.Ignorable && strings.TrimSpace(ln.PureText) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func appendDialogueVideoInstructions(parts []string, lines []storyboard.ParsedDialogue, humanSubject bool) []string {
+	if !humanSubject || !hasSpeakableLines(lines) {
 		return parts
 	}
-	speaker := strings.TrimSpace(dialogue.Speaker)
-	if speaker == "" {
-		speaker = "character"
+	for _, dialogue := range lines {
+		if dialogue.Ignorable || strings.TrimSpace(dialogue.PureText) == "" {
+			continue
+		}
+		speaker := strings.TrimSpace(dialogue.Speaker)
+		if speaker == "" {
+			speaker = "角色"
+		}
+		line := truncateDialogueForVideoPrompt(dialogue.PureText, 80)
+		parts = append(parts,
+			fmt.Sprintf("角色%s口型与表情表演，中文台词：%s", speaker, line),
+			fmt.Sprintf("%s说话时自然唇形与下颌运动，动作连贯不中断", speaker),
+		)
 	}
-	line := truncateDialogueForVideoPrompt(dialogue.PureText, 80)
 	parts = append(parts,
-		fmt.Sprintf("dialogue performance: %s speaking \"%s\"", speaker, line),
-		fmt.Sprintf("character %s performs matching body language and facial acting while speaking", speaker),
-		fmt.Sprintf("visible lip sync and mouth movement for %s aligned with the spoken line", speaker),
-		"natural jaw and lip motion synchronized with dialogue delivery",
-		"expressive speaking gestures, eye contact and emotional acting tied to the line",
+		"仅口型与肢体表演，视频中禁止生成任何语音或旁白",
+		"无声画面配合口型运动，不要英文对白音频",
 	)
 	return parts
 }

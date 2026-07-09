@@ -458,11 +458,10 @@ func buildShotDialogueReference(db *sql.DB, projectID, episodeID string) string 
 	}
 	var b strings.Builder
 	for _, it := range items {
-		dlg := strings.TrimSpace(it.Dialogue)
-		if dlg == "" {
+		if it.Dialogue == nil || it.Dialogue.IsEmpty() {
 			continue
 		}
-		fmt.Fprintf(&b, "- 第 %d 镜：%s\n", it.ShotNumber, dlg)
+		fmt.Fprintf(&b, "- 第 %d 镜：%s\n", it.ShotNumber, storyboard.FormatDialogueDisplay(it.Dialogue))
 	}
 	if b.Len() == 0 {
 		return "（本集无角色对白，旁白需完整讲述故事）"

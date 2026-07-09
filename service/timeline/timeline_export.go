@@ -20,13 +20,20 @@ const defaultExportFPS = 24.0
 const continuousCutDur = 0.04
 
 // timelineTransitionForShot maps an incoming shot's scene_link + storyboard
-// transition style to a timeline boundary transition. Continuous shots produce
-// no transition (seamless); scene changes get a visible effect.
+// transition style to a timeline boundary transition. Same-scene links use a
+// gentle dissolve; scene changes use a visible transition effect.
 func timelineTransitionForShot(sceneLink, transitionStyle string) string {
-	if sceneLink == task.SceneLinkContinuous {
-		return "none"
-	}
 	s := strings.ToLower(strings.TrimSpace(transitionStyle))
+	if sceneLink == task.SceneLinkContinuous {
+		switch {
+		case strings.Contains(s, "black"), strings.Contains(s, "dip"), strings.Contains(s, "闪黑"):
+			return "dip"
+		case strings.Contains(s, "wipe"), strings.Contains(s, "擦"):
+			return "wipe"
+		default:
+			return "fade"
+		}
+	}
 	switch {
 	case strings.Contains(s, "black"), strings.Contains(s, "dip"),
 		strings.Contains(s, "闪回"), strings.Contains(s, "淡出"), strings.Contains(s, "淡入淡出"):

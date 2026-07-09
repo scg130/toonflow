@@ -1,8 +1,11 @@
 package task
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -70,7 +73,7 @@ type StoryboardItem struct {
 	ActionContinue string  `json:"action_continue,omitempty"` // 承接上镜动作节点
 	Transition     string  `json:"transition,omitempty"`      // 与下镜衔接方式
 	SceneLink      string  `json:"scene_link,omitempty"`      // 与上一镜关系: continuous(同场景续接) | transition(转场/换场景)
-	Dialogue       string  `json:"dialogue,omitempty"`        // 对白（说话人：台词）
+	Dialogue       *ShotDialogue `json:"dialogue,omitempty"` // 结构化对白，支持多行 lines
 	AssetIDs       []int   `json:"asset_ids,omitempty"`
 	ImageURL       string  `json:"image_url,omitempty"`
 	ImageRemoteURL string  `json:"image_remote_url,omitempty"` // Agnes CDN, e.g. platform-outputs.agnes-ai.space (~24h)
@@ -79,6 +82,128 @@ type StoryboardItem struct {
 	// image-to-video generation renders the whole sequence continuously (seamless,
 	// no stitching). Empty for short single-beat shots.
 	Beats []ShotBeat `json:"beats,omitempty"`
+}
+
+// DialogueLine is one spoken line in a shot.
+type DialogueLine struct {
+	Speaker string `json:"speaker,omitempty"`
+	Text    string `json:"text,omitempty"`
+}
+
+// ShotDialogue holds one or more dialogue lines for TTS.
+// JSON: {"lines":[{"speaker":"石昊","text":"..."}, ...]} or legacy {"speaker","text"}.
+type ShotDialogue struct {
+	Lines   []DialogueLine `json:"lines,omitempty"`
+	Speaker string         `json:"speaker,omitempty"` // legacy single line
+	Text    string         `json:"text,omitempty"`
+}
+
+func (d ShotDialogue) LinesNormalized() []DialogueLine {
+	if len(d.Lines) > 0 {
+		out := make([]DialogueLine, 0, len(d.Lines))
+		for _, ln := range d.Lines {
+			sp := strings.TrimSpace(ln.Speaker)
+			tx := strings.TrimSpace(ln.Text)
+			if sp == "" && tx == "" {
+				continue
+			}
+			out = append(out, DialogueLine{Speaker: sp, Text: tx})
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	sp := strings.TrimSpace(d.Speaker)
+	tx := strings.TrimSpace(d.Text)
+	if sp != "" || tx != "" {
+		return []DialogueLine{{Speaker: sp, Text: tx}}
+	}
+	return nil
+}
+
+func (d ShotDialogue) IsEmpty() bool {
+	return len(d.LinesNormalized()) == 0
+}
+
+func (d *ShotDialogue) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || string(data) == "null" {
+		*d = ShotDialogue{}
+		return nil
+	}
+	if data[0] == '[' {
+		var lines []DialogueLine
+		if err := json.Unmarshal(data, &lines); err != nil {
+			return err
+		}
+		*d = ShotDialogue{Lines: lines}
+		return nil
+	}
+	if data[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return err
+		}
+		*d = parseDialogueString(s)
+		return nil
+	}
+	var aux struct {
+		Lines   []DialogueLine `json:"lines"`
+		Speaker string         `json:"speaker"`
+		Text    string         `json:"text"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*d = ShotDialogue{Lines: aux.Lines, Speaker: aux.Speaker, Text: aux.Text}
+	return nil
+}
+
+func (d ShotDialogue) MarshalJSON() ([]byte, error) {
+	lines := d.LinesNormalized()
+	if len(lines) == 0 {
+		return []byte("null"), nil
+	}
+	return json.Marshal(struct {
+		Lines []DialogueLine `json:"lines"`
+	}{Lines: lines})
+}
+
+func parseDialogueString(s string) ShotDialogue {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ShotDialogue{}
+	}
+	if strings.Contains(s, "\n") {
+		var lines []DialogueLine
+		for _, row := range strings.Split(s, "\n") {
+			row = strings.TrimSpace(row)
+			if row == "" {
+				continue
+			}
+			if parts := strings.SplitN(row, "|", 2); len(parts) == 2 {
+				sp := strings.TrimSpace(parts[0])
+				tx := strings.TrimSpace(parts[1])
+				if sp != "" && tx != "" {
+					lines = append(lines, DialogueLine{Speaker: sp, Text: tx})
+				}
+				continue
+			}
+		}
+		if len(lines) > 0 {
+			return ShotDialogue{Lines: lines}
+		}
+	}
+	if parts := strings.SplitN(s, "|", 2); len(parts) == 2 {
+		return ShotDialogue{Lines: []DialogueLine{{Speaker: strings.TrimSpace(parts[0]), Text: strings.TrimSpace(parts[1])}}}
+	}
+	if parts := strings.SplitN(s, "：", 2); len(parts) == 2 {
+		return ShotDialogue{Lines: []DialogueLine{{Speaker: strings.TrimSpace(parts[0]), Text: strings.TrimSpace(parts[1])}}}
+	}
+	if parts := strings.SplitN(s, ":", 2); len(parts) == 2 && strings.TrimSpace(parts[0]) != "" {
+		return ShotDialogue{Lines: []DialogueLine{{Speaker: strings.TrimSpace(parts[0]), Text: strings.TrimSpace(parts[1])}}}
+	}
+	return ShotDialogue{Lines: []DialogueLine{{Text: s}}}
 }
 
 // ShotBeat is one time node inside a shot: at Time seconds (from the shot start),

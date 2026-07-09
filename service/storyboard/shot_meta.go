@@ -11,7 +11,7 @@ import (
 type ShotMeta struct {
 	ShotNumber     int
 	Description    string
-	Dialogue       string
+	Dialogue       *task.ShotDialogue
 	Prompt         string
 	Camera         string
 	Duration       float64

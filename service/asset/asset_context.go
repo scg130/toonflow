@@ -56,7 +56,7 @@ func FormatAssetsForStoryboardPrompt(assets []ProjectAsset) string {
 		}
 		b.WriteByte('\n')
 	}
-	b.WriteString("每镜 asset_ids 须从上述 id 选取。仅 type=role 可写 character_id；道具/场景镜用英文物体或环境描述，禁止把道具/场景名写入 character_id。\n")
+	b.WriteString("每镜 asset_ids 须从上述 id 选取。shot.prompt 与每个 beat.image_prompt 必须嵌入涉及资产的 desc 原文要点，确保角色/道具/场景全片一致。仅 type=role 可写 character_id；道具/场景镜用英文物体或环境描述，禁止把道具/场景名写入 character_id。\n")
 	return b.String()
 }
 
@@ -84,6 +84,7 @@ func LinkStoryboardAssets(items []task.StoryboardItem, assets []ProjectAsset) []
 			}
 		}
 		items[i] = injectCharacterConsistencyPrompt(items[i], assets)
+		items[i] = EnrichStoryboardBeatPrompts(items[i], assets)
 		items[i] = SanitizeStoryboardItemPrompt(items[i], assets)
 	}
 	return items
@@ -329,6 +330,97 @@ func injectCharacterConsistencyPrompt(shot task.StoryboardItem, assets []Project
 		shot.Prompt = block + ", " + shot.Prompt
 	}
 	return shot
+}
+
+// EnrichStoryboardBeatPrompts injects matched asset descriptions into each beat image_prompt.
+func EnrichStoryboardBeatPrompts(shot task.StoryboardItem, assets []ProjectAsset) task.StoryboardItem {
+	if len(shot.Beats) == 0 || len(assets) == 0 {
+		return shot
+	}
+	shotBase := strings.ToLower(strings.Join([]string{shot.Scene, shot.Description, shot.Prompt}, " "))
+	for i := range shot.Beats {
+		beat := &shot.Beats[i]
+		beatText := strings.ToLower(strings.TrimSpace(beat.Action + " " + beat.ImagePrompt))
+		combined := shotBase + " " + beatText
+		var snippets []string
+		seen := map[int]bool{}
+		candidates := matchedAssetsForShot(shot, assets)
+		for _, a := range candidates {
+			if seen[a.ID] {
+				continue
+			}
+			name := strings.TrimSpace(a.Name)
+			if name == "" {
+				continue
+			}
+			if !strings.Contains(combined, strings.ToLower(name)) && !assetInShotIDs(shot, a.ID) {
+				continue
+			}
+			seen[a.ID] = true
+			if snip := assetPromptSnippet(a); snip != "" {
+				snippets = append(snippets, snip)
+			}
+		}
+		if len(snippets) == 0 {
+			continue
+		}
+		block := strings.Join(snippets, "; ")
+		ip := strings.TrimSpace(beat.ImagePrompt)
+		if ip == "" {
+			beat.ImagePrompt = "asset consistency: " + block
+			continue
+		}
+		if strings.Contains(strings.ToLower(ip), strings.ToLower(snippets[0])) {
+			continue
+		}
+		beat.ImagePrompt = ip + ", asset consistency: " + block
+	}
+	return shot
+}
+
+func matchedAssetsForShot(shot task.StoryboardItem, assets []ProjectAsset) []ProjectAsset {
+	if len(shot.AssetIDs) > 0 {
+		return MatchShotAssets(shot, assets)
+	}
+	return assets
+}
+
+func assetInShotIDs(shot task.StoryboardItem, id int) bool {
+	for _, x := range shot.AssetIDs {
+		if x == id {
+			return true
+		}
+	}
+	return false
+}
+
+func assetPromptSnippet(a ProjectAsset) string {
+	name := strings.TrimSpace(a.Name)
+	if name == "" {
+		return ""
+	}
+	switch a.Type {
+	case "role":
+		if IsInanimateAsset(a) {
+			break
+		}
+		part := fmt.Sprintf("角色「%s」character_id: %s", name, CharacterIDFromName(name))
+		if d := strings.TrimSpace(a.Desc); d != "" {
+			part += ": " + d
+		}
+		return part + ", style: consistent"
+	case "scene", "prop":
+		part := fmt.Sprintf("%s「%s」", assetTypeLabel(a.Type), name)
+		if d := strings.TrimSpace(a.Desc); d != "" {
+			part += ": " + d
+		}
+		return part
+	default:
+		if d := strings.TrimSpace(a.Desc); d != "" {
+			return name + ": " + d
+		}
+	}
+	return name
 }
 
 // StylePromptAnchors returns render-engine and color-consistency tags for prompts.

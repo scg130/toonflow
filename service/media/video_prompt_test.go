@@ -4,6 +4,8 @@ import (
 	"toonflow/service/storyboard"
 	"strings"
 	"testing"
+
+	"toonflow/task"
 )
 
 func TestTrimImagePromptForVideo(t *testing.T) {
@@ -44,7 +46,7 @@ func TestBuildShotVideoPrompt_motionFirst(t *testing.T) {
 func TestBuildShotVideoPrompt_withDialogue(t *testing.T) {
 	shot := &storyboard.ShotMeta{
 		Description: "石昊怒视前方",
-		Dialogue:    "石昊：你们欺人太甚！",
+		Dialogue:    &task.ShotDialogue{Lines: []task.DialogueLine{{Speaker: "石昊", Text: "你们欺人太甚！"}}},
 		Camera:      "近景",
 	}
 	pos, neg := buildShotVideoPrompt(shot, "3D动漫", "", "", true)
@@ -54,18 +56,24 @@ func TestBuildShotVideoPrompt_withDialogue(t *testing.T) {
 	if !strings.Contains(pos, "欺人太甚") {
 		t.Fatalf("dialogue line missing: %q", pos)
 	}
-	if !strings.Contains(pos, "lip sync") {
+	if !strings.Contains(pos, "口型") {
 		t.Fatalf("lip sync instruction missing: %q", pos)
+	}
+	if strings.Contains(pos, "dialogue performance") {
+		t.Fatalf("should not use English dialogue performance hint: %q", pos)
 	}
 	if !strings.Contains(neg, "no lip sync") {
 		t.Fatalf("negative lip sync guard missing: %q", neg)
+	}
+	if !strings.Contains(neg, "English speech") {
+		t.Fatalf("negative English speech guard missing: %q", neg)
 	}
 }
 
 func TestBuildShotVideoPrompt_withDialogue_nonHuman(t *testing.T) {
 	shot := &storyboard.ShotMeta{
 		Description: "焦黑树桩在雷光中颤动",
-		Dialogue:    "旁白：天地变色",
+		Dialogue:    &task.ShotDialogue{Lines: []task.DialogueLine{{Speaker: "旁白", Text: "天地变色"}}},
 	}
 	pos, _ := buildShotVideoPrompt(shot, "3D动漫", "", "", false)
 	if strings.Contains(pos, "lip sync") {

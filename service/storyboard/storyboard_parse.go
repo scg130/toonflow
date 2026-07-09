@@ -47,8 +47,9 @@ func NormalizeStoryboardItems(items []task.StoryboardItem) []task.StoryboardItem
 		if it.Camera == "" {
 			it.Camera = "固定镜头"
 		}
-		it.Dialogue = strings.TrimSpace(it.Dialogue)
+		it.Dialogue = normalizeDialogue(it.Dialogue)
 		it.SceneLink = resolveSceneLink(it.SceneLink, it.Scene, prevScene, len(out) == 0)
+		it.Transition = resolveShotTransition(it.SceneLink, it.Transition)
 		it.Beats = ensureShotBeats(it.Beats, it.Duration, it.Description)
 		prevScene = strings.TrimSpace(it.Scene)
 		out = append(out, it)
@@ -79,7 +80,7 @@ func CapShotBeats(beats []task.ShotBeat, dur float64, description string) []task
 }
 
 func targetBeatCount(dur float64) int {
-	// 10–11s → 2 keyframes (opening + payoff); 12s+ → 3 (opening + turn + payoff).
+	// 5–11s → 2 keyframes; 12s+ → 3 (Agnes hard cap).
 	if dur >= 12 {
 		return duration.MaxBeatsPerShot
 	}
@@ -220,6 +221,21 @@ func resolveSceneLink(raw, scene, prevScene string, isFirst bool) string {
 		return task.SceneLinkContinuous
 	}
 	return task.SceneLinkTransition
+}
+
+// resolveShotTransition fills default boundary effects for timeline export.
+func resolveShotTransition(sceneLink, transition string) string {
+	trans := strings.TrimSpace(transition)
+	if sceneLink == task.SceneLinkContinuous {
+		if trans == "" {
+			return "soft dissolve"
+		}
+		return trans
+	}
+	if trans == "" {
+		return "fade black"
+	}
+	return trans
 }
 
 // LoadStoryboardItems reads storyboard shots from DB for an episode.
@@ -405,7 +421,7 @@ func parseMarkdownShots(text string) []task.StoryboardItem {
 			case "时长", "duration":
 				fmtScanFloat(val, &current.Duration)
 			case "对白", "dialogue", "台词", "audio", "音效", "音效/台词":
-				current.Dialogue = val
+				current.Dialogue = ParseDialogueFlexible(val)
 			case "prompt", "绘画", "绘画prompt", "ai prompt":
 				current.Prompt = val
 			default:
@@ -711,13 +727,14 @@ func parseTableStoryboard(text string) []task.StoryboardItem {
 		if camIdx >= 0 && camIdx < len(cells) {
 			camera = cleanMarkdown(cells[camIdx])
 		}
-		dialogue := ""
-		if dlgIdx >= 0 && dlgIdx < len(cells) {
-			dialogue = cleanMarkdown(cells[dlgIdx])
-		}
 		duration := 3.0
 		if durIdx >= 0 && durIdx < len(cells) {
 			fmtScanFloat(cleanMarkdown(cells[durIdx]), &duration)
+		}
+
+		var dlg *task.ShotDialogue
+		if dlgIdx >= 0 && dlgIdx < len(cells) {
+			dlg = ParseDialogueFlexible(cleanMarkdown(cells[dlgIdx]))
 		}
 
 		items = append(items, task.StoryboardItem{
@@ -725,7 +742,7 @@ func parseTableStoryboard(text string) []task.StoryboardItem {
 			Scene:       currentScene,
 			Description: desc,
 			Camera:      camera,
-			Dialogue:    dialogue,
+			Dialogue:    dlg,
 			Duration:    duration,
 			Prompt:      desc,
 		})

@@ -652,7 +652,7 @@ func (v *AgnesAIVendor) VideoRequest(ctx interface{}, model string, params Video
 	if len(keyframes) >= 2 {
 		body.ExtraBody = &extraBody{Image: keyframes, Mode: mode}
 		if !strings.Contains(strings.ToLower(body.Prompt), "keyframe") {
-			body.Prompt = "Generate a smooth cinematic transition between the keyframes, maintaining visual consistency and natural camera movement. " + body.Prompt
+			body.Prompt = "关键帧之间平滑过渡，保持视觉一致与自然运镜，无声视频仅画面运动，不生成任何语音。 " + body.Prompt
 		}
 		logger.CtxTrace(c, "agnes video api keyframes=%d", len(keyframes))
 	} else if len(params.Keyframes) > 0 {
@@ -665,7 +665,7 @@ func (v *AgnesAIVendor) VideoRequest(ctx interface{}, model string, params Video
 		logger.CtxTrace(c, "agnes video api image_url=%s", imageURL)
 	}
 	if body.NegativePrompt == "" {
-		body.NegativePrompt = "static image, frozen frame, no motion, blurry, low quality, distorted, watermark, flicker, stutter, jitter, ghosting, morphing artifacts"
+		body.NegativePrompt = "static image, frozen frame, no motion, blurry, low quality, distorted, watermark, flicker, stutter, jitter, ghosting, morphing artifacts, English speech, English dialogue, foreign language audio, voiceover, narration, spoken words, talking audio, subtitle, text overlay"
 	}
 	logger.CtxTrace(c, "agnes video api request model=%s %dx%d frames=%d fps=%d steps=%d has_image=%v keyframes=%d",
 		model, width, height, numFrames, frameRate, body.NumInferenceSteps, imageURL != "", len(keyframes))

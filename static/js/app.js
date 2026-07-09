@@ -402,14 +402,42 @@
     toast(msg, type);
   }
 
+  function isStoryboardShotPayload(v) {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+    return v.shot_number != null || v.ShotNumber != null
+      || Array.isArray(v.beats) || Array.isArray(v.Beats)
+      || !!(v.image_url || v.ImageURL || v.image_remote_url || v.ImageRemoteURL
+        || v.description || v.Description);
+  }
+
+  function beatHasKeyframe(b) {
+    return !!(b && (b.image_url || b.image_remote_url));
+  }
+
+  function keyframeDisplayUrl(b, sb) {
+    if (!b) return '';
+    return b.image_url || b.image_remote_url || (sb && (sb.image_url || sb.image_remote_url)) || '';
+  }
+
   function applyShotStoryboardUpdate(shotData) {
-    if (!shotData) return;
+    if (!isStoryboardShotPayload(shotData)) return;
     const shot = normalizeStoryboards([shotData])[0];
     const idx = storyboards.findIndex(s => s.shot_number === shot.shot_number);
     if (idx >= 0) {
-      const wasSelected = storyboards[idx].selected;
-      storyboards[idx] = Object.assign({}, storyboards[idx], shot);
-      storyboards[idx].selected = wasSelected;
+      const prev = storyboards[idx];
+      const wasSelected = prev.selected;
+      const merged = Object.assign({}, prev, shot);
+      const incomingHasKeyframes = !!(shot.image_url || shot.image_remote_url)
+        || (shot.beats && shot.beats.some(beatHasKeyframe));
+      if (!incomingHasKeyframes) {
+        if (prev.beats && prev.beats.length) merged.beats = prev.beats;
+        if (!shot.image_url && !shot.image_remote_url) {
+          merged.image_url = prev.image_url;
+          merged.image_remote_url = prev.image_remote_url;
+        }
+      }
+      merged.selected = wasSelected;
+      storyboards[idx] = merged;
     } else {
       storyboards.push(shot);
     }
@@ -490,7 +518,7 @@
   function onWSMessage(msg) {
     if (msg.data && msg.data.task_update) {
       loadTasks();
-      if (msg.data.shot) {
+      if (isStoryboardShotPayload(msg.data.shot)) {
         applyShotStoryboardUpdate(msg.data.shot);
       }
       if (msg.step === 'gen_image' || (msg.data.state === 'drawing' && msg.data.shot)) {
@@ -519,6 +547,9 @@
         const epId = msg.data.episode_id;
         finalizePipelineStatus('⚠️ ' + errText, epId);
         clearEpisodePipelineUI(epId);
+        if (currentProject && currentEpisode && epId === currentEpisode.id) {
+          loadProjectStoryboards(currentProject.id, currentEpisode.id);
+        }
       } else if (msg.data && msg.data.action === 'episode_pipeline_control') {
         clearEpisodePipelineUI();
       } else {
@@ -591,11 +622,10 @@
         }
         if (msg.data.action === 'batch_generate_shot_images' || msg.data.action === 'generate_shot_image') {
           if (currentProject && currentEpisode && epId === currentEpisode.id) {
-            if (msg.data.status && msg.data.status.shot) {
-              applyShotStoryboardUpdate(msg.data.status.shot);
-            } else if (msg.data.shot) {
+            // status.shot 是镜号（数字）；完整镜头数据在 msg.data.shot（task_update）里
+            if (isStoryboardShotPayload(msg.data.shot)) {
               applyShotStoryboardUpdate(msg.data.shot);
-            } else {
+            } else if (/完成/.test(msg.msg || '') && (msg.progress >= 100 || /批量生图完成|关键帧生成完成/.test(msg.msg || ''))) {
               loadProjectStoryboards(currentProject.id, currentEpisode.id);
             }
           }
@@ -748,6 +778,9 @@
       updateTaskChatMessageStatus(d.task_id, 'error', errText);
       setStatus('❌ ' + errText);
       showTaskToast(errText, 'error', d.task_id);
+      if (currentProject && (d.mode === 'images' || !d.mode)) {
+        loadProjectStoryboards(currentProject.id, currentEpisode?.id);
+      }
       return true;
     }
     return false;
@@ -2207,11 +2240,95 @@
     return (Math.round(n * 10) / 10) + 's';
   }
 
+  function getRoleAssetNames() {
+    return assets
+      .filter(a => (a.type || a.Type) === 'role')
+      .map(a => String(a.name || a.Name || '').trim())
+      .filter(Boolean);
+  }
+
+  function parseDialogueLines(d) {
+    if (!d) return [];
+    if (Array.isArray(d)) {
+      return d.map(row => ({
+        speaker: String(row.speaker ?? row.Speaker ?? '').trim(),
+        text: String(row.text ?? row.Text ?? '').trim(),
+      })).filter(row => row.speaker || row.text);
+    }
+    if (typeof d === 'object') {
+      if (Array.isArray(d.lines)) {
+        return parseDialogueLines(d.lines);
+      }
+      const speaker = String(d.speaker ?? d.Speaker ?? '').trim();
+      const text = String(d.text ?? d.Text ?? '').trim();
+      if (speaker || text) return [{ speaker, text }];
+      return [];
+    }
+    const s = String(d).trim();
+    if (!s) return [];
+    return s.split('\n').map(row => {
+      row = row.trim();
+      if (!row) return null;
+      const pipe = row.indexOf('|');
+      if (pipe >= 0) {
+        return { speaker: row.slice(0, pipe).trim(), text: row.slice(pipe + 1).trim() };
+      }
+      const cn = row.indexOf('：');
+      if (cn >= 0) {
+        return { speaker: row.slice(0, cn).trim(), text: row.slice(cn + 1).trim() };
+      }
+      return { speaker: '', text: row };
+    }).filter(Boolean);
+  }
+
+  function renderStoryboardDialogue(sb) {
+    const shot = sb.shot_number;
+    const lines = (sb.dialogue_lines && sb.dialogue_lines.length)
+      ? sb.dialogue_lines
+      : [{ speaker: '', text: '' }];
+    const listId = 'sb-role-list-' + shot;
+    const roleOpts = getRoleAssetNames()
+      .map(n => `<option value="${escapeHtml(n)}"></option>`)
+      .join('');
+    const lineHtml = lines.map((ln, li) => `
+      <div class="sb-dlg-line" data-line="${li}">
+        <input type="text" class="sb-dlg-speaker form-input" list="${listId}" data-shot="${shot}" placeholder="角色" value="${escapeHtml(ln.speaker || '')}" autocomplete="off">
+        <textarea class="sb-dlg-text form-input" rows="1" data-shot="${shot}" placeholder="台词">${escapeHtml(ln.text || '')}</textarea>
+        <button type="button" class="sb-dlg-remove" data-shot="${shot}" title="删除" aria-label="删除"${lines.length <= 1 ? ' hidden' : ''}>×</button>
+      </div>
+    `).join('');
+    return `
+      <div class="storyboard-field sb-field-dialogue">
+        <div class="storyboard-field-label">对白</div>
+        <div class="sb-dialogue-editor" data-shot="${shot}">
+          <datalist id="${listId}">${roleOpts}</datalist>
+          <div class="sb-dlg-lines">${lineHtml}</div>
+          <button type="button" class="sb-dlg-add" data-shot="${shot}">+ 添加对白</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function collectDialogueFromEditor(editorEl) {
+    const lines = [];
+    if (!editorEl) return lines;
+    editorEl.querySelectorAll('.sb-dlg-line').forEach(row => {
+      const speaker = (row.querySelector('.sb-dlg-speaker')?.value || '').trim();
+      const text = (row.querySelector('.sb-dlg-text')?.value || '').trim();
+      if (speaker || text) lines.push({ speaker, text });
+    });
+    return lines;
+  }
+
+  function dialogueLinesEqual(a, b) {
+    return JSON.stringify(a || []) === JSON.stringify(b || []);
+  }
+
   function normalizeStoryboards(list) {
     if (!Array.isArray(list)) return [];
     return list.map((sb, i) => {
       const description = sb.description ?? sb.Description ?? '';
-      const dialogue = (sb.dialogue ?? sb.Dialogue ?? '').trim();
+      const dlgLines = parseDialogueLines(sb.dialogue ?? sb.Dialogue);
       const beats = getShotBeats(sb);
       return {
         shot_number: sb.shot_number ?? sb.ShotNumber ?? (i + 1),
@@ -2219,7 +2336,7 @@
         description,
         camera: sb.camera ?? sb.Camera ?? '固定镜头',
         duration: sb.duration ?? sb.Duration ?? 3,
-        dialogue,
+        dialogue_lines: dlgLines.length ? dlgLines : [],
         prompt: sb.prompt ?? sb.Prompt ?? description,
         image_url: sb.image_url ?? sb.ImageURL ?? '',
         image_remote_url: sb.image_remote_url ?? sb.ImageRemoteURL ?? '',
@@ -2230,18 +2347,19 @@
     });
   }
 
-  function saveStoryboardDialogue(shotNumber, dialogue) {
+  function saveStoryboardDialogue(shotNumber, lines) {
     if (!currentProject || !currentEpisode) return Promise.resolve();
     const url = '/api/projects/' + encodeURIComponent(currentProject.id)
       + '/episodes/' + encodeURIComponent(currentEpisode.id)
       + '/shots/' + shotNumber + '/storyboard';
+    const payload = { dialogue: { lines: lines || [] } };
     return apiFetch(url, {
       method: 'PUT',
-      body: JSON.stringify({ dialogue }),
+      body: JSON.stringify(payload),
     }).then(r => {
       if (!r.ok) return r.json().then(d => Promise.reject(new Error(d.error || '保存对白失败')));
       const sb = storyboards.find(s => s.shot_number === shotNumber);
-      if (sb) sb.dialogue = dialogue;
+      if (sb) sb.dialogue_lines = (lines || []).map(l => ({ speaker: l.speaker, text: l.text }));
       return r.json();
     });
   }
@@ -2994,7 +3112,7 @@
       return `<div class="sb-keyframes-panel sb-keyframes-panel-empty"><div class="sb-keyframes-empty-hint">${hint}</div></div>`;
     }
     const cells = ready.map((b) => {
-      const url = b.image_url || b.image_remote_url || '';
+      const url = keyframeDisplayUrl(b, sb);
       const beatTitle = `${titleBase} · ${formatBeatTime(b.time)}`;
       const timeLabel = formatBeatTime(b.time);
       return `<div class="sb-keyframe-cell has-image" title="${escapeHtml(b.action || '')}">
@@ -3024,13 +3142,13 @@
     if (beats.length >= 1) {
       strip = renderKeyframeGridCells(sb, beats, titleBase);
     } else {
-      const url = sb.image_url || '';
+      const url = sb.image_url || sb.image_remote_url || '';
       strip = url
         ? renderKeyframeGridCells(sb, [{ time: 0, action: '', image_url: url, image_remote_url: sb.image_remote_url || '' }], titleBase)
         : '<div class="sb-keyframes-panel sb-keyframes-panel-empty"><div class="sb-keyframes-empty-hint">暂无关键帧</div></div>';
     }
 
-    const firstUrl = (beats[0] && beats[0].image_url) || sb.image_url || '';
+    const firstUrl = keyframeDisplayUrl(beats[0], sb);
     const previewBtn = firstUrl
       ? `<button type="button" class="btn btn-sm btn-outline sb-media-preview-btn sb-col-btn" data-preview-type="image" data-url="${escapeHtml(firstUrl)}" data-title="${escapeHtml(titleBase + ' — 首帧')}">🖼 预览首帧</button>`
       : '<button type="button" class="btn btn-sm btn-outline sb-col-btn" disabled title="暂无关键帧">🖼 预览首帧</button>';
@@ -3352,18 +3470,7 @@
               <div class="storyboard-field-label">运镜</div>
               <div class="storyboard-field-value sb-inline-text">${escapeHtml(sb.camera || '固定镜头')}</div>
             </div>
-            <div class="storyboard-field sb-field-compact">
-              <div class="storyboard-field-label">对白</div>
-              <div class="storyboard-field-value">
-                <textarea class="sb-dialogue-input sb-text-compact" rows="1" data-shot="${sb.shot_number || i + 1}" placeholder="角色名：台词">${escapeHtml(sb.dialogue || '')}</textarea>
-              </div>
-            </div>
-            <details class="storyboard-field sb-prompt-details">
-              <summary class="storyboard-field-label">首帧绘图 Prompt</summary>
-              <div class="storyboard-field-value">
-                <textarea rows="2" readonly class="sb-text-compact sb-prompt-text" title="首帧关键帧绘图提示词">${escapeHtml(sb.prompt || '')}</textarea>
-              </div>
-            </details>
+            ${renderStoryboardDialogue(sb)}
           </div>
           ${renderStoryboardImageColumn(sb, i)}
           ${renderStoryboardVideoColumn(sb, i)}
@@ -3986,17 +4093,60 @@
       updateStoryboardSelectionUI();
     });
     els.storyboardList.addEventListener('blur', (e) => {
-      if (!e.target.classList.contains('sb-dialogue-input')) return;
+      if (!e.target.classList.contains('sb-dlg-speaker') && !e.target.classList.contains('sb-dlg-text')) return;
       const shotNum = parseInt(e.target.dataset.shot, 10);
       if (Number.isNaN(shotNum)) return;
-      const dialogue = e.target.value.trim();
+      const editor = e.target.closest('.sb-dialogue-editor');
+      const lines = collectDialogueFromEditor(editor);
       const sb = storyboards.find(s => s.shot_number === shotNum);
-      if (sb && sb.dialogue === dialogue) return;
-      saveStoryboardDialogue(shotNum, dialogue)
-        .then(() => toast('对白已保存', 'success'))
+      if (sb && dialogueLinesEqual(sb.dialogue_lines, lines)) return;
+      const valid = lines.filter(l => l.speaker && l.text);
+      if (lines.length > 0 && valid.length !== lines.length) {
+        toast('每条对白须同时填写角色与台词', 'warning');
+        return;
+      }
+      saveStoryboardDialogue(shotNum, valid)
+        .then(() => {
+          if (sb) sb.dialogue_lines = valid;
+          toast('对白已保存', 'success');
+        })
         .catch(err => toast(err.message || '保存对白失败', 'error'));
     }, true);
     els.storyboardList.addEventListener('click', (e) => {
+      const addBtn = e.target.closest('.sb-dlg-add');
+      if (addBtn) {
+        e.stopPropagation();
+        const shotNum = parseInt(addBtn.dataset.shot, 10);
+        const sb = storyboards.find(s => s.shot_number === shotNum);
+        if (!sb) return;
+        const cur = collectDialogueFromEditor(addBtn.closest('.sb-dialogue-editor'));
+        sb.dialogue_lines = cur.length ? cur : [];
+        sb.dialogue_lines.push({ speaker: '', text: '' });
+        renderStoryboards();
+        return;
+      }
+      const rmBtn = e.target.closest('.sb-dlg-remove');
+      if (rmBtn) {
+        e.stopPropagation();
+        const shotNum = parseInt(rmBtn.dataset.shot, 10);
+        const editor = rmBtn.closest('.sb-dialogue-editor');
+        const lines = collectDialogueFromEditor(editor);
+        if (lines.length <= 1) {
+          lines[0] = { speaker: '', text: '' };
+        } else {
+          rmBtn.closest('.sb-dlg-line')?.remove();
+          const updated = collectDialogueFromEditor(editor);
+          saveStoryboardDialogue(shotNum, updated.filter(l => l.speaker && l.text))
+            .then(() => {
+              const sb = storyboards.find(s => s.shot_number === shotNum);
+              if (sb) sb.dialogue_lines = updated.filter(l => l.speaker && l.text);
+              renderStoryboards();
+              toast('对白已保存', 'success');
+            })
+            .catch(err => toast(err.message || '保存对白失败', 'error'));
+        }
+        return;
+      }
       const toggle = e.target.closest('.sb-version-toggle');
       if (toggle) {
         e.stopPropagation();

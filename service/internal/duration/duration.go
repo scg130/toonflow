@@ -2,7 +2,7 @@ package duration
 
 const (
 	DefaultShotDurationSec = 10.0
-	MinShotDurationSec     = 10.0
+	MinShotDurationSec     = 5.0
 	// MaxShotDurationSec matches Agnes single-video ceiling (18s ≈ 441 frames @24fps).
 	MaxShotDurationSec = 18.0
 	// MinBeatsPerShot is the minimum keyframe count for Agnes keyframe interpolation.
@@ -11,7 +11,7 @@ const (
 	MaxBeatsPerShot = 3
 )
 
-// ResolveShotVideoDuration normalizes per-shot video length for keyframe I2V (10–18s).
+// ResolveShotVideoDuration normalizes per-shot video length for keyframe I2V (5–18s).
 func ResolveShotVideoDuration(d float64) float64 {
 	if d <= 0 {
 		return DefaultShotDurationSec

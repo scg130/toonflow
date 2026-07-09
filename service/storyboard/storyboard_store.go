@@ -55,8 +55,8 @@ func UpdateStoryboardShotMedia(db *sql.DB, projectID, episodeID string, shotNumb
 	return SaveStoryboardItems(db, projectID, episodeID, items)
 }
 
-// UpdateStoryboardShotDialogue updates dialogue text for one shot.
-func UpdateStoryboardShotDialogue(db *sql.DB, projectID, episodeID string, shotNumber int, dialogue string) error {
+// UpdateStoryboardShotDialogue updates structured dialogue for one shot.
+func UpdateStoryboardShotDialogue(db *sql.DB, projectID, episodeID string, shotNumber int, dialogue *task.ShotDialogue) error {
 	items, err := LoadStoryboardItems(db, projectID, episodeID)
 	if err != nil || len(items) == 0 {
 		return err
@@ -64,7 +64,7 @@ func UpdateStoryboardShotDialogue(db *sql.DB, projectID, episodeID string, shotN
 	updated := false
 	for i := range items {
 		if items[i].ShotNumber == shotNumber {
-			items[i].Dialogue = strings.TrimSpace(dialogue)
+			items[i].Dialogue = normalizeDialogue(dialogue)
 			updated = true
 			break
 		}

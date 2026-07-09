@@ -1,6 +1,10 @@
 package timeline
 
-import "testing"
+import (
+	"testing"
+
+	"toonflow/task"
+)
 
 func TestClipTrimRange(t *testing.T) {
 	settings := DefaultExportSettings()
@@ -21,6 +25,18 @@ func TestEffectiveTransitionAfter(t *testing.T) {
 	}
 	if effectiveTransitionAfter(TimelineClip{Transition: "dip"}, settings) != "dip" {
 		t.Fatal("expected dip")
+	}
+}
+
+func TestTimelineTransitionForShot(t *testing.T) {
+	if timelineTransitionForShot(task.SceneLinkContinuous, "") != "fade" {
+		t.Fatal("continuous same-scene should fade")
+	}
+	if timelineTransitionForShot(task.SceneLinkContinuous, "fade black") != "dip" {
+		t.Fatal("continuous with fade black hint should dip")
+	}
+	if timelineTransitionForShot(task.SceneLinkTransition, "wipe") != "wipe" {
+		t.Fatal("scene change wipe")
 	}
 }
 

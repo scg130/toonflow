@@ -36,7 +36,7 @@ func TestNormalizeStoryboardItems_sceneLink(t *testing.T) {
 
 func TestParseStoryboardResponse_objectWrapper(t *testing.T) {
 	// JSON-mode returns an object wrapper.
-	obj := `{"shots":[{"shot_number":1,"scene":"虚空","description":"焦黑树桩","duration":4,"dialogue":"石昊：走了","prompt":"wide"},{"shot_number":2,"scene":"虚空","description":"石昊起身","duration":3,"prompt":"close"}]}`
+	obj := `{"shots":[{"shot_number":1,"scene":"虚空","description":"焦黑树桩","duration":4,"dialogue":{"lines":[{"speaker":"石昊","text":"走了"}]},"prompt":"wide"},{"shot_number":2,"scene":"虚空","description":"石昊起身","duration":3,"prompt":"close"}]}`
 	items, err := ParseStoryboardResponse(obj)
 	if err != nil {
 		t.Fatal(err)
@@ -44,7 +44,7 @@ func TestParseStoryboardResponse_objectWrapper(t *testing.T) {
 	if len(items) != 2 {
 		t.Fatalf("expected 2 shots from wrapper, got %d", len(items))
 	}
-	if items[1].Dialogue != "" || items[0].Dialogue != "石昊：走了" {
+	if items[1].Dialogue != nil || items[0].Dialogue == nil || items[0].Dialogue.LinesNormalized()[0].Speaker != "石昊" || items[0].Dialogue.LinesNormalized()[0].Text != "走了" {
 		t.Fatalf("dialogue field not carried from wrapper: %+v", items)
 	}
 
@@ -91,8 +91,8 @@ func TestParseTableStoryboard(t *testing.T) {
 	if items[2].ShotNumber != 3 {
 		t.Fatalf("expected shot 3, got %d", items[2].ShotNumber)
 	}
-	if items[1].Dialogue == "" || !strings.Contains(items[1].Dialogue, "石昊") {
-		t.Fatalf("expected dialogue on shot 2, got %q", items[1].Dialogue)
+	if items[1].Dialogue == nil || len(items[1].Dialogue.LinesNormalized()) == 0 || !strings.Contains(items[1].Dialogue.LinesNormalized()[0].Speaker, "石昊") {
+		t.Fatalf("expected dialogue on shot 2, got %+v", items[1].Dialogue)
 	}
 }
 
