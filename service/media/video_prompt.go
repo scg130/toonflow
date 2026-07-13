@@ -16,21 +16,31 @@ var (
 	beatSectionRE     = regexp.MustCompile(`(?i)(画面|动作|反应)\s*[：:]`)
 )
 
-// buildShotVideoPrompt builds an I2V prompt optimized for 红果/抖音竖屏短剧观感：
-// punchy close-ups, clear physical action, aggressive camera — not soft cinematic essays.
+// buildShotVideoPrompt builds an I2V prompt using industrial short-drama method:
+// lock still keyframes first, then describe ONLY the motion between frames (not literary essays).
+// Models remain the project's existing Agnes text/image/video stack.
 func buildShotVideoPrompt(shot *storyboard.ShotMeta, artStyle, stylePrompt, styleAnchor string, humanSubject bool) (string, string) {
+	mode := ClassifyShotVideoMode(shot)
+	return buildShotVideoPromptWithMode(shot, mode, artStyle, stylePrompt, styleAnchor, humanSubject)
+}
+
+func buildShotVideoPromptWithMode(shot *storyboard.ShotMeta, mode VideoMode, artStyle, stylePrompt, styleAnchor string, humanSubject bool) (string, string) {
 	parts := make([]string, 0, 16)
 
-	// 1) Motion plan first (AI video models follow action nodes, not literary prose).
-	if seq := formatBeatsForVideoPrompt(shot.Beats, shot.Duration); seq != "" {
-		parts = append(parts, seq)
-		parts = append(parts,
-			"one continuous take, clear beat-to-beat action progression",
-			"strong character performance, readable body language",
-		)
-	} else if motion := compressDescriptionForVideo(shot.Description); motion != "" {
+	// 1) Inter-keyframe motion (frames2 = start→end; multiframe = ordered morph).
+	beats := BeatActionsForMode(shot.Beats, mode)
+	if motion := formatInterKeyframeMotion(beats, shot.Duration, mode); motion != "" {
 		parts = append(parts, motion)
+	} else if m := compressDescriptionForVideo(shot.Description); m != "" {
+		parts = append(parts, "physical action only: "+m)
 	}
+
+	parts = append(parts,
+		"preserve first-frame composition as start lock",
+		"end frame must match last keyframe pose and layout",
+		"continuous seamless interpolation, no hard cuts",
+		"readable body language and facial micro-expression",
+	)
 
 	// 2) Continuity hook — keep short; skip placeholder openers.
 	if ac := compressDescriptionForVideo(shot.ActionContinue); ac != "" && utf8.RuneCountInString(ac) <= 60 {
@@ -43,7 +53,7 @@ func buildShotVideoPrompt(shot *storyboard.ShotMeta, artStyle, stylePrompt, styl
 	lines := storyboard.DialogueLinesForTTS(shot.Dialogue)
 	parts = appendDialogueVideoInstructions(parts, lines, humanSubject)
 
-	// 4) Punchy short-drama camera (never default to soft cinematic).
+	// 4) Punchy short-drama camera.
 	if cam := camera.MapCameraToVideoMotion(shot.Camera); cam != "" {
 		parts = append(parts, cam)
 	} else if humanSubject {
@@ -52,22 +62,17 @@ func buildShotVideoPrompt(shot *storyboard.ShotMeta, artStyle, stylePrompt, styl
 		parts = append(parts, "dynamic vertical short-drama camera, motivated environmental motion")
 	}
 
-	// Fallback image prompt crumbs only if almost empty.
-	if len(parts) < 2 {
+	if len(parts) < 3 {
 		if trimmed := trimImagePromptForVideo(shot.Prompt); trimmed != "" {
 			parts = append(parts, trimmed)
 		}
 	}
 
-	// 5) Lighting: keep concrete, drop abstract mood words.
 	if lit := compressLightingForVideo(shot.Lighting); lit != "" {
 		parts = append(parts, "lighting: "+lit)
 	}
 
-	// 6) 红果短剧视觉 DNA（图生视频专用，不要塞 UE5/Octane 静帧标签）.
 	parts = append(parts, hongguoVideoStyleTags(artStyle, stylePrompt)...)
-
-	// 7) Silent video + temporal coherence (short).
 	parts = append(parts,
 		"silent video no generated speech",
 		"Chinese drama visuals only",
@@ -75,7 +80,11 @@ func buildShotVideoPrompt(shot *storyboard.ShotMeta, artStyle, stylePrompt, styl
 		"frame-to-frame continuity",
 		"high clarity facial performance",
 	)
-
+	if mode == VideoModeFrames2 {
+		parts = append(parts, "two-keyframe morph first-to-last only")
+	} else {
+		parts = append(parts, "multi-keyframe continuous action take")
+	}
 	if !humanSubject {
 		parts = append(parts, "no human character motion, object and environment only")
 	}
@@ -92,13 +101,51 @@ func buildShotVideoPrompt(shot *storyboard.ShotMeta, artStyle, stylePrompt, styl
 		"voiceover", "narration", "spoken words", "talking audio",
 		"action freeze mid-motion", "discontinuous movement",
 		"overstacked VFX particles without story", "generic fantasy MV montage",
+		"ignore last keyframe", "drift away from keyframe poses",
 	}, ", ")
 	if humanSubject && hasSpeakableLines(lines) {
 		negative += ", closed mouth while speaking, static lips during dialogue, no lip sync, mute expression while talking, wrong speaker lip movement"
 	}
-	_ = styleAnchor // intentionally unused: UE5/style_anchor hurts I2V; use hongguoVideoStyleTags instead
+	_ = styleAnchor
 
 	return strings.Join(parts, ", "), negative
+}
+
+// formatInterKeyframeMotion describes physical change BETWEEN locked stills (not a prose summary).
+func formatInterKeyframeMotion(beats []task.ShotBeat, dur float64, mode VideoMode) string {
+	if len(beats) == 0 {
+		return ""
+	}
+	type node struct {
+		t float64
+		a string
+	}
+	nodes := make([]node, 0, len(beats))
+	for _, b := range beats {
+		a := compressBeatActionForVideo(b.Action)
+		if a == "" {
+			continue
+		}
+		nodes = append(nodes, node{t: b.Time, a: a})
+	}
+	if len(nodes) == 0 {
+		return ""
+	}
+	durHint := ""
+	if dur > 0 {
+		durHint = fmt.Sprintf(" over %.1fs", dur)
+	}
+	if mode == VideoModeFrames2 || len(nodes) == 1 {
+		if len(nodes) == 1 {
+			return "image-to-video motion" + durHint + ": animate from locked start frame — " + nodes[0].a
+		}
+		return "frames2video motion" + durHint + ": start[" + nodes[0].a + "] → end[" + nodes[len(nodes)-1].a + "]; interpolate only the physical change between these two locked frames"
+	}
+	parts := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		parts = append(parts, fmt.Sprintf("[%.1fs] %s", n.t, n.a))
+	}
+	return "multiframe motion" + durHint + ": " + strings.Join(parts, " → ") + "; morph through keyframes in order, hold pose continuity"
 }
 
 // hongguoVideoStyleTags returns vertical short-drama look tags for I2V (not still-image render jargon).

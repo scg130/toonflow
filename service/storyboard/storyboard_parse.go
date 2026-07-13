@@ -37,7 +37,7 @@ func NormalizeStoryboardItems(items []task.StoryboardItem) []task.StoryboardItem
 		if it.Duration <= 0 {
 			it.Duration = duration.DefaultShotDurationSec
 		} else {
-			it.Duration = duration.ResolveShotVideoDuration(it.Duration)
+			it.Duration = duration.SnapPreferredShotDuration(it.Duration)
 		}
 		if it.Prompt == "" {
 			it.Prompt = it.Description

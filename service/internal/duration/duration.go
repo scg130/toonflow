@@ -16,6 +16,9 @@ const (
 	TargetShotsMax = 25
 )
 
+// PreferredShotDurations are the industrial short-drama rhythm steps (8/10/12/15).
+var PreferredShotDurations = []float64{8, 10, 12, 15}
+
 // ResolveShotVideoDuration normalizes per-shot video length for keyframe I2V (8–15s).
 func ResolveShotVideoDuration(d float64) float64 {
 	if d <= 0 {
@@ -28,4 +31,24 @@ func ResolveShotVideoDuration(d float64) float64 {
 		return MaxShotDurationSec
 	}
 	return float64(int(d*2+0.5)) / 2
+}
+
+// SnapPreferredShotDuration snaps to 8/10/12/15 for rhythm variation (not a flat 12s grid).
+func SnapPreferredShotDuration(d float64) float64 {
+	d = ResolveShotVideoDuration(d)
+	best := PreferredShotDurations[0]
+	bestDiff := absf(d - best)
+	for _, p := range PreferredShotDurations[1:] {
+		if diff := absf(d - p); diff < bestDiff {
+			best, bestDiff = p, diff
+		}
+	}
+	return best
+}
+
+func absf(x float64) float64 {
+	if x < 0 {
+		return -x
+	}
+	return x
 }

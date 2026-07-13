@@ -2013,7 +2013,7 @@
         return !shotHasAllKeyframes(sb);
       });
       if (missingImage.length) {
-        toast('请先生成关键帧：第 ' + missingImage.join('、') + ' 镜', 'warning');
+        toast('请先锁定关键帧静帧再生成视频：第 ' + missingImage.join('、') + ' 镜（每镜 beats 图需齐全）', 'warning');
         return;
       }
     }

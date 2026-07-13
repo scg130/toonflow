@@ -100,8 +100,12 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 	styleAnchor := project.LoadProjectStyleAnchor(db, projectID)
 	assets, _ := asset.LoadProjectAssets(db, projectID)
 	humanSubject := len(assets) == 0 || asset.ShotHasHumanRole(shotToItem(shot), assets)
-	prompt, negativePrompt := buildShotVideoPrompt(shot, artStyle, stylePrompt, styleAnchor, humanSubject)
-	logger.CtxTrace(ctx, "shot video prompt shot=%d prompt=%s", shotNumber, prompt)
+
+	// OnlyShot-style method: classify frames2 vs multiframe, then prompt for inter-keyframe motion.
+	// Vendor/models stay Agnes — same text/image/video stack as before.
+	mode := ClassifyShotVideoMode(shot)
+	prompt, negativePrompt := buildShotVideoPromptWithMode(shot, mode, artStyle, stylePrompt, styleAnchor, humanSubject)
+	logger.CtxTrace(ctx, "shot video prompt shot=%d mode=%s prompt=%s", shotNumber, mode, prompt)
 
 	width, height := videoSizeForRatio(videoRatio)
 
@@ -122,18 +126,28 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 	if err != nil {
 		return nil, err
 	}
-	slots := duration.MaxBeatsPerShot
+	if len(keyframeURLs) == 0 {
+		return nil, fmt.Errorf("第 %d 镜尚未生成关键帧，请先锁定静帧再生成视频", shotNumber)
+	}
+	keyframeURLs = SelectKeyframesForMode(keyframeURLs, mode)
 	if continuityFrame != "" {
-		slots = duration.MaxBeatsPerShot - 1
-		keyframeURLs = SelectEvenKeyframeURLs(keyframeURLs, slots)
-		if len(keyframeURLs) == 0 || keyframeURLs[0] != continuityFrame {
-			keyframeURLs = append([]string{continuityFrame}, keyframeURLs...)
+		// Keep continuity as frame-0; drop one middle slot so Agnes ≤3 images.
+		if mode == VideoModeFrames2 {
+			keyframeURLs = []string{continuityFrame, keyframeURLs[len(keyframeURLs)-1]}
+		} else {
+			tail := SelectEvenKeyframeURLs(keyframeURLs, duration.MaxBeatsPerShot-1)
+			if len(tail) == 0 || tail[0] != continuityFrame {
+				keyframeURLs = append([]string{continuityFrame}, tail...)
+			} else {
+				keyframeURLs = tail
+			}
+			if len(keyframeURLs) > duration.MaxBeatsPerShot {
+				keyframeURLs = keyframeURLs[:duration.MaxBeatsPerShot]
+			}
 		}
-	} else {
-		keyframeURLs = SelectEvenKeyframeURLs(keyframeURLs, slots)
 	}
 	if len(keyframeURLs) < 2 {
-		return nil, fmt.Errorf("第 %d 镜至少需要 2 张关键帧图片，请先生成关键帧", shotNumber)
+		return nil, fmt.Errorf("第 %d 镜至少需要 2 张关键帧图片（建议先生成完整 beats 静帧），请先生成关键帧", shotNumber)
 	}
 
 	duration := ResolveShotVideoDuration(shot.Duration)

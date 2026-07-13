@@ -12,9 +12,9 @@ const (
 	MaxShotDurationSec     = duration.MaxShotDurationSec
 )
 
-// ResolveShotVideoDuration normalizes per-shot video length for I2V.
+// ResolveShotVideoDuration normalizes per-shot video length for I2V (8/10/12/15 rhythm).
 func ResolveShotVideoDuration(d float64) float64 {
-	return duration.ResolveShotVideoDuration(d)
+	return duration.SnapPreferredShotDuration(d)
 }
 
 // SortShotNumbers returns a copy sorted ascending.

@@ -44,8 +44,8 @@ func TestBuildShotVideoPrompt_hongguoStyle(t *testing.T) {
 	if !strings.Contains(pos, "Hongguo") && !strings.Contains(pos, "short drama") {
 		t.Fatalf("hongguo short-drama tags missing: %q", pos)
 	}
-	if !strings.Contains(pos, "timed action") {
-		t.Fatalf("beat motion plan missing: %q", pos)
+	if !strings.Contains(pos, "frames2video") && !strings.Contains(pos, "multiframe motion") && !strings.Contains(pos, "image-to-video") {
+		t.Fatalf("inter-keyframe motion plan missing: %q", pos)
 	}
 	if !strings.Contains(pos, "close-up") && !strings.Contains(pos, "push") {
 		t.Fatalf("punchy camera missing: %q", pos)
@@ -79,6 +79,25 @@ func TestBuildShotVideoPrompt_withDialogue(t *testing.T) {
 	}
 	if !strings.Contains(neg, "English speech") {
 		t.Fatalf("negative English speech guard missing: %q", neg)
+	}
+}
+
+func TestBuildShotVideoPrompt_frames2InterKeyframe(t *testing.T) {
+	shot := &storyboard.ShotMeta{
+		Description: "【目标】交代身份。【承接】开场。【结果】女主上场。",
+		Camera:      "中景稳镜",
+		Beats: []task.ShotBeat{
+			{Time: 0, Action: "画面：双人中景。动作：女主抬下巴。反应：男主沉默。"},
+			{Time: 8, Action: "画面：女主特写。动作：唇角轻笑。反应：眼神下压。"},
+		},
+		Duration: 10,
+	}
+	pos, _ := buildShotVideoPrompt(shot, "3D动漫", "", "", true)
+	if !strings.Contains(pos, "frames2video") {
+		t.Fatalf("dialogue shot should use frames2 motion: %q", pos)
+	}
+	if !strings.Contains(pos, "two-keyframe") {
+		t.Fatalf("frames2 mode tag missing: %q", pos)
 	}
 }
 
