@@ -1,33 +1,24 @@
-# 分镜运镜与渲染规范（3D 动漫）
+# 分镜运镜与渲染规范（红果/抖音竖屏短剧）
 
 ## 1. 运镜指令（camera 字段）
 
-不得只写「推镜/摇镜」等笼统词。每镜须写明具体运镜参数，中文简述 + 英文术语：
+优先**冲击感竖屏短剧运镜**，禁止默认「slow cinematic subtle」。
 
-- **推拉**：dolly in / dolly out / dolly zoom（希区库克变焦）
-- **摇移**：pan left/right、tilt up/down、tracking shot、crane up
-- **焦点**：rack focus（跟焦）、shallow depth of field、deep focus
-- **速度**：slow motion 48–120fps、speed ramp、locked-off static
-- **情绪镜头**：handheld shake、low angle heroic、high angle vulnerable
+- **特写/极特写**：face fills 9:16，情绪微表情可读
+- **强推近**：fast aggressive dolly push-in（愤怒/震惊）
+- **手持**：emotion intensifies → shake increases
+- **仰拍**：权力/压迫；**俯拍**：脆弱
+- **dolly zoom**：情绪峰值冲击
+- 避免：漫长慢推、空镜氛围散文、无主体运镜
 
-战斗、追逐、情绪爆发镜须在 camera 或 description 标注 slow motion 或 motion blur 强度暗示。
+战斗、追逐、情绪爆发镜须在 camera 标注 push-in / handheld / impact slow-motion。
 
-## 2. 光影与材质（prompt 字段）
+## 2. 光影与材质
 
-英文 prompt 须体现 3D 动漫物理质感，按场景选用：
+英文**静帧** prompt 可含 3D 渲染质感（UE5/AO/SSS）。**图生视频 prompt 不要塞这些**，改用竖屏短剧标签：high contrast、rim light、emotional close-up。
 
-- **环境**：ambient occlusion (AO)、contact shadows、global illumination
-- **体积光**：volumetric god rays、atmospheric scattering、light shafts
-- **皮肤**：subsurface scattering (SSS)、translucent skin、soft rim light
-- **硬表面**：PBR metallic reflectivity、anisotropic highlights on armor/weapons
-- **氛围**：cinematic color grading、rim light、bounce light
+## 3. 动态模糊与帧率
 
-## 3. 动态模糊与帧率（高速/情绪场景）
-
-以下场景须在 prompt 中标注动态表现：
-
-- **高速战斗/追逐**：motion blur on limbs/weapons、motion streaks、high shutter action
-- **情绪爆发特写**：slow motion close-up 120fps、micro-expression detail、light particles（禁止 blood/tear gore 描写）
-- **冲击瞬间**：radial motion blur、freeze-frame peak pose with blur trails
-
-prompt 与 camera 字段术语须一致，避免矛盾。
+- **高速战斗**：motion blur on limbs、motion streaks
+- **情绪爆发特写**：impact slow-motion → 切回正常速，定格面部
+- **冲击瞬间**：radial motion blur、freeze-frame peak pose

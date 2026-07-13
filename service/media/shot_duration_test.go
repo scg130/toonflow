@@ -3,14 +3,14 @@ package media
 import "testing"
 
 func TestResolveShotVideoDuration(t *testing.T) {
-		tests := []struct {
+	tests := []struct {
 		in, want float64
 	}{
 		{0, DefaultShotDurationSec},
 		{4, MinShotDurationSec},
-		{5, 5.0},
 		{8, 8.0},
 		{12, 12.0},
+		{15, 15.0},
 		{20, MaxShotDurationSec},
 	}
 	for _, tc := range tests {

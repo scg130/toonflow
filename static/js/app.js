@@ -3132,7 +3132,7 @@
     if (!beats.length) {
       return `<div class="storyboard-field sb-beats-field">
         <div class="storyboard-field-label">关键帧拍点</div>
-        <div class="storyboard-field-value sb-beats-empty">暂无拍点。请用「AI 生成分镜」重新生成（每镜 10–18s，2–3 个关键帧拍点）。</div>
+        <div class="storyboard-field-value sb-beats-empty">暂无拍点。请用「AI 生成分镜」重新生成（5分钟短剧：每镜 8–15s，2–3 个关键帧，全集约 18–25 镜）。</div>
       </div>`;
     }
     const items = beats.map((b, bi) => {
@@ -4143,6 +4143,10 @@
     });
     els.storyboardList.addEventListener('blur', (e) => {
       if (!e.target.classList.contains('sb-dlg-speaker') && !e.target.classList.contains('sb-dlg-text')) return;
+      // Clicking × / + steals focus first; skip blur-save so delete isn't reported as「已保存」
+      const next = e.relatedTarget;
+      if (next && (next.closest('.sb-dlg-remove') || next.closest('.sb-dlg-add'))) return;
+      if (els.storyboardList._skipDialogueBlurSave) return;
       const shotNum = parseInt(e.target.dataset.shot, 10);
       if (Number.isNaN(shotNum)) return;
       const editor = e.target.closest('.sb-dialogue-editor');
@@ -4161,6 +4165,14 @@
         })
         .catch(err => toast(err.message || '保存对白失败', 'error'));
     }, true);
+    els.storyboardList.addEventListener('mousedown', (e) => {
+      if (e.target.closest('.sb-dlg-remove') || e.target.closest('.sb-dlg-add')) {
+        // Keep focus from firing blur-save before the click handler runs
+        e.preventDefault();
+        els.storyboardList._skipDialogueBlurSave = true;
+        setTimeout(() => { els.storyboardList._skipDialogueBlurSave = false; }, 0);
+      }
+    });
     els.storyboardList.addEventListener('click', (e) => {
       const addBtn = e.target.closest('.sb-dlg-add');
       if (addBtn) {
@@ -4177,23 +4189,34 @@
       const rmBtn = e.target.closest('.sb-dlg-remove');
       if (rmBtn) {
         e.stopPropagation();
+        e.preventDefault();
         const shotNum = parseInt(rmBtn.dataset.shot, 10);
         const editor = rmBtn.closest('.sb-dialogue-editor');
-        const lines = collectDialogueFromEditor(editor);
-        if (lines.length <= 1) {
-          lines[0] = { speaker: '', text: '' };
-        } else {
-          rmBtn.closest('.sb-dlg-line')?.remove();
-          const updated = collectDialogueFromEditor(editor);
-          saveStoryboardDialogue(shotNum, updated.filter(l => l.speaker && l.text))
-            .then(() => {
-              const sb = storyboards.find(s => s.shot_number === shotNum);
-              if (sb) sb.dialogue_lines = updated.filter(l => l.speaker && l.text);
-              renderStoryboards();
-              toast('对白已保存', 'success');
-            })
-            .catch(err => toast(err.message || '保存对白失败', 'error'));
+        const sb = storyboards.find(s => s.shot_number === shotNum);
+        if (!sb || Number.isNaN(shotNum)) return;
+        const lineEl = rmBtn.closest('.sb-dlg-line');
+        const lineNodes = editor ? Array.from(editor.querySelectorAll('.sb-dlg-line')) : [];
+        const lineIdx = lineEl ? lineNodes.indexOf(lineEl) : -1;
+        let lines = collectDialogueFromEditor(editor);
+        if (lineIdx >= 0 && lineIdx < lines.length) {
+          lines.splice(lineIdx, 1);
+        } else if (lines.length > 1) {
+          lines.pop();
         }
+        if (lines.length === 0) {
+          lines = [{ speaker: '', text: '' }];
+        }
+        const toSave = lines.filter(l => l.speaker && l.text);
+        sb.dialogue_lines = lines.length === 1 && !lines[0].speaker && !lines[0].text
+          ? []
+          : (toSave.length ? toSave : lines);
+        saveStoryboardDialogue(shotNum, toSave)
+          .then(() => {
+            sb.dialogue_lines = toSave.length ? toSave : [];
+            renderStoryboards();
+            toast('对白已删除', 'info');
+          })
+          .catch(err => toast(err.message || '删除对白失败', 'error'));
         return;
       }
       const toggle = e.target.closest('.sb-version-toggle');

@@ -1,10 +1,10 @@
 package media
 
 import (
-	"toonflow/service/storyboard"
 	"strings"
 	"testing"
 
+	"toonflow/service/storyboard"
 	"toonflow/task"
 )
 
@@ -22,24 +22,36 @@ func TestTrimImagePromptForVideo(t *testing.T) {
 	}
 }
 
-func TestBuildShotVideoPrompt_motionFirst(t *testing.T) {
+func TestBuildShotVideoPrompt_hongguoStyle(t *testing.T) {
 	shot := &storyboard.ShotMeta{
-		Description: "石昊猛然起身，赤红双目",
-		Camera:      "推镜 dolly in",
+		Description: "【目标】石昊发现柳神消失。【承接】开场。【结果】他愣住。",
+		Camera:      "特写 推近",
+		Lighting:    "冷黄黄昏飞灰",
 		Prompt:      "Unreal Engine 5 render, Octane, long static render tags...",
+		Beats: []task.ShotBeat{
+			{Time: 0, Action: "画面：跪地扶树桩。动作：双手抓紧。反应：低头。"},
+			{Time: 5, Action: "画面：特写双手。动作：树桩化灰散落。反应：手指僵住。"},
+		},
+		Duration: 10,
 	}
-	pos, neg := buildShotVideoPrompt(shot, "3D动漫", "", "", true)
-	if !strings.Contains(pos, "石昊") {
-		t.Fatalf("description missing: %q", pos)
+	pos, neg := buildShotVideoPrompt(shot, "3D动漫", "", "Unreal Engine 5, Octane, global style embedding locked", true)
+	if strings.Contains(pos, "【目标】") {
+		t.Fatalf("literary labels should be stripped: %q", pos)
 	}
-	if !strings.Contains(pos, "dolly") {
-		t.Fatalf("camera motion missing: %q", pos)
+	if strings.Contains(pos, "Unreal Engine") || strings.Contains(pos, "global style embedding") {
+		t.Fatalf("still-image style anchor must not leak into I2V: %q", pos)
 	}
-	if strings.Contains(pos, "Unreal Engine") {
-		t.Fatalf("image render tags should not appear: %q", pos)
+	if !strings.Contains(pos, "Hongguo") && !strings.Contains(pos, "short drama") {
+		t.Fatalf("hongguo short-drama tags missing: %q", pos)
 	}
-	if neg == "" {
-		t.Fatal("negative prompt empty")
+	if !strings.Contains(pos, "timed action") {
+		t.Fatalf("beat motion plan missing: %q", pos)
+	}
+	if !strings.Contains(pos, "close-up") && !strings.Contains(pos, "push") {
+		t.Fatalf("punchy camera missing: %q", pos)
+	}
+	if !strings.Contains(neg, "vague mood") {
+		t.Fatalf("negative should reject mood-only shots: %q", neg)
 	}
 }
 
@@ -76,7 +88,17 @@ func TestBuildShotVideoPrompt_withDialogue_nonHuman(t *testing.T) {
 		Dialogue:    &task.ShotDialogue{Lines: []task.DialogueLine{{Speaker: "旁白", Text: "天地变色"}}},
 	}
 	pos, _ := buildShotVideoPrompt(shot, "3D动漫", "", "", false)
-	if strings.Contains(pos, "lip sync") {
+	if strings.Contains(pos, "lip sync") || strings.Contains(pos, "口型") {
 		t.Fatalf("non-human shot should not include lip sync: %q", pos)
+	}
+}
+
+func TestCompressDescriptionForVideo(t *testing.T) {
+	got := compressDescriptionForVideo("【目标】石昊发现柳神消失。【承接】开场跪地。【结果】手指僵住。")
+	if strings.Contains(got, "【") {
+		t.Fatalf("labels remain: %q", got)
+	}
+	if !strings.Contains(got, "石昊") {
+		t.Fatalf("event lost: %q", got)
 	}
 }

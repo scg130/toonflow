@@ -2,6 +2,7 @@ package media
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -10,94 +11,200 @@ import (
 	"toonflow/task"
 )
 
-// buildShotVideoPrompt returns motion-focused prompts for image-to-video (not image render tags).
-func buildShotVideoPrompt(shot *storyboard.ShotMeta, artStyle, stylePrompt, styleAnchor string, humanSubject bool) (string, string) {
-	parts := make([]string, 0, 12)
+var (
+	storyboardLabelRE = regexp.MustCompile(`【[^】]{1,12}】`)
+	beatSectionRE     = regexp.MustCompile(`(?i)(画面|动作|反应)\s*[：:]`)
+)
 
-	if d := strings.TrimSpace(shot.Description); d != "" {
-		parts = append(parts, d)
-	}
+// buildShotVideoPrompt builds an I2V prompt optimized for 红果/抖音竖屏短剧观感：
+// punchy close-ups, clear physical action, aggressive camera — not soft cinematic essays.
+func buildShotVideoPrompt(shot *storyboard.ShotMeta, artStyle, stylePrompt, styleAnchor string, humanSubject bool) (string, string) {
+	parts := make([]string, 0, 16)
+
+	// 1) Motion plan first (AI video models follow action nodes, not literary prose).
 	if seq := formatBeatsForVideoPrompt(shot.Beats, shot.Duration); seq != "" {
 		parts = append(parts, seq)
-		parts = append(parts, "smooth keyframe interpolation through all timed beats, continuous seamless motion, no hard cuts within shot, uninterrupted fight choreography, fluid character interaction")
+		parts = append(parts,
+			"one continuous take, clear beat-to-beat action progression",
+			"strong character performance, readable body language",
+		)
+	} else if motion := compressDescriptionForVideo(shot.Description); motion != "" {
+		parts = append(parts, motion)
 	}
-	if ac := strings.TrimSpace(shot.ActionContinue); ac != "" {
-		parts = append(parts, "action continuation: "+ac)
+
+	// 2) Continuity hook — keep short.
+	if ac := compressDescriptionForVideo(shot.ActionContinue); ac != "" && utf8.RuneCountInString(ac) <= 60 {
+		parts = append(parts, "from previous: "+ac)
 	}
+
+	// 3) Dialogue = lip/face performance only (audio from TTS later).
 	lines := storyboard.DialogueLinesForTTS(shot.Dialogue)
 	parts = appendDialogueVideoInstructions(parts, lines, humanSubject)
+
+	// 4) Punchy short-drama camera (never default to soft cinematic).
 	if cam := camera.MapCameraToVideoMotion(shot.Camera); cam != "" {
 		parts = append(parts, cam)
 	} else if humanSubject {
-		parts = append(parts, "subtle cinematic camera movement with natural character motion")
+		parts = append(parts, "aggressive vertical short-drama push-in on face, emotional close-up")
 	} else {
-		parts = append(parts, "subtle cinematic camera movement, slow environmental motion, inanimate subject")
+		parts = append(parts, "dynamic vertical short-drama camera, motivated environmental motion")
 	}
-	if len(parts) <= 2 {
+
+	// Fallback image prompt crumbs only if almost empty.
+	if len(parts) < 2 {
 		if trimmed := trimImagePromptForVideo(shot.Prompt); trimmed != "" {
 			parts = append(parts, trimmed)
 		}
 	}
-	if lit := strings.TrimSpace(shot.Lighting); lit != "" {
+
+	// 5) Lighting: keep concrete, drop abstract mood words.
+	if lit := compressLightingForVideo(shot.Lighting); lit != "" {
 		parts = append(parts, "lighting: "+lit)
 	}
-	if tr := strings.TrimSpace(shot.Transition); tr != "" {
-		parts = append(parts, "transition hint: "+tr)
-	}
 
-	// Temporal coherence + silent video (dialogue audio comes from TTS compose, not I2V).
+	// 6) 红果短剧视觉 DNA（图生视频专用，不要塞 UE5/Octane 静帧标签）.
+	parts = append(parts, hongguoVideoStyleTags(artStyle, stylePrompt)...)
+
+	// 7) Silent video + temporal coherence (short).
 	parts = append(parts,
 		"silent video no generated speech",
-		"no dialogue audio in video",
-		"Chinese story visuals only",
-		"temporal encoding enabled",
-		"keyframe interpolation smooth motion",
-		"feature anchoring from first frame",
+		"Chinese drama visuals only",
+		"smooth keyframe interpolation",
 		"frame-to-frame continuity",
-		"zero model mutation",
-		"smooth fluid animation",
-		"high quality cinematic motion",
+		"high clarity facial performance",
 	)
 
-	if styleAnchor != "" {
-		parts = append(parts, styleAnchor)
-	} else if stylePrompt != "" {
-		parts = append(parts, stylePrompt)
-	} else if artStyle != "" {
-		parts = append(parts, artStyle+" animation style")
-	}
 	if !humanSubject {
 		parts = append(parts, "no human character motion, object and environment only")
 	}
 
 	negative := strings.Join([]string{
-		"static image", "frozen frame", "slideshow", "still photo", "no motion",
+		"static image", "frozen frame", "slideshow", "still photo", "no motion", "boring slow motion",
+		"soft dreamy cinematic essay", "empty atmosphere shot", "vague mood without action",
 		"morphing", "warping", "flickering", "jitter", "stuttering", "low fps",
 		"blurry", "out of focus", "low quality", "low resolution",
 		"distorted face", "deformed body", "bad anatomy", "extra limbs",
-		"watermark", "text overlay", "logo",
+		"watermark", "text overlay", "logo", "subtitle",
 		"random color shift", "style drift", "temporal discontinuity",
 		"English speech", "English dialogue", "foreign language audio",
-		"voiceover", "narration", "spoken words", "talking audio", "subtitle",
+		"voiceover", "narration", "spoken words", "talking audio",
 		"action freeze mid-motion", "discontinuous movement",
+		"overstacked VFX particles without story", "generic fantasy MV montage",
 	}, ", ")
 	if humanSubject && hasSpeakableLines(lines) {
 		negative += ", closed mouth while speaking, static lips during dialogue, no lip sync, mute expression while talking, wrong speaker lip movement"
 	}
+	_ = styleAnchor // intentionally unused: UE5/style_anchor hurts I2V; use hongguoVideoStyleTags instead
 
 	return strings.Join(parts, ", "), negative
 }
 
+// hongguoVideoStyleTags returns vertical short-drama look tags for I2V (not still-image render jargon).
+func hongguoVideoStyleTags(artStyle, stylePrompt string) []string {
+	tags := []string{
+		"Chinese vertical short drama style",
+		"Hongguo Douyin short-series look",
+		"9:16 vertical framing",
+		"tight emotional close-up priority",
+		"high contrast punchy color",
+		"dramatic rim light",
+		"clear facial micro-expression",
+		"fast emotional beats",
+		"commercial short-drama production value",
+	}
+	if s := strings.TrimSpace(artStyle); s != "" {
+		tags = append(tags, s+" motion style")
+	}
+	// Keep only a short non-jargon crumb from art style prompt if present.
+	if crumb := trimImagePromptForVideo(stylePrompt); crumb != "" && utf8.RuneCountInString(crumb) <= 40 {
+		tags = append(tags, crumb)
+	}
+	return tags
+}
+
+// compressDescriptionForVideo strips literary labels and keeps physical action sentences.
+func compressDescriptionForVideo(desc string) string {
+	desc = strings.TrimSpace(desc)
+	if desc == "" {
+		return ""
+	}
+	desc = storyboardLabelRE.ReplaceAllString(desc, "")
+	desc = strings.ReplaceAll(desc, "【", "")
+	desc = strings.ReplaceAll(desc, "】", "")
+	// Prefer the first concrete sentence; drop empty fragments.
+	parts := strings.FieldsFunc(desc, func(r rune) bool {
+		return r == '。' || r == '；' || r == '\n' || r == '!' || r == '！'
+	})
+	kept := make([]string, 0, 2)
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if isLiteraryMoodOnly(p) {
+			continue
+		}
+		kept = append(kept, p)
+		if len(kept) >= 2 {
+			break
+		}
+	}
+	out := strings.Join(kept, "。")
+	if out == "" {
+		out = strings.TrimSpace(desc)
+	}
+	if utf8.RuneCountInString(out) > 120 {
+		out = string([]rune(out)[:120]) + "…"
+	}
+	return out
+}
+
+func isLiteraryMoodOnly(s string) bool {
+	moodOnly := []string{
+		"悲愤欲绝", "几近破碎", "情绪崩溃", "滔天怒火", "杀意沸腾", "心境崩塌",
+		"威压", "神念", "气势逼人", "无风起浪", "氛围压抑", "沉重气氛",
+	}
+	hasMood := false
+	for _, m := range moodOnly {
+		if strings.Contains(s, m) {
+			hasMood = true
+			break
+		}
+	}
+	if !hasMood {
+		return false
+	}
+	// If it also has a concrete verb/object change, keep it.
+	concrete := []string{"抬", "跪", "推", "抓", "碎", "裂", "站", "冲", "握", "泪", "瞳", "发", "光", "灰", "拳", "吼"}
+	for _, c := range concrete {
+		if strings.Contains(s, c) {
+			return false
+		}
+	}
+	return true
+}
+
+func compressLightingForVideo(lit string) string {
+	lit = strings.TrimSpace(lit)
+	if lit == "" {
+		return ""
+	}
+	lit = storyboardLabelRE.ReplaceAllString(lit, "")
+	if utf8.RuneCountInString(lit) > 48 {
+		lit = string([]rune(lit)[:48])
+	}
+	return lit
+}
+
 // formatBeatsForVideoPrompt renders an intra-shot timed action plan as an explicit
-// time-node instruction so a single generation animates the whole sequence in order,
-// e.g. "timed sequence over 12.0s: [0.0s] ...; [4.0s] ...; [8.0s] ...".
+// time-node instruction so a single generation animates the whole sequence in order.
 func formatBeatsForVideoPrompt(beats []task.ShotBeat, dur float64) string {
 	if len(beats) < 2 {
 		return ""
 	}
 	nodes := make([]string, 0, len(beats))
 	for _, b := range beats {
-		action := strings.TrimSpace(b.Action)
+		action := compressBeatActionForVideo(b.Action)
 		if action == "" {
 			continue
 		}
@@ -106,11 +213,34 @@ func formatBeatsForVideoPrompt(beats []task.ShotBeat, dur float64) string {
 	if len(nodes) < 2 {
 		return ""
 	}
-	header := "timed sequence"
+	header := "timed action beats"
 	if dur > 0 {
-		header = fmt.Sprintf("timed sequence over %.1fs", dur)
+		header = fmt.Sprintf("timed action beats over %.1fs", dur)
 	}
-	return header + ": " + strings.Join(nodes, "; ") + "; continuous seamless motion between beats, no cuts"
+	return header + ": " + strings.Join(nodes, "; ") + "; continuous motion between beats, no cuts"
+}
+
+func compressBeatActionForVideo(action string) string {
+	action = strings.TrimSpace(action)
+	if action == "" {
+		return ""
+	}
+	action = storyboardLabelRE.ReplaceAllString(action, "")
+	// Normalize "画面：… 动作：… 反应：…" into a compact physical chain.
+	if beatSectionRE.MatchString(action) {
+		action = beatSectionRE.ReplaceAllStringFunc(action, func(m string) string {
+			m = strings.TrimSpace(m)
+			m = strings.TrimSuffix(m, "：")
+			m = strings.TrimSuffix(m, ":")
+			return " → " + m + ":"
+		})
+		action = strings.TrimPrefix(strings.TrimSpace(action), "→ ")
+		action = strings.ReplaceAll(action, "  ", " ")
+	}
+	if utf8.RuneCountInString(action) > 90 {
+		action = string([]rune(action)[:90]) + "…"
+	}
+	return action
 }
 
 func resolveShotDialogue(shot *storyboard.ShotMeta) []storyboard.ParsedDialogue {
@@ -141,15 +271,15 @@ func appendDialogueVideoInstructions(parts []string, lines []storyboard.ParsedDi
 		if speaker == "" {
 			speaker = "角色"
 		}
-		line := truncateDialogueForVideoPrompt(dialogue.PureText, 80)
+		line := truncateDialogueForVideoPrompt(dialogue.PureText, 24)
 		parts = append(parts,
-			fmt.Sprintf("角色%s口型与表情表演，中文台词：%s", speaker, line),
-			fmt.Sprintf("%s说话时自然唇形与下颌运动，动作连贯不中断", speaker),
+			fmt.Sprintf("%s近景口型表演，短句气声/怒吼：%s", speaker, line),
+			fmt.Sprintf("%s说话时唇形与下颌清晰运动，表情夸张可读", speaker),
 		)
 	}
 	parts = append(parts,
-		"仅口型与肢体表演，视频中禁止生成任何语音或旁白",
-		"无声画面配合口型运动，不要英文对白音频",
+		"仅口型与肢体表演，视频禁止生成任何语音",
+		"无声画面，不要英文对白音频",
 	)
 	return parts
 }
@@ -177,7 +307,8 @@ func trimImagePromptForVideo(prompt string) string {
 		"unreal engine", "octane render", "ambient occlusion", "subsurface scattering",
 		"pbr", "8k", "global illumination", "volumetric", "bokeh", "character_id",
 		"style: consistent", "high fidelity", "consistent lighting", "consistent character",
-		"widescreen", "vertical", "unified color",
+		"widescreen", "vertical", "unified color", "global style embedding",
+		"zero model mutation", "cinematic color grade",
 	}
 	segments := strings.Split(prompt, ",")
 	kept := make([]string, 0, 4)

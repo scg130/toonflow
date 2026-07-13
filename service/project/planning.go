@@ -137,7 +137,7 @@ func SplitEpisodes(ctx context.Context, db *sql.DB, v adapter.Vendor, _ *skill.M
 	core.ReportProgress(ctx, "split_episodes", 20, "AI 规划分集方案...")
 
 	prompt := fmt.Sprintf(`根据以下小说原文和事件，规划短剧分集方案。
-默认画风: %s，画面比例: %s，每集目标时长 2-3 分钟。
+默认画风: %s，画面比例: %s，每集目标时长 5 分钟（4分40秒–5分10秒，红果风格）。
 
 %s
 
@@ -145,11 +145,12 @@ func SplitEpisodes(ctx context.Context, db *sql.DB, v adapter.Vendor, _ *skill.M
 - episode_num (int)
 - title (string) 如 "EP01: xxx"
 - events_ref (string) 本集涵盖的事件摘要
-- target_duration_minutes (float)
-- target_words (int)
+- target_duration_minutes (float) 默认 5
+- target_words (int) 约 800–1200
 - video_ratio (string)
 - art_style (string)
 
+每集须能支撑：开场钩子→背景→矛盾升级→反转→高潮→结尾钩子，约 18–25 个镜头。
 只输出 JSON 数组，不要其他文字。`, artStyle, ratio, corpus.String())
 
 	resp, err := v.TextRequest(ctx, adapter.DefaultTextModel, adapter.TextParams{
@@ -186,10 +187,10 @@ func SplitEpisodes(ctx context.Context, db *sql.DB, v adapter.Vendor, _ *skill.M
 	var episodes []Episode
 	for _, p := range plans {
 		if p.TargetDurationMinutes <= 0 {
-			p.TargetDurationMinutes = 3
+			p.TargetDurationMinutes = 5
 		}
 		if p.TargetWords <= 0 {
-			p.TargetWords = 450
+			p.TargetWords = 900
 		}
 		if p.VideoRatio == "" {
 			p.VideoRatio = ratio

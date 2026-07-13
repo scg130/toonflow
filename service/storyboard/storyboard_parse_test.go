@@ -1,10 +1,12 @@
 package storyboard
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
 
+	"toonflow/service/internal/duration"
 	"toonflow/task"
 )
 
@@ -162,21 +164,24 @@ func TestEnsureShotBeatsDensifiesToTwo(t *testing.T) {
 
 func TestMinShotsForScript(t *testing.T) {
 	short := MinShotsForScript("简短剧本")
-	if short < 3 {
-		t.Fatalf("expected min 3 for short script, got %d", short)
+	if short < 6 {
+		t.Fatalf("expected min 6 for short script, got %d", short)
 	}
 	long := strings.Repeat("这是一段较长的剧本内容，包含对白和动作描述。", 100)
 	got := MinShotsForScript(long)
-	if got < 3 || got > 12 {
-		t.Fatalf("long-shot min should stay in 3–12 for dense strategy, got %d", got)
+	if got < duration.TargetShotsMin || got > duration.TargetShotsMax {
+		t.Fatalf("5-min script min should stay in %d–%d, got %d", duration.TargetShotsMin, duration.TargetShotsMax, got)
 	}
-	// Old /180 rule would have asked for many more; denser long-shot rule must be leaner.
-	if got >= len([]rune(long))/180 {
-		t.Fatalf("min shots too high for long-shot strategy: got %d", got)
+	scenes := "### 场次1：开场钩子\n对白\n### 场次2：矛盾升级\n动作\n### 场次3：第一次反转\n反转\n### 场次4：高潮冲突\n高潮\n### 场次5：结尾钩子\n钩子"
+	if MinShotsForScript(scenes) < 12 {
+		t.Fatalf("expected denser min from six-act headers, got %d", MinShotsForScript(scenes))
 	}
-	scenes := "【第一场 柳树下】\n对白\n【第二场 战场】\n动作\n【第三场 回忆】\n结尾"
-	if MinShotsForScript(scenes) < 3 {
-		t.Fatalf("expected at least scene count")
+	marked := ""
+	for i := 1; i <= 20; i++ {
+		marked += fmt.Sprintf("【镜头%d】\n画面：x\n", i)
+	}
+	if n := MinShotsForScript(marked); n != 20 {
+		t.Fatalf("shot markers should drive count, got %d", n)
 	}
 }
 

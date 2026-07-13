@@ -232,7 +232,7 @@ func (a *AgentChat) buildSystemPrompt(stage, projectCtx string) string {
 }
 
 func (a *AgentChat) buildWorkGenerationSystemPrompt(projectID, episodeID string) string {
-	return fmt.Sprintf(`你是专业的抖音 AI 3D 短剧策划编剧。根据项目资料生成高质量 Markdown 正文。
+	return fmt.Sprintf(`你是专业的红果风格 5 分钟短剧策划编剧。根据项目资料生成高质量 Markdown 正文。
 
 项目背景:
 %s
@@ -241,8 +241,8 @@ func (a *AgentChat) buildWorkGenerationSystemPrompt(projectID, episodeID string)
 - 只输出正文（骨架/策略/剧本内容），使用 Markdown 格式
 - 禁止输出 ACTION、SHOT 等控制指令
 - 禁止输出「请在右侧面板查看」等元提示
-- 策划须适配 AI 生图局限：短镜头（1–3s）、台词单句≤10字、抽象情绪改写成可见画面元素
-- 节奏遵守：3秒抓人、15秒小爆、结尾强悬念`, a.buildProjectContext(projectID, episodeID, "planning"))
+- 单集按六段结构：开场钩子→背景→矛盾升级→反转→高潮→结尾钩子（约 5 分钟，18–25 镜）
+- 台词口语短句；保留冲突动作与情绪反转；结尾必有下集钩子`, a.buildProjectContext(projectID, episodeID, "planning"))
 }
 
 func (a *AgentChat) buildProjectContext(projectID, episodeID, stage string) string {

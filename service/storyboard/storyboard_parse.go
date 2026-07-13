@@ -20,6 +20,7 @@ var (
 	reTableShotID = regexp.MustCompile(`(?i)^(?:VC|SC|S)?(\d+)$`)
 	reActHeader   = regexp.MustCompile(`【([^】]+)】`)
 	reVCInText    = regexp.MustCompile(`(?i)\bVC\d+\b`)
+	reShotMarker  = regexp.MustCompile(`【\s*镜头\s*\d+`)
 )
 
 // NormalizeStoryboardItems fills defaults and fixes shot numbers.
@@ -80,7 +81,7 @@ func CapShotBeats(beats []task.ShotBeat, dur float64, description string) []task
 }
 
 func targetBeatCount(dur float64) int {
-	// 5–11s → 2 keyframes; 12s+ → 3 (Agnes hard cap).
+	// 8–11s dialogue/setup → 2 keyframes; 12–15s conflict/twist → 3 (Agnes hard cap).
 	if dur >= 12 {
 		return duration.MaxBeatsPerShot
 	}
@@ -550,21 +551,39 @@ func LooksLikeStoryboardTable(text string) bool {
 	return strings.Contains(text, "|") && (reVCInText.MatchString(text) || strings.Contains(text, "镜头号"))
 }
 
-// MinShotsForScript estimates how many LONG shots a script should yield under the
-// keyframe strategy (10–18s/shot, multi beats). Prefer fewer, denser shots.
+// MinShotsForScript estimates shot count for a 5-minute episode (target 18–25).
+// Prefer clear information-advancing shots over overcut one-liners.
 func MinShotsForScript(script string) int {
 	script = strings.TrimSpace(script)
 	if script == "" {
-		return 3
+		return 6
 	}
+
+	if markers := len(reShotMarker.FindAllStringIndex(script, -1)); markers >= 12 {
+		if markers > duration.TargetShotsMax {
+			return duration.TargetShotsMax
+		}
+		return markers
+	}
+
 	runeCount := len([]rune(script))
-	// Roughly one long shot per ~400–500 Chinese chars (was /180 under short-shot rules).
-	byLength := runeCount / 450
-	if byLength < 3 {
-		byLength = 3
+	byLength := runeCount / 160
+	switch {
+	case runeCount < 400:
+		if byLength < 6 {
+			byLength = 6
+		}
+	case runeCount < 1200:
+		if byLength < 12 {
+			byLength = 12
+		}
+	default:
+		if byLength < duration.TargetShotsMin {
+			byLength = duration.TargetShotsMin
+		}
 	}
-	if byLength > 12 {
-		byLength = 12
+	if byLength > duration.TargetShotsMax {
+		byLength = duration.TargetShotsMax
 	}
 
 	sceneCount := 0
@@ -577,17 +596,25 @@ func MinShotsForScript(script string) int {
 			sceneCount++
 			continue
 		}
+		if strings.HasPrefix(line, "###") && (strings.Contains(line, "场") || strings.Contains(line, "钩子") || strings.Contains(line, "升级") || strings.Contains(line, "反转") || strings.Contains(line, "高潮")) {
+			sceneCount++
+			continue
+		}
 		if strings.HasPrefix(line, "【") && (strings.Contains(line, "场") || strings.Contains(line, "幕")) {
 			sceneCount++
 		}
 	}
-	// One long shot per scene is usually enough; allow a little room for dialogue scenes.
-	if sceneCount > 0 {
-		if sceneCount+1 > byLength {
-			return sceneCount + 1
+	// Six-act scripts often need ~3–4 shots per act → prefer higher of length vs scene*3.
+	if sceneCount >= 4 {
+		fromScenes := sceneCount * 3
+		if fromScenes > byLength {
+			byLength = fromScenes
 		}
-		if sceneCount > byLength {
-			return sceneCount
+		if byLength > duration.TargetShotsMax {
+			byLength = duration.TargetShotsMax
+		}
+		if byLength < duration.TargetShotsMin && runeCount >= 1200 {
+			byLength = duration.TargetShotsMin
 		}
 	}
 	return byLength
