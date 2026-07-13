@@ -82,14 +82,22 @@ func TestBuildShotVideoPrompt_withDialogue(t *testing.T) {
 	}
 }
 
-func TestBuildShotVideoPrompt_withDialogue_nonHuman(t *testing.T) {
+func TestBuildShotVideoPrompt_rejectsJunkDialogue(t *testing.T) {
 	shot := &storyboard.ShotMeta{
-		Description: "焦黑树桩在雷光中颤动",
-		Dialogue:    &task.ShotDialogue{Lines: []task.DialogueLine{{Speaker: "旁白", Text: "天地变色"}}},
+		Description: "石昊跪在树桩前",
+		Camera:      "特写",
+		Dialogue: &task.ShotDialogue{Lines: []task.DialogueLine{
+			{Speaker: "柳神", Text: "4565"},
+			{Speaker: "鸿帝", Text: "654"},
+			{Speaker: "石昊", Text: "柳神……"},
+		}},
 	}
-	pos, _ := buildShotVideoPrompt(shot, "3D动漫", "", "", false)
-	if strings.Contains(pos, "lip sync") || strings.Contains(pos, "口型") {
-		t.Fatalf("non-human shot should not include lip sync: %q", pos)
+	pos, _ := buildShotVideoPrompt(shot, "3D动漫", "", "", true)
+	if strings.Contains(pos, "4565") || strings.Contains(pos, "654") {
+		t.Fatalf("junk digit dialogue leaked into I2V prompt: %q", pos)
+	}
+	if !strings.Contains(pos, "柳神……") {
+		t.Fatalf("valid Chinese dialogue missing: %q", pos)
 	}
 }
 

@@ -280,6 +280,13 @@ func generateOneShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outp
 		return nil, err
 	}
 
+	// Agnes I2V often embeds unwanted speech/SFX; dialogue audio comes from TTS compose later.
+	if stripped := localFile + ".silent.mp4"; ffmpeg.StripAudio(localFile, stripped) == nil {
+		_ = os.Rename(stripped, localFile)
+	} else {
+		_ = os.Remove(stripped)
+	}
+
 	if probed, probeErr := ffmpeg.ProbeMediaDuration(localFile); probeErr == nil && probed > 0 {
 		duration = probed
 	}

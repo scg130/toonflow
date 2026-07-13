@@ -32,9 +32,11 @@ func buildShotVideoPrompt(shot *storyboard.ShotMeta, artStyle, stylePrompt, styl
 		parts = append(parts, motion)
 	}
 
-	// 2) Continuity hook — keep short.
+	// 2) Continuity hook — keep short; skip placeholder openers.
 	if ac := compressDescriptionForVideo(shot.ActionContinue); ac != "" && utf8.RuneCountInString(ac) <= 60 {
-		parts = append(parts, "from previous: "+ac)
+		if !isPlaceholderContinuity(ac) {
+			parts = append(parts, "from previous: "+ac)
+		}
 	}
 
 	// 3) Dialogue = lip/face performance only (audio from TTS later).
@@ -263,8 +265,12 @@ func appendDialogueVideoInstructions(parts []string, lines []storyboard.ParsedDi
 	if !humanSubject || !hasSpeakableLines(lines) {
 		return parts
 	}
+	added := 0
 	for _, dialogue := range lines {
 		if dialogue.Ignorable || strings.TrimSpace(dialogue.PureText) == "" {
+			continue
+		}
+		if !isSpeakableVideoLine(dialogue.PureText) {
 			continue
 		}
 		speaker := strings.TrimSpace(dialogue.Speaker)
@@ -276,12 +282,59 @@ func appendDialogueVideoInstructions(parts []string, lines []storyboard.ParsedDi
 			fmt.Sprintf("%s近景口型表演，短句气声/怒吼：%s", speaker, line),
 			fmt.Sprintf("%s说话时唇形与下颌清晰运动，表情夸张可读", speaker),
 		)
+		added++
+	}
+	if added == 0 {
+		return parts
 	}
 	parts = append(parts,
 		"仅口型与肢体表演，视频禁止生成任何语音",
 		"无声画面，不要英文对白音频",
 	)
 	return parts
+}
+
+// isSpeakableVideoLine rejects junk edits (digits-only, latin spam) that poison I2V lip-sync.
+func isSpeakableVideoLine(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	han := 0
+	digit := 0
+	letter := 0
+	for _, r := range text {
+		switch {
+		case r >= '0' && r <= '9':
+			digit++
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z'):
+			letter++
+		case r >= 0x4e00 && r <= 0x9fff:
+			han++
+		}
+	}
+	if han == 0 {
+		return false
+	}
+	if digit > han {
+		return false
+	}
+	if letter > 2*han {
+		return false
+	}
+	return true
+}
+
+func isPlaceholderContinuity(s string) bool {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "无")
+	s = strings.Trim(s, "（）() ：:")
+	s = strings.TrimSpace(s)
+	switch s {
+	case "", "开场", "无", "无（开场）", "开场。":
+		return true
+	}
+	return strings.HasPrefix(s, "开场") && utf8.RuneCountInString(s) <= 6
 }
 
 func truncateDialogueForVideoPrompt(text string, maxRunes int) string {

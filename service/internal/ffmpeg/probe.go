@@ -18,3 +18,13 @@ func ProbeMediaDuration(path string) (float64, error) {
 	}
 	return d, nil
 }
+
+// StripAudio remuxes video without an audio track (I2V often injects unwanted speech).
+func StripAudio(src, dest string) error {
+	cmd := exec.Command("ffmpeg", "-y", "-i", src, "-c:v", "copy", "-an", dest)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("strip audio: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
