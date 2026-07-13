@@ -217,3 +217,6 @@ type Vendor interface {
 ## License
 
 MIT
+
+# skills 参考
+  https://github.com/Emily2040/seedance-2.0/
