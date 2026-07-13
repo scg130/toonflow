@@ -102,6 +102,10 @@ func buildShotVideoPromptWithMode(shot *storyboard.ShotMeta, mode VideoMode, art
 		"action freeze mid-motion", "discontinuous movement",
 		"overstacked VFX particles without story", "generic fantasy MV montage",
 		"ignore last keyframe", "drift away from keyframe poses",
+		// Anti-slop: these vague words destabilize generation (seedance-2.0 anti-slop lexicon).
+		"cinematic", "epic", "beautiful", "dramatic", "stunning", "breathtaking",
+		"dynamic", "atmospheric", "magical", "professional", "masterpiece",
+		"8K", "ultra HD", "high quality", "trending on ArtStation",
 	}, ", ")
 	if humanSubject && hasSpeakableLines(lines) {
 		negative += ", closed mouth while speaking, static lips during dialogue, no lip sync, mute expression while talking, wrong speaker lip movement"
@@ -275,6 +279,12 @@ func compressBeatActionForVideo(action string) string {
 		return ""
 	}
 	action = storyboardLabelRE.ReplaceAllString(action, "")
+	// Strip anti-slop vague words (seedance-2.0 anti-slop lexicon).
+	antiSlop := []string{"电影感", "氛围感", "史诗感", "戏剧性", "震撼", "唯美", "大气", "高级感", "cinematic", "epic", "dramatic", "beautiful", "stunning", "breathtaking", "dynamic", "atmospheric", "magical", "masterpiece"}
+	for _, w := range antiSlop {
+		action = strings.ReplaceAll(action, w, "")
+	}
+	action = strings.TrimSpace(action)
 	// Normalize "画面：… 动作：… 反应：…" into a compact physical chain.
 	if beatSectionRE.MatchString(action) {
 		action = beatSectionRE.ReplaceAllStringFunc(action, func(m string) string {
