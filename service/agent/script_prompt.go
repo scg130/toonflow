@@ -2,44 +2,19 @@ package agent
 
 import (
 	"fmt"
+	"strings"
 
 	"toonflow/service/project"
+	"toonflow/skill"
 )
 
 // AIShortDramaScriptSystemPrompt is the system prompt for 5-minute 红果-style script extraction.
+// Body lives in skills/prompts/script_extract.md.
 func AIShortDramaScriptSystemPrompt() string {
-	return `你是5分钟短剧编剧，擅长将网文改造成红果风格短剧剧本。
-
-【目标】
-单集约5分钟（4分40秒–5分10秒），节奏紧凑，冲突明确，结尾有下集钩子。
-
-【硬性规则】
-1. 不要慢热铺垫，开头 25–30 秒内必须出现明确冲突/危机/羞辱/秘密。
-2. 删除大段景物描写、长段心理描写、无关支线。
-3. 保留：人物对话、关键动作、冲突升级、反转线索、身份/秘密。
-4. 台词口语化、短句为主；单句尽量 ≤12 字，适合短剧口播。
-5. 每集至少 3 个明显情绪点（羞辱/反转/震惊/愤怒/冷笑/崩溃）。
-6. 结尾必须留下集钩子。
-7. 不要写成「一句台词一个镜头」的短视频台词流；按剧情段落组织，一段落 2–5 个镜头任务。
-
-【单集六段结构（必须遵守）】
-| 时间段 | 段落 | 内容重点 | 镜头数建议 |
-| 0:00–0:25 | 开场钩子 | 冲突/危机/羞辱/秘密 | 2–3 |
-| 0:25–1:10 | 背景交代 | 谁、在哪、发生了什么 | 3–4 |
-| 1:10–2:00 | 矛盾升级 | 反派施压、主角被动 | 4–5 |
-| 2:00–3:00 | 第一次反转 | 线索/亮身份/反击 | 4–5 |
-| 3:00–4:20 | 高潮冲突 | 对峙、打脸、秘密揭开 | 5–6 |
-| 4:20–5:00 | 结尾钩子 | 新危机、下集悬念 | 2–3 |
-合计约 18–25 个镜头任务（剧本层预埋，供后续分镜）。
-
-【每个镜头块必须有】
-画面（可见）+ 台词 + 动作（冲突动作：扇门/摔东西/对峙/跪下/拿出证据/撕合同/当众羞辱…）+ 情绪（隐忍/震惊/嚣张/轻蔑/害怕/崩溃/冷笑…）
-
-【禁止】
-威压、神念、心境崩塌、杀意滔天等抽象词；改写为可见动作/表情/物品变化。
-
-【输出纪律】
-只输出 Markdown 正文，禁止 ACTION/控制指令/元提示。`
+	if s := strings.TrimSpace(skill.File("prompts/script_extract.md")); s != "" {
+		return s
+	}
+	return "你是5分钟短剧编剧。写可见动作与短台词，禁止抽象情绪词。只输出 Markdown 正文。"
 }
 
 // AIShortDramaScriptUserPrompt builds the user prompt for script generation.
@@ -53,88 +28,34 @@ func AIShortDramaScriptUserPrompt(title string, params project.EpisodeParams, co
 	if words <= 0 {
 		words = 900
 	}
-	return fmt.Sprintf(`为「%s」生成完整 5 分钟短剧剧本。
-目标时长: %.1f 分钟（约 %.0f 秒，允许 4:40–5:10），目标字数约 %d 字，画面比例 %s，画风 %s。
+	args := []any{title, durationMin, float64(durationSec), words, params.VideoRatio, params.ArtStyle,
+		contextText, skeleton, strategy, title}
+	if s := strings.TrimSpace(skill.Format("prompts/script_extract_user.md", args...)); s != "" {
+		return s
+	}
+	return fmt.Sprintf(`为「%s」生成完整 5 分钟短剧剧本。目标时长 %.1f 分钟。
 
 %s
 
-故事骨架:
+骨架:
 %s
 
-改编策略:
+策略:
 %s
 
-## 输出格式（严格遵守）
-
-# %s 短剧剧本
-题材：（豪门复仇 / 赘婿逆袭 / 婆媳虐渣 / 神医重生 / 其他，择一或自拟）
-单集时长：5分钟
-
-## 人物
-男主：
-女主：
-反派：
-配角：
-
-## 剧情梗概
-一句话讲清本集发生了什么。
-
-## 分场剧本
-
-按六段结构输出场次（开场钩子 / 背景交代 / 矛盾升级 / 第一次反转 / 高潮冲突 / 结尾钩子）。
-每场含：地点、时间、人物。
-
-每个镜头块格式：
-【镜头N】（对应时间码，如 0:00–0:12）
-画面：
-台词：
-动作：
-情绪：
-
-## 本集爽点
-1.
-2.
-3.
-
-## 下集钩子
-
-## 硬性自检
-- [ ] 开头 30 秒内有明确冲突/悬念？
-- [ ] 六段结构齐全且时间大致对齐？
-- [ ] 预埋镜头任务约 18–25 个（不过碎）？
-- [ ] ≥3 个情绪爽点 + 下集钩子？
-- [ ] 台词口语短句，无抽象情绪词？`,
-		title, durationMin, durationSec, words, params.VideoRatio, params.ArtStyle,
-		contextText, skeleton, strategy, title)
+输出含：分场剧本、本集爽点、下集钩子。`, title, durationMin, contextText, skeleton, strategy)
 }
 
 func skeletonPrompt() string {
-	return `请根据项目原文和当前集事件，生成「故事骨架」。使用 Markdown 格式。
-
-必须包含：
-1. **核心冲突**（一句话：谁对谁、因何、赌注）
-2. **人物**：男主 / 女主 / 反派 / 配角（身份与本集目标）
-3. **隐藏秘密**（本集可揭开或部分揭开）
-4. **六段节奏锚点**（5 分钟）：
-   - 0:00–0:25 开场钩子
-   - 0:25–1:10 背景交代
-   - 1:10–2:00 矛盾升级
-   - 2:00–3:00 第一次反转
-   - 3:00–4:20 高潮冲突
-   - 4:20–5:00 结尾钩子
-5. **本集 3 个爽点** + **下集钩子**
-6. 禁止慢热；禁止长心理/景物描写`
+	if s := strings.TrimSpace(skill.File("prompts/script_skeleton.md")); s != "" {
+		return s
+	}
+	return "请生成故事骨架，含六段节奏锚点与下集钩子。"
 }
 
 func strategyPrompt() string {
-	return `请根据故事骨架，生成「改编策略」。使用 Markdown 格式。
-
-必须包含：
-1. **小说→5分钟短剧压缩**：删什么、留什么、哪段合并
-2. **六段镜头配额**：每段 2–6 镜，全集聚 18–25 镜
-3. **冲突动作清单**：扇门/摔杯/对峙/跪下/亮证据/撕合同/当众羞辱等（本集至少用 4 个）
-4. **情绪点分配**：羞辱/反转/震惊/愤怒/冷笑/崩溃 落在哪一段
-5. **台词策略**：口语短句；单镜可 2–5 句；单句 ≤12 字
-6. **抽象→具象改写表**（至少 5 组）
-7. **AI 避坑**：避免一句一镜碎切；每个镜头承担一个明确任务（交代/冲突/情绪/证据/反转）`
+	if s := strings.TrimSpace(skill.File("prompts/script_strategy.md")); s != "" {
+		return s
+	}
+	return "请生成改编策略，镜头配额 18–25。"
 }

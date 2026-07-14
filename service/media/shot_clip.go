@@ -284,7 +284,8 @@ func ApplyContinuityToKeyframes(keyframeURLs []string, continuityFrame string, m
 }
 
 func prependAcceptedContinuityDirective(prompt string) string {
-	prefix := "first image is the accepted previous-clip ending — begin exactly from that pose and layout; preserve face identity, outfit, hairstyle, and scene layout; generate only the continuous transition toward the last keyframe"
+	prefix := videoI2VOneLine("continuity_accepted_prefix",
+		"first image is the accepted previous-clip ending — begin exactly from that pose and layout; preserve face identity, outfit, hairstyle, and scene layout; generate only the continuous transition toward the last keyframe")
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return prefix

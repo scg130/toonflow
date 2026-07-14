@@ -31,11 +31,11 @@ func ClassifyShotVideoMode(shot *storyboard.ShotMeta) VideoMode {
 	for _, b := range shot.Beats {
 		blob += " " + strings.ToLower(b.Action)
 	}
-	conflictHints := []string{
+	conflictHints := videoI2VLines("conflict_hints", []string{
 		"冲突", "打脸", "反转", "撕", "砸", "跪下", "冲", "打", "爆", "围攻",
 		"对峙", "追", "杀", "怒吼", "一拳", "战斗", "打斗", "高潮",
 		"push-in", "handheld", "dolly zoom", "slow-motion", "慢放", "手持", "急速",
-	}
+	})
 	for _, h := range conflictHints {
 		if strings.Contains(blob, strings.ToLower(h)) {
 			return VideoModeMultiframe

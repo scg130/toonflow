@@ -57,6 +57,7 @@ func main() {
 		log.Printf("Warning: failed to load skills: %v", err)
 	}
 	logger.Default.Info("system", "Skills loaded from "+cfg.SkillsDir)
+	skill.SetDefault(skillMgr)
 
 	// Resolve AI vendor from DB / environment
 	v := adapter.ResolveFromDB(db.DB, cfg.DefaultVendor)
