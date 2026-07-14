@@ -10,9 +10,9 @@ func TestMapCameraToVideoMotion_hongguoPunch(t *testing.T) {
 		in   string
 		want string
 	}{
-		{"", "aggressive"},
+		{"", "push-in"},
 		{"特写 推近", "close-up"},
-		{"推近 dolly in", "aggressive dolly push-in"},
+		{"推近 dolly in", "dolly push-in"},
 		{"手持", "handheld"},
 		{"仰拍", "low angle"},
 	}
@@ -23,6 +23,12 @@ func TestMapCameraToVideoMotion_hongguoPunch(t *testing.T) {
 		}
 		if strings.Contains(got, "subtle cinematic") || strings.Contains(got, "slow cinematic dolly") {
 			t.Fatalf("soft cinematic default leaked for %q: %q", tc.in, got)
+		}
+		lower := strings.ToLower(got)
+		for _, bad := range []string{"emotion", "emotional", "intensity", "rising emotion"} {
+			if strings.Contains(lower, bad) {
+				t.Fatalf("opaque emotion word %q in camera prompt for %q: %q", bad, tc.in, got)
+			}
 		}
 	}
 }

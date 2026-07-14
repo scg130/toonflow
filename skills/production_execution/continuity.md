@@ -12,6 +12,7 @@
 - 每镜必须输出 `lighting`（具象光影粒子）、`action_continue`（上镜末状态→本镜起始）、`transition`
 - description 格式：【目标】事件。【承接】因果。【结果】下镜铺垫
 - beat.action 格式：画面 / 动作 / 反应（禁止纯情绪词）
+- 同场景相邻镜标记 `scene_link=continuous`；换场才用 transition
 - 相邻镜头运镜方向延续，禁止前镜环绕后镜突然拉远
 - 同场景角色 `character_id` 与服饰特征全文不变
 
@@ -19,12 +20,16 @@
 
 - 全剧复用项目 `style_anchor`，禁止单镜随机画风偏移
 - 重绘仅允许动作微调，角色五官/服饰/场景光影不可变更
+- 先锁静帧（起幅/落幅），确认无身份漂移再进入图生视频
 
-## 时序层（I2V）
+## 时序层（I2V，Seedance 方法论，模型仍用项目现有栈）
 
-- Prompt 须含：`temporal encoding, keyframe interpolation, feature anchoring, frame-to-frame continuity`
-- 负向须含：`flickering, jitter, morphing, warping, stuttering`
-- 批量视频按镜号串行，上一镜末帧作为下一镜连贯参考
+- **接续门禁**：下一镜必须以已接受视频的真实尾帧为首帧，而不是规划关键帧臆想落点
+- **FLF2V**：首帧=起点锁定，尾帧=目标锁定；提示词只写两帧之间的一个物理动作路径
+- Prompt 须含：身份锁定（脸/服装/发型/场景布局）+ 单次运镜 + 仅本镜事件
+- 负向须含：`identity drift, jump cut, flicker, morphing, outfit change, face swap`
+- 批量视频按镜号串行；同场景（continuous 或同 scene 名）自动尾帧链式接续
+- 禁止空泛词：cinematic / epic / stunning（抗 slop）
 
 ## 成片层（剪辑 / 质检）
 

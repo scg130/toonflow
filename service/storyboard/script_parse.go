@@ -162,7 +162,8 @@ beat 语义（对应图生视频）：
 dialogue：{"lines":[{"speaker","text"},...]} 或 null；speaker=资产中文名；旁白禁止进 dialogue。
 
 ## 镜间
-continuous → soft dissolve；换场 → fade black | wipe | match cut。
+同场景必须 continuous → soft dissolve；仅换场用 transition → fade black | wipe | match cut。
+连续剧情禁止一口气写出多镜最终结果：每镜只承担一个可见任务。
 
 ## 输出
 仅 {"shots":[...]}。字段：shot_number, scene, description, camera, duration, prompt, lighting, action_continue, transition, scene_link, dialogue, asset_ids, beats[{time,action,image_prompt}]

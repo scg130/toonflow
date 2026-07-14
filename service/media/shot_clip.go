@@ -101,24 +101,25 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 	assets, _ := asset.LoadProjectAssets(db, projectID)
 	humanSubject := len(assets) == 0 || asset.ShotHasHumanRole(shotToItem(shot), assets)
 
-	// OnlyShot-style method: classify frames2 vs multiframe, then prompt for inter-keyframe motion.
-	// Vendor/models stay Agnes — same text/image/video stack as before.
 	mode := ClassifyShotVideoMode(shot)
-	prompt, negativePrompt := buildShotVideoPromptWithMode(shot, mode, artStyle, stylePrompt, styleAnchor, humanSubject)
-	logger.CtxTrace(ctx, "shot video prompt shot=%d mode=%s prompt=%s", shotNumber, mode, prompt)
-
 	width, height := videoSizeForRatio(videoRatio)
 
-	// Continuity: prepend previous shot's last keyframe for same-scene links.
+	// Continuity: Seedance rule — preferred input is ACCEPTED previous clip end-frame.
 	continuityFrame := ""
+	hasAcceptedContinuity := false
 	switch {
 	case opts != nil && adapter.IsCDNImageURL(opts.ContinuityImageURL):
 		continuityFrame = opts.ContinuityImageURL
+		hasAcceptedContinuity = true
 		logger.CtxTrace(ctx, "shot video continuity keyframe shot=%d url=%s", shotNumber, continuityFrame)
-	case shot.SceneLink == task.SceneLinkContinuous:
-		if url := resolvePrevShotLastKeyframe(ctx, db, outputDir, projectID, episodeID, shotNumber, v); url != "" {
+	case ShouldChainVideoContinuity(shot.SceneLink, shot.Scene, prevShotScene(db, projectID, episodeID, shotNumber)):
+		if url := resolvePrevShotContinuityFrame(ctx, db, v, outputDir, projectID, episodeID, shotNumber); url != "" {
 			continuityFrame = url
-			logger.CtxTrace(ctx, "shot video derived continuity keyframe shot=%d url=%s", shotNumber, continuityFrame)
+			hasAcceptedContinuity = true
+			logger.CtxTrace(ctx, "shot video accepted continuity frame shot=%d url=%s", shotNumber, continuityFrame)
+		} else if url := resolvePrevShotLastBeatOnly(db, projectID, episodeID, shotNumber); url != "" {
+			continuityFrame = url
+			logger.CtxTrace(ctx, "shot video planned keyframe continuity fallback shot=%d url=%s", shotNumber, continuityFrame)
 		}
 	}
 
@@ -130,25 +131,16 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 		return nil, fmt.Errorf("第 %d 镜尚未生成关键帧，请先锁定静帧再生成视频", shotNumber)
 	}
 	keyframeURLs = SelectKeyframesForMode(keyframeURLs, mode)
-	if continuityFrame != "" {
-		// Keep continuity as frame-0; drop one middle slot so Agnes ≤3 images.
-		if mode == VideoModeFrames2 {
-			keyframeURLs = []string{continuityFrame, keyframeURLs[len(keyframeURLs)-1]}
-		} else {
-			tail := SelectEvenKeyframeURLs(keyframeURLs, duration.MaxBeatsPerShot-1)
-			if len(tail) == 0 || tail[0] != continuityFrame {
-				keyframeURLs = append([]string{continuityFrame}, tail...)
-			} else {
-				keyframeURLs = tail
-			}
-			if len(keyframeURLs) > duration.MaxBeatsPerShot {
-				keyframeURLs = keyframeURLs[:duration.MaxBeatsPerShot]
-			}
-		}
-	}
+	keyframeURLs = ApplyContinuityToKeyframes(keyframeURLs, continuityFrame, mode)
 	if len(keyframeURLs) < 2 {
 		return nil, fmt.Errorf("第 %d 镜至少需要 2 张关键帧图片（建议先生成完整 beats 静帧），请先生成关键帧", shotNumber)
 	}
+
+	prompt, negativePrompt := buildShotVideoPromptWithMode(shot, mode, artStyle, stylePrompt, styleAnchor, humanSubject)
+	if hasAcceptedContinuity {
+		prompt = prependAcceptedContinuityDirective(prompt)
+	}
+	logger.CtxTrace(ctx, "shot video prompt shot=%d mode=%s prompt=%s", shotNumber, mode, prompt)
 
 	duration := ResolveShotVideoDuration(shot.Duration)
 	logger.CtxTrace(ctx, "shot video duration shot=%d requested=%.1fs", shotNumber, duration)
@@ -248,8 +240,8 @@ func shotToItem(shot *storyboard.ShotMeta) task.StoryboardItem {
 	}
 }
 
-// resolvePrevShotLastKeyframe returns the previous shot's last beat CDN URL for continuity.
-func resolvePrevShotLastKeyframe(ctx context.Context, db *sql.DB, outputDir, projectID, episodeID string, shotNumber int, v adapter.Vendor) string {
+// resolvePrevShotLastBeatOnly returns previous shot's last planned keyframe CDN URL (no video extract).
+func resolvePrevShotLastBeatOnly(db *sql.DB, projectID, episodeID string, shotNumber int) string {
 	if shotNumber <= 1 {
 		return ""
 	}
@@ -257,10 +249,54 @@ func resolvePrevShotLastKeyframe(ctx context.Context, db *sql.DB, outputDir, pro
 	if err != nil || prev == nil {
 		return ""
 	}
-	if u := LastBeatCDNURL(prev); u != "" {
+	return LastBeatCDNURL(prev)
+}
+
+func prevShotScene(db *sql.DB, projectID, episodeID string, shotNumber int) string {
+	if shotNumber <= 1 {
+		return ""
+	}
+	prev, err := storyboard.LoadShot(db, projectID, episodeID, shotNumber-1)
+	if err != nil || prev == nil {
+		return ""
+	}
+	return strings.TrimSpace(prev.Scene)
+}
+
+// ApplyContinuityToKeyframes puts accepted/previous frame as I2V start lock (Agnes ≤3 images).
+func ApplyContinuityToKeyframes(keyframeURLs []string, continuityFrame string, mode VideoMode) []string {
+	if continuityFrame == "" || len(keyframeURLs) == 0 {
+		return keyframeURLs
+	}
+	if mode == VideoModeFrames2 {
+		return []string{continuityFrame, keyframeURLs[len(keyframeURLs)-1]}
+	}
+	tail := SelectEvenKeyframeURLs(keyframeURLs, duration.MaxBeatsPerShot-1)
+	if len(tail) == 0 || tail[0] != continuityFrame {
+		keyframeURLs = append([]string{continuityFrame}, tail...)
+	} else {
+		keyframeURLs = tail
+	}
+	if len(keyframeURLs) > duration.MaxBeatsPerShot {
+		keyframeURLs = keyframeURLs[:duration.MaxBeatsPerShot]
+	}
+	return keyframeURLs
+}
+
+func prependAcceptedContinuityDirective(prompt string) string {
+	prefix := "first image is the accepted previous-clip ending — begin exactly from that pose and layout; preserve face identity, outfit, hairstyle, and scene layout; generate only the continuous transition toward the last keyframe"
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return prefix
+	}
+	return prefix + "; " + prompt
+}
+
+// resolvePrevShotLastKeyframe returns the previous shot's last beat CDN URL for continuity.
+func resolvePrevShotLastKeyframe(ctx context.Context, db *sql.DB, outputDir, projectID, episodeID string, shotNumber int, v adapter.Vendor) string {
+	if u := resolvePrevShotLastBeatOnly(db, projectID, episodeID, shotNumber); u != "" {
 		return u
 	}
-	// Fallback: extract last frame from previous clip if keyframes missing.
 	return resolvePrevShotContinuityFrame(ctx, db, v, outputDir, projectID, episodeID, shotNumber)
 }
 

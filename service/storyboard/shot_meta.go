@@ -10,6 +10,7 @@ import (
 // ShotMeta holds one storyboard shot's generation fields.
 type ShotMeta struct {
 	ShotNumber     int
+	Scene          string
 	Description    string
 	Dialogue       *task.ShotDialogue
 	Prompt         string
@@ -43,6 +44,7 @@ func LoadShot(db *sql.DB, projectID, episodeID string, shotNumber int) (*ShotMet
 		if it.ShotNumber == shotNumber {
 			return &ShotMeta{
 				ShotNumber:     it.ShotNumber,
+				Scene:          it.Scene,
 				Description:    it.Description,
 				Dialogue:       it.Dialogue,
 				Prompt:         it.Prompt,

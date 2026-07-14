@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"toonflow/adapter"
@@ -13,7 +14,6 @@ import (
 	"toonflow/service/core"
 	"toonflow/service/internal/fsutil"
 	"toonflow/service/storyboard"
-	"toonflow/task"
 )
 
 const (
@@ -64,12 +64,13 @@ func GenerateShotClipsSequential(ctx context.Context, db *sql.DB, v adapter.Vend
 		return nil, err
 	}
 
-	// scene_link per shot decides continuity: only "continuous" shots inherit the
-	// previous shot's last frame; "transition" shots render from their own image.
+	// scene_link / same-scene decide continuity: chain from accepted previous end frame.
 	linkByShot := map[int]string{}
+	sceneByShot := map[int]string{}
 	if items, ldErr := storyboard.LoadStoryboardItems(db, projectID, episodeID); ldErr == nil {
 		for _, it := range items {
 			linkByShot[it.ShotNumber] = it.SceneLink
+			sceneByShot[it.ShotNumber] = strings.TrimSpace(it.Scene)
 		}
 	}
 
@@ -110,11 +111,17 @@ func GenerateShotClipsSequential(ctx context.Context, db *sql.DB, v adapter.Vend
 		core.ReportStepProgress(ctx, localPct,
 			fmt.Sprintf("正在生成第 %d 镜视频 (%d/%d)", shotNum, i+1, total))
 
-		// Only continue from the previous frame when THIS shot is a same-scene link.
+		// Only continue from the previous accepted frame when this shot should chain.
 		cont := ""
-		if i > 0 && continuityURL != "" && linkByShot[shotNum] == task.SceneLinkContinuous {
-			cont = continuityURL
-			logger.CtxTrace(ctx, "batch video shot=%d continuous, chaining previous last frame", shotNum)
+		if i > 0 && continuityURL != "" {
+			prevScene := ""
+			if i > 0 {
+				prevScene = sceneByShot[ordered[i-1]]
+			}
+			if ShouldChainVideoContinuity(linkByShot[shotNum], sceneByShot[shotNum], prevScene) {
+				cont = continuityURL
+				logger.CtxTrace(ctx, "batch video shot=%d chaining accepted previous last frame", shotNum)
+			}
 		}
 
 		clip, err := generateShotClipUntilSuccess(ctx, db, v, outputDir, projectID, episodeID, shotNum, cont)
@@ -127,26 +134,28 @@ func GenerateShotClipsSequential(ctx context.Context, db *sql.DB, v adapter.Vend
 		core.ReportStepProgress(ctx, donePct,
 			fmt.Sprintf("第 %d 镜视频完成 (%d/%d)", shotNum, i+1, total))
 
-		// Prepare continuity keyframe for the next same-scene shot.
+		// Seedance continuation: next clip must start from ACCEPTED footage end-state,
+		// not the planned storyboard keyframe (model may not land on the planned pose).
 		continuityURL = ""
-		if i+1 < total && linkByShot[ordered[i+1]] == task.SceneLinkContinuous {
-			if prevShot, ldErr := storyboard.LoadShot(db, projectID, episodeID, shotNum); ldErr == nil {
-				if u := LastBeatCDNURL(prevShot); u != "" {
-					continuityURL = u
-					logger.CtxTrace(ctx, "batch video shot=%d last beat keyframe for next shot", shotNum)
-					continue
+		if i+1 < total && ShouldChainVideoContinuity(linkByShot[ordered[i+1]], sceneByShot[ordered[i+1]], sceneByShot[shotNum]) {
+			local, ok := fsutil.PublicURLToLocal(outputDir, clip.FileURL)
+			if ok {
+				nextURL, pubErr := ContinuityFrameFromClip(ctx, v, outputDir, local, workDir, shotNum)
+				if pubErr != nil {
+					logger.CtxTrace(ctx, "continuity frame failed shot=%d: %v", shotNum, pubErr)
+				} else {
+					continuityURL = nextURL
+					logger.CtxTrace(ctx, "batch video shot=%d accepted last-frame for next shot", shotNum)
 				}
 			}
-			local, ok := fsutil.PublicURLToLocal(outputDir, clip.FileURL)
-			if !ok {
-				continue
+			if continuityURL == "" {
+				if prevShot, ldErr := storyboard.LoadShot(db, projectID, episodeID, shotNum); ldErr == nil {
+					if u := LastBeatCDNURL(prevShot); u != "" {
+						continuityURL = u
+						logger.CtxTrace(ctx, "batch video shot=%d fallback last beat keyframe for next shot", shotNum)
+					}
+				}
 			}
-			nextURL, pubErr := ContinuityFrameFromClip(ctx, v, outputDir, local, workDir, shotNum)
-			if pubErr != nil {
-				logger.CtxTrace(ctx, "continuity frame failed shot=%d: %v", shotNum, pubErr)
-				continue
-			}
-			continuityURL = nextURL
 		}
 	}
 

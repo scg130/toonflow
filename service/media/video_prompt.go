@@ -25,63 +25,68 @@ func buildShotVideoPrompt(shot *storyboard.ShotMeta, artStyle, stylePrompt, styl
 }
 
 func buildShotVideoPromptWithMode(shot *storyboard.ShotMeta, mode VideoMode, artStyle, stylePrompt, styleAnchor string, humanSubject bool) (string, string) {
-	parts := make([]string, 0, 16)
+	parts := make([]string, 0, 20)
 
-	// 1) Inter-keyframe motion (frames2 = start→end; multiframe = ordered morph).
+	// Seedance FLF2V / I2V: describe ONLY transition — identity already locked in images.
+	parts = append(parts,
+		"image1 is first frame lock, imageN is last frame target",
+		"generate only continuous motion between locked frames",
+		"preserve subject identity, face structure, outfit, hairstyle, and scene layout",
+		"do not redesign character or room; no new objects unless the action requires them",
+	)
+
 	beats := BeatActionsForMode(shot.Beats, mode)
 	if motion := formatInterKeyframeMotion(beats, shot.Duration, mode); motion != "" {
 		parts = append(parts, motion)
 	} else if m := compressDescriptionForVideo(shot.Description); m != "" {
-		parts = append(parts, "physical action only: "+m)
+		parts = append(parts, "this clip only physical action: "+m)
 	}
 
 	parts = append(parts,
-		"preserve first-frame composition as start lock",
-		"end frame must match last keyframe pose and layout",
-		"continuous seamless interpolation, no hard cuts",
-		"readable body language and facial micro-expression",
+		"one physical action path, no hard cuts inside the clip",
+		"end pose must land on the last keyframe",
+		"brows lids lips and jaw move; shoulders and hands shift clearly",
+		"this clip only — do not jump ahead to later story beats",
 	)
 
-	// 2) Continuity hook — keep short; skip placeholder openers.
 	if ac := compressDescriptionForVideo(shot.ActionContinue); ac != "" && utf8.RuneCountInString(ac) <= 60 {
 		if !isPlaceholderContinuity(ac) {
-			parts = append(parts, "from previous: "+ac)
+			parts = append(parts, "handoff from previous ending: "+ac)
 		}
 	}
 
-	// 3) Dialogue = lip/face performance only (audio from TTS later).
 	lines := storyboard.DialogueLinesForTTS(shot.Dialogue)
 	parts = appendDialogueVideoInstructions(parts, lines, humanSubject)
 
-	// 4) Punchy short-drama camera.
+	// One controlled camera move (Seedance: avoid camera chaos).
 	if cam := camera.MapCameraToVideoMotion(shot.Camera); cam != "" {
 		parts = append(parts, cam)
 	} else if humanSubject {
-		parts = append(parts, "aggressive vertical short-drama push-in on face, emotional close-up")
+		parts = append(parts, "one slow vertical short-drama push-in on face")
 	} else {
-		parts = append(parts, "dynamic vertical short-drama camera, motivated environmental motion")
+		parts = append(parts, "locked or one motivated vertical short-drama camera move")
 	}
 
-	if len(parts) < 3 {
+	if len(parts) < 5 {
 		if trimmed := trimImagePromptForVideo(shot.Prompt); trimmed != "" {
 			parts = append(parts, trimmed)
 		}
 	}
 
 	if lit := compressLightingForVideo(shot.Lighting); lit != "" {
-		parts = append(parts, "lighting: "+lit)
+		parts = append(parts, "lighting continuity: "+lit)
 	}
 
 	parts = append(parts, hongguoVideoStyleTags(artStyle, stylePrompt)...)
 	parts = append(parts,
 		"silent video no generated speech",
 		"Chinese drama visuals only",
-		"smooth keyframe interpolation",
+		"smooth temporal interpolation",
 		"frame-to-frame continuity",
-		"high clarity facial performance",
+		"clear brows lids lips and hand motion",
 	)
 	if mode == VideoModeFrames2 {
-		parts = append(parts, "two-keyframe morph first-to-last only")
+		parts = append(parts, "FLF2V two-frame morph first-to-last only")
 	} else {
 		parts = append(parts, "multi-keyframe continuous action take")
 	}
@@ -95,14 +100,15 @@ func buildShotVideoPromptWithMode(shot *storyboard.ShotMeta, mode VideoMode, art
 		"morphing", "warping", "flickering", "jitter", "stuttering", "low fps",
 		"blurry", "out of focus", "low quality", "low resolution",
 		"distorted face", "deformed body", "bad anatomy", "extra limbs",
+		"identity drift", "face swap mid-clip", "outfit change", "hairstyle change",
+		"room redesign", "background swap", "new character appear",
 		"watermark", "text overlay", "logo", "subtitle",
-		"random color shift", "style drift", "temporal discontinuity",
+		"random color shift", "style drift", "temporal discontinuity", "jump cut",
 		"English speech", "English dialogue", "foreign language audio",
 		"voiceover", "narration", "spoken words", "talking audio",
 		"action freeze mid-motion", "discontinuous movement",
 		"overstacked VFX particles without story", "generic fantasy MV montage",
 		"ignore last keyframe", "drift away from keyframe poses",
-		// Anti-slop: these vague words destabilize generation (seedance-2.0 anti-slop lexicon).
 		"cinematic", "epic", "beautiful", "dramatic", "stunning", "breathtaking",
 		"dynamic", "atmospheric", "magical", "professional", "masterpiece",
 		"8K", "ultra HD", "high quality", "trending on ArtStation",
@@ -112,7 +118,8 @@ func buildShotVideoPromptWithMode(shot *storyboard.ShotMeta, mode VideoMode, art
 	}
 	_ = styleAnchor
 
-	return strings.Join(parts, ", "), negative
+	pos := rewriteEmotionToPhysical(strings.Join(parts, ", "))
+	return pos, negative
 }
 
 // formatInterKeyframeMotion describes physical change BETWEEN locked stills (not a prose summary).
@@ -143,7 +150,7 @@ func formatInterKeyframeMotion(beats []task.ShotBeat, dur float64, mode VideoMod
 		if len(nodes) == 1 {
 			return "image-to-video motion" + durHint + ": animate from locked start frame — " + nodes[0].a
 		}
-		return "frames2video motion" + durHint + ": start[" + nodes[0].a + "] → end[" + nodes[len(nodes)-1].a + "]; interpolate only the physical change between these two locked frames"
+		return "FLF2V motion" + durHint + ": start[" + nodes[0].a + "] → end[" + nodes[len(nodes)-1].a + "]; only the physical transition between these two locked frames"
 	}
 	parts := make([]string, 0, len(nodes))
 	for _, n := range nodes {
@@ -158,11 +165,11 @@ func hongguoVideoStyleTags(artStyle, stylePrompt string) []string {
 		"Chinese vertical short drama style",
 		"Hongguo Douyin short-series look",
 		"9:16 vertical framing",
-		"tight emotional close-up priority",
+		"tight face fill vertical frame",
 		"high contrast punchy color",
-		"dramatic rim light",
-		"clear facial micro-expression",
-		"fast emotional beats",
+		"side rim light on cheek edge",
+		"brows lids lips move on cue",
+		"fast readable body beats",
 		"commercial short-drama production value",
 	}
 	if s := strings.TrimSpace(artStyle); s != "" {
@@ -206,6 +213,7 @@ func compressDescriptionForVideo(desc string) string {
 	if out == "" {
 		out = strings.TrimSpace(desc)
 	}
+	out = rewriteEmotionToPhysical(out)
 	if utf8.RuneCountInString(out) > 120 {
 		out = string([]rune(out)[:120]) + "…"
 	}
@@ -296,6 +304,7 @@ func compressBeatActionForVideo(action string) string {
 		action = strings.TrimPrefix(strings.TrimSpace(action), "→ ")
 		action = strings.ReplaceAll(action, "  ", " ")
 	}
+	action = rewriteEmotionToPhysical(action)
 	if utf8.RuneCountInString(action) > 90 {
 		action = string([]rune(action)[:90]) + "…"
 	}
@@ -336,8 +345,8 @@ func appendDialogueVideoInstructions(parts []string, lines []storyboard.ParsedDi
 		}
 		line := truncateDialogueForVideoPrompt(dialogue.PureText, 24)
 		parts = append(parts,
-			fmt.Sprintf("%s近景口型表演，短句气声/怒吼：%s", speaker, line),
-			fmt.Sprintf("%s说话时唇形与下颌清晰运动，表情夸张可读", speaker),
+			fmt.Sprintf("%s近景张嘴说短句，下颌开合清晰：%s", speaker, line),
+			fmt.Sprintf("%s唇形随字咬合开合，眉头与下颌同步位移", speaker),
 		)
 		added++
 	}

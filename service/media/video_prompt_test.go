@@ -44,7 +44,7 @@ func TestBuildShotVideoPrompt_hongguoStyle(t *testing.T) {
 	if !strings.Contains(pos, "Hongguo") && !strings.Contains(pos, "short drama") {
 		t.Fatalf("hongguo short-drama tags missing: %q", pos)
 	}
-	if !strings.Contains(pos, "frames2video") && !strings.Contains(pos, "multiframe motion") && !strings.Contains(pos, "image-to-video") {
+	if !strings.Contains(pos, "frames2video") && !strings.Contains(pos, "FLF2V") && !strings.Contains(pos, "multiframe motion") && !strings.Contains(pos, "image-to-video") {
 		t.Fatalf("inter-keyframe motion plan missing: %q", pos)
 	}
 	if !strings.Contains(pos, "close-up") && !strings.Contains(pos, "push") {
@@ -93,11 +93,11 @@ func TestBuildShotVideoPrompt_frames2InterKeyframe(t *testing.T) {
 		Duration: 10,
 	}
 	pos, _ := buildShotVideoPrompt(shot, "3D动漫", "", "", true)
-	if !strings.Contains(pos, "frames2video") {
-		t.Fatalf("dialogue shot should use frames2 motion: %q", pos)
+	if !strings.Contains(pos, "frames2video") && !strings.Contains(pos, "FLF2V") {
+		t.Fatalf("dialogue shot should use frames2/FLF2V motion: %q", pos)
 	}
-	if !strings.Contains(pos, "two-keyframe") {
-		t.Fatalf("frames2 mode tag missing: %q", pos)
+	if !strings.Contains(pos, "first frame") && !strings.Contains(pos, "two-frame") && !strings.Contains(pos, "FLF2V") {
+		t.Fatalf("FLF2V lock wording missing: %q", pos)
 	}
 }
 
@@ -127,5 +127,40 @@ func TestCompressDescriptionForVideo(t *testing.T) {
 	}
 	if !strings.Contains(got, "石昊") {
 		t.Fatalf("event lost: %q", got)
+	}
+}
+
+func TestRewriteEmotionToPhysical(t *testing.T) {
+	got := rewriteEmotionToPhysical("石昊怒视前方，悲愤欲绝，冷笑一声")
+	for _, bad := range []string{"怒视", "悲愤欲绝", "冷笑"} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("emotion word %q left in: %q", bad, got)
+		}
+	}
+	for _, want := range []string{"盯", "握拳", "唇角"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("physical motion %q missing: %q", want, got)
+		}
+	}
+}
+
+func TestBuildShotVideoPrompt_noOpaqueEmotion(t *testing.T) {
+	shot := &storyboard.ShotMeta{
+		Description: "【目标】石昊悲愤欲绝怒视前方。【承接】开场。【结果】杀意沸腾。",
+		Camera:      "特写",
+		Beats: []task.ShotBeat{
+			{Time: 0, Action: "画面：石昊近景。动作：愤怒。反应：杀气腾腾。"},
+			{Time: 6, Action: "画面：特写。动作：泪流满面。反应：情绪崩溃。"},
+		},
+		Duration: 10,
+	}
+	pos, _ := buildShotVideoPrompt(shot, "3D动漫", "", "", true)
+	for _, bad := range []string{"悲愤欲绝", "杀意沸腾", "愤怒", "杀气腾腾", "泪流满面", "情绪崩溃", "emotional", "emotion"} {
+		if strings.Contains(strings.ToLower(pos), strings.ToLower(bad)) {
+			t.Fatalf("opaque emotion leaked %q in: %q", bad, pos)
+		}
+	}
+	if !strings.Contains(pos, "握拳") && !strings.Contains(pos, "嘴唇") && !strings.Contains(pos, "泪") && !strings.Contains(pos, "肩") {
+		t.Fatalf("expected physical substitutes in: %q", pos)
 	}
 }
