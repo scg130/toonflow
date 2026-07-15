@@ -16,7 +16,12 @@ type ShotMeta struct {
 	Prompt         string
 	Camera         string
 	Duration       float64
+	ShotSize       string
+	Angle          string
+	Composition    string
 	Lighting       string
+	ColorTone      string
+	Motion         string
 	ActionContinue string
 	Transition     string
 	SceneLink      string
@@ -42,6 +47,7 @@ func LoadShot(db *sql.DB, projectID, episodeID string, shotNumber int) (*ShotMet
 	}
 	for _, it := range items {
 		if it.ShotNumber == shotNumber {
+			SyncSevenElements(&it)
 			return &ShotMeta{
 				ShotNumber:     it.ShotNumber,
 				Scene:          it.Scene,
@@ -50,7 +56,12 @@ func LoadShot(db *sql.DB, projectID, episodeID string, shotNumber int) (*ShotMet
 				Prompt:         it.Prompt,
 				Camera:         it.Camera,
 				Duration:       it.Duration,
+				ShotSize:       it.ShotSize,
+				Angle:          it.Angle,
+				Composition:    it.Composition,
 				Lighting:       it.Lighting,
+				ColorTone:      it.ColorTone,
+				Motion:         it.Motion,
 				ActionContinue: it.ActionContinue,
 				Transition:     it.Transition,
 				SceneLink:      it.SceneLink,
@@ -61,4 +72,32 @@ func LoadShot(db *sql.DB, projectID, episodeID string, shotNumber int) (*ShotMet
 		}
 	}
 	return nil, fmt.Errorf("未找到第 %d 镜", shotNumber)
+}
+
+// AsStoryboardItem converts ShotMeta back to a StoryboardItem for prompt helpers.
+func (s *ShotMeta) AsStoryboardItem() task.StoryboardItem {
+	if s == nil {
+		return task.StoryboardItem{}
+	}
+	return task.StoryboardItem{
+		ShotNumber:     s.ShotNumber,
+		Scene:          s.Scene,
+		Description:    s.Description,
+		Dialogue:       s.Dialogue,
+		Prompt:         s.Prompt,
+		Camera:         s.Camera,
+		Duration:       s.Duration,
+		ShotSize:       s.ShotSize,
+		Angle:          s.Angle,
+		Composition:    s.Composition,
+		Lighting:       s.Lighting,
+		ColorTone:      s.ColorTone,
+		Motion:         s.Motion,
+		ActionContinue: s.ActionContinue,
+		Transition:     s.Transition,
+		SceneLink:      s.SceneLink,
+		ImageURL:       s.ImageURL,
+		ImageRemoteURL: s.ImageRemoteURL,
+		Beats:          s.Beats,
+	}
 }

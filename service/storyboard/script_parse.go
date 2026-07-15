@@ -87,15 +87,27 @@ func parseScriptOnce(ctx context.Context, script, style string, assets []asset.P
 
 func storyboardSystemPrompt(skillMgr *skill.Manager, minShots int) string {
 	args := []any{minShots, duration.TargetShotsMin, duration.TargetShotsMax}
+	var base string
 	if skillMgr != nil {
-		if s := strings.TrimSpace(skillMgr.Format("prompts/storyboard_parse.md", args...)); s != "" {
-			return s
-		}
+		base = strings.TrimSpace(skillMgr.Format("prompts/storyboard_parse.md", args...))
 	}
-	if s := strings.TrimSpace(skill.Format("prompts/storyboard_parse.md", args...)); s != "" {
-		return s
+	if base == "" {
+		base = strings.TrimSpace(skill.Format("prompts/storyboard_parse.md", args...))
 	}
-	return fmt.Sprintf("你是短剧分镜师。输出约 %d 支镜（范围 %d–%d），JSON {\"shots\":[...]}，beat.action 只写可见肢体动作。", args...)
+	if base == "" {
+		base = fmt.Sprintf("你是短剧分镜师。输出约 %d 支镜（范围 %d–%d），JSON {\"shots\":[...]}，beat.action 只写可见肢体动作，并写全分镜七要素。", args...)
+	}
+	seven := ""
+	if skillMgr != nil {
+		seven = strings.TrimSpace(skillMgr.File("prompts/storyboard_seven.md"))
+	}
+	if seven == "" {
+		seven = strings.TrimSpace(skill.File("prompts/storyboard_seven.md"))
+	}
+	if seven != "" {
+		base += "\n\n" + seven
+	}
+	return base
 }
 
 func storyboardRetryPrompt(skillMgr *skill.Manager, minShots int, baseUser string) string {

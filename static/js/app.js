@@ -2384,6 +2384,13 @@
         description,
         camera: sb.camera ?? sb.Camera ?? '固定镜头',
         duration: sb.duration ?? sb.Duration ?? 3,
+        shot_size: sb.shot_size ?? sb.ShotSize ?? '',
+        angle: sb.angle ?? sb.Angle ?? '',
+        composition: sb.composition ?? sb.Composition ?? '',
+        lighting: sb.lighting ?? sb.Lighting ?? '',
+        color_tone: sb.color_tone ?? sb.ColorTone ?? '',
+        motion: sb.motion ?? sb.Motion ?? '',
+        transition: sb.transition ?? sb.Transition ?? '',
         dialogue_lines: dlgLines.length ? dlgLines : [],
         prompt: sb.prompt ?? sb.Prompt ?? description,
         image_url: sb.image_url ?? sb.ImageURL ?? '',
@@ -2393,6 +2400,23 @@
         selected: sb.selected === true,
       };
     });
+  }
+
+  function formatSevenElements(sb) {
+    if (!sb) return '未填写';
+    const pairs = [
+      ['景别', sb.shot_size],
+      ['角度', sb.angle],
+      ['构图', sb.composition],
+      ['光影', sb.lighting],
+      ['色调', sb.color_tone],
+      ['动势', sb.motion],
+      ['转场', sb.transition],
+    ];
+    const parts = pairs
+      .filter(([, v]) => String(v || '').trim())
+      .map(([k, v]) => k + '：' + String(v).trim());
+    return parts.length ? parts.join(' · ') : '未填写（请重新生成分镜）';
   }
 
   function saveStoryboardDialogue(shotNumber, lines) {
@@ -3515,6 +3539,10 @@
               </div>
             </div>
             ${renderStoryboardBeatsSection(sb)}
+            <div class="storyboard-field sb-field-inline">
+              <div class="storyboard-field-label">七要素</div>
+              <div class="storyboard-field-value sb-inline-text sb-seven-elements">${escapeHtml(formatSevenElements(sb))}</div>
+            </div>
             <div class="storyboard-field sb-field-inline">
               <div class="storyboard-field-label">运镜</div>
               <div class="storyboard-field-value sb-inline-text">${escapeHtml(sb.camera || '固定镜头')}</div>

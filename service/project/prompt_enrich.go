@@ -5,6 +5,7 @@ import (
 
 	"toonflow/service/asset"
 	cameramap "toonflow/service/internal/camera"
+	"toonflow/service/storyboard"
 	"toonflow/task"
 )
 
@@ -20,14 +21,13 @@ func BuildShotImagePrompt(item task.StoryboardItem, style, videoRatio, assetProm
 	if style != "" {
 		prompt += ", " + style + " art style"
 	}
-	if lit := strings.TrimSpace(item.Lighting); lit != "" {
-		prompt += ", lighting: " + lit
+	if seven := storyboard.FormatSevenElementsPrompt(item); seven != "" {
+		prompt += ", " + seven
+	} else if cam := EnrichCameraForPrompt(item.Camera); cam != "" {
+		prompt += ", " + cam
 	}
 	if ac := strings.TrimSpace(item.ActionContinue); ac != "" {
 		prompt += ", action continuation: " + ac
-	}
-	if cam := EnrichCameraForPrompt(item.Camera); cam != "" {
-		prompt += ", " + cam
 	}
 	if styleAnchor != "" {
 		prompt += ", " + styleAnchor
@@ -63,11 +63,12 @@ func imageRenderEnhancers() []string {
 
 func motionBlurTags(item task.StoryboardItem) []string {
 	text := strings.ToLower(strings.Join([]string{
-		item.Description, item.Camera, item.Prompt, item.Scene,
+		item.Description, item.Camera, item.Prompt, item.Scene, item.Motion, item.ShotSize,
 	}, " "))
 	var tags []string
 	if containsAny(text,
 		"战斗", "挥", "斩", "冲击", "疾驰", "奔跑", "爆炸", "combat", "fight", "strike", "burst", "sprint", "clash",
+		"推镜", "手持", "跟移",
 	) {
 		tags = append(tags, "strong motion blur on fast movement", "high shutter speed action streaks")
 	}
@@ -75,11 +76,6 @@ func motionBlurTags(item task.StoryboardItem) []string {
 		"慢镜头", "升格", "slow motion", "slow-mo", "slowmo", "48fps", "60fps", "120fps",
 	) {
 		tags = append(tags, "slow motion high frame rate capture", "smooth temporal oversampling")
-	}
-	if containsAny(text,
-		"情绪爆发", "怒吼", "泪", "rage", "scream", "breakdown", "爆发",
-	) {
-		tags = append(tags, "dramatic motion blur emotional close-up", "120fps micro-expression detail")
 	}
 	return tags
 }

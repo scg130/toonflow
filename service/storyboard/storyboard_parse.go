@@ -45,9 +45,7 @@ func NormalizeStoryboardItems(items []task.StoryboardItem) []task.StoryboardItem
 		if it.Description == "" {
 			it.Description = it.Prompt
 		}
-		if it.Camera == "" {
-			it.Camera = "固定镜头"
-		}
+		SyncSevenElements(&it)
 		it.Dialogue = normalizeDialogue(it.Dialogue)
 		it.SceneLink = resolveSceneLink(it.SceneLink, it.Scene, prevScene, len(out) == 0)
 		it.Transition = resolveShotTransition(it.SceneLink, it.Transition)

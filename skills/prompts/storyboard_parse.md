@@ -50,17 +50,27 @@ beat.action / description / image_prompt 任一字段若只剩情绪名词而无
 → ❌「石昊很紧张」「石昊杀气腾腾」「石昊情绪激动」
 反应栏也必须是可见反馈：皱眉、咬唇、后退半步、手指松开——禁止「心一沉」「感到绝望」。
 
+## 分镜七要素（每镜硬性写全）
+每镜必须输出七字段（详见 skills/prompts/storyboard_seven.md）：
+1. **景别 shot_size**：远景/全景/中景/近景/特写/极特写
+2. **角度 angle**：平视/仰拍/俯拍/斜角/荷兰角
+3. **构图 composition**：中心/三分/对称/引导线/前景遮挡/留白（写清主体落点）
+4. **光影 lighting**：主光方向 + 软硬对比（写光源，不写“氛围感”）
+5. **色调 color_tone**：冷暖与主色（短剧高对比，同场尽量延续）
+6. **动势 motion**：机位一条路径 + 主体肢体位移（只写一个主动势）
+7. **转场 transition**：soft dissolve / fade black / wipe / match cut / hard cut
+`camera` 字段 = 「景别 + 角度 + 动势」合成短句，勿另写散文。
+
 ## 关键帧数量规则
 - 对话/交代/物品：2 拍（起幅+落幅）
 - 对话转折/证据展示：2 拍
 - 冲突/打脸/亮身份/撕合同：3 拍（起点→顶点→结果）
 技术输出每镜 beats 必须 2–3 项。
 
-## 镜头类型与运镜
+## 镜头类型与运镜（由七要素表达）
 - 中景为主、冲突用脸部特写、少量全景交代空间
-- 对话镜：机位稳定、轻微推镜靠近脸
-- 冲突：推镜+手持微抖；反转：拉近到五官；结尾钩子：末帧定格姿态
-- camera 只写可执行指令：中景/特写/正反打 + 推镜/横移/环绕（禁止写“强化情绪”“压迫感”）
+- 对话：平视 + 轻微推镜；冲突：推镜/手持微抖；反转：特写拉近五官；钩子：定镜落幅
+- 禁止在 camera/motion 写“强化情绪”“压迫感”
 
 ## 时长（硬性，必须错落，禁止全集都 12）
 duration 只从 {8, 10, 12, 15} 取值：
@@ -90,7 +100,8 @@ dialogue：{"lines":[{"speaker","text"},...]} 或 null；speaker=资产中文名
 连续剧情禁止一口气写出多镜最终结果：每镜只承担一个可见任务。
 
 ## 输出
-仅 {"shots":[...]}。字段：shot_number, scene, description, camera, duration, prompt, lighting, action_continue, transition, scene_link, dialogue, asset_ids, beats[{time,action,image_prompt}]
+仅 {"shots":[...]}。字段：shot_number, scene, description, shot_size, angle, composition, lighting, color_tone, motion, transition, camera, duration, prompt, action_continue, scene_link, dialogue, asset_ids, beats[{time,action,image_prompt}]
+camera 必须等于 shot_size+angle+motion 合成。
 
 ## 示例（结构示范，勿抄剧情）
-{"shots":[{"shot_number":1,"scene":"宴会厅门口","description":"【目标】保安伸手拦住男主。【承接】开场。【结果】男主抬下巴停住。","camera":"中景轻微推镜 medium push-in","duration":12.0,"lighting":"宴会暖黄侧光高对比","action_continue":"开场：保安右臂横在门口","transition":"soft dissolve","scene_link":"transition","asset_ids":[1,2],"beats":[{"time":0.0,"action":"画面：门口中景保安右臂前伸。动作：掌心抵住男主胸口。反应：男主下巴抬起半寸。","image_prompt":"medium shot guard arm blocking doorway, suited man, vertical 9:16"},{"time":6.0,"action":"画面：男主面部近景。动作：唇角单边上提。反应：双眼眯起盯保安。","image_prompt":"close-up raised mouth corner, eyes narrowed, vertical 9:16"}],"dialogue":{"lines":[{"speaker":"保安","text":"你也配进这里？"},{"speaker":"男主","text":"让开。"}]},"prompt":"banquet entrance, guard blocking hero with arm, warm side light, vertical 9:16"},{"shot_number":2,"scene":"走廊","description":"【目标】女主上前一步质问，男主亮请柬。【承接】上镜男主停在门口。【结果】请柬举到镜头前。","camera":"双人正反打","duration":10.0,"lighting":"走廊冷白顶光","action_continue":"上镜男主下巴抬起 → 本镜女主一步迈到他面前","transition":"soft dissolve","scene_link":"continuous","asset_ids":[1,3],"beats":[{"time":0.0,"action":"画面：女主近景眉心下压。动作：上前一步抬手指向男主。反应：男主肩线后移半寸。","image_prompt":"close-up heroine brows down pointing, corridor, vertical 9:16"},{"time":7.0,"action":"画面：双手特写。动作：男主从内侧口袋抽出请柬举起。反应：女主眼睛睁大停住。","image_prompt":"close-up invitation card raised to camera, vertical 9:16"}],"dialogue":{"lines":[{"speaker":"女主","text":"你还要装多久？"},{"speaker":"男主","text":"看清楚。"}]},"prompt":"corridor, heroine steps forward, hero raises invitation card, cool overhead light, vertical 9:16"}]}
+{"shots":[{"shot_number":1,"scene":"宴会厅门口","description":"【目标】保安伸手拦住男主。【承接】开场。【结果】男主抬下巴停住。","shot_size":"中景","angle":"平视","composition":"保安右臂横在画面中线，男主偏右三分","lighting":"宴会暖黄侧光，门外冷白轮廓","color_tone":"暖黄主调高对比","motion":"轻微推镜靠近双人上半身；保安右臂前伸","transition":"soft dissolve","camera":"中景 平视 轻微推镜靠近双人上半身","duration":12.0,"action_continue":"开场：保安右臂横在门口","scene_link":"transition","asset_ids":[1,2],"beats":[{"time":0.0,"action":"画面：门口中景保安右臂前伸。动作：掌心抵住男主胸口。反应：男主下巴抬起半寸。","image_prompt":"medium shot guard arm blocking doorway, warm side light, vertical 9:16"},{"time":6.0,"action":"画面：男主面部近景。动作：唇角单边上提。反应：双眼眯起盯保安。","image_prompt":"close-up raised mouth corner, eyes narrowed, vertical 9:16"}],"dialogue":{"lines":[{"speaker":"保安","text":"你也配进这里？"},{"speaker":"男主","text":"让开。"}]},"prompt":"banquet entrance, guard blocking hero with arm, warm side light, vertical 9:16"},{"shot_number":2,"scene":"走廊","description":"【目标】女主上前一步质问，男主亮请柬。【承接】上镜男主停在门口。【结果】请柬举到镜头前。","shot_size":"近景","angle":"平视","composition":"女主脸居左三分，右手指向右侧男主","lighting":"走廊冷白顶光","color_tone":"冷白短剧高对比","motion":"定镜；女主上前一步抬手指人","transition":"soft dissolve","camera":"近景 平视 定镜女主上前一步","duration":10.0,"action_continue":"上镜男主下巴抬起 → 本镜女主一步迈到他面前","scene_link":"continuous","asset_ids":[1,3],"beats":[{"time":0.0,"action":"画面：女主近景眉心下压。动作：上前一步抬手指向男主。反应：男主肩线后移半寸。","image_prompt":"close-up heroine brows down pointing, cool overhead, vertical 9:16"},{"time":7.0,"action":"画面：双手特写。动作：男主从内侧口袋抽出请柬举起。反应：女主眼睛睁大停住。","image_prompt":"close-up invitation card raised to camera, vertical 9:16"}],"dialogue":{"lines":[{"speaker":"女主","text":"你还要装多久？"},{"speaker":"男主","text":"看清楚。"}]},"prompt":"corridor, heroine steps forward, hero raises invitation card, cool overhead light, vertical 9:16"}]}

@@ -67,7 +67,9 @@ func buildShotVideoPromptWithMode(shot *storyboard.ShotMeta, mode VideoMode, art
 		}
 	}
 
-	if lit := compressLightingForVideo(shot.Lighting); lit != "" {
+	if seven := storyboard.FormatSevenElementsPrompt(shot.AsStoryboardItem()); seven != "" {
+		parts = append(parts, seven)
+	} else if lit := compressLightingForVideo(shot.Lighting); lit != "" {
 		parts = append(parts, "lighting continuity: "+lit)
 	}
 

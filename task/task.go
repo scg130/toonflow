@@ -66,12 +66,18 @@ type StoryboardItem struct {
 	ShotNumber     int     `json:"shot_number"`
 	Scene          string  `json:"scene"`
 	Description    string  `json:"description"`
-	Camera         string  `json:"camera"`
+	Camera         string  `json:"camera"` // 兼容：可写景别+角度+动势合成句；优先用下方七要素字段
 	Duration       float64 `json:"duration"`
 	Prompt         string  `json:"prompt"`
-	Lighting       string  `json:"lighting,omitempty"`        // 光照参数，全剧统一
+	// 分镜七要素（景别/角度/构图/光影/色调/动势/转场）
+	ShotSize       string  `json:"shot_size,omitempty"`       // 景别：远景/全景/中景/近景/特写/极特写
+	Angle          string  `json:"angle,omitempty"`           // 角度：平视/仰拍/俯拍/斜角/荷兰角
+	Composition    string  `json:"composition,omitempty"`     // 构图：中心/三分/对称/引导线/留白/前景遮挡
+	Lighting       string  `json:"lighting,omitempty"`        // 光影：主光方向、软硬对比
+	ColorTone      string  `json:"color_tone,omitempty"`      // 色调：冷暖、主色、对比
+	Motion         string  `json:"motion,omitempty"`          // 动势：推/拉/摇/移/手持/定镜 + 主体位移
+	Transition     string  `json:"transition,omitempty"`      // 转场：硬切/叠化/闪黑/划像/匹配剪
 	ActionContinue string  `json:"action_continue,omitempty"` // 承接上镜动作节点
-	Transition     string  `json:"transition,omitempty"`      // 与下镜衔接方式
 	SceneLink      string  `json:"scene_link,omitempty"`      // 与上一镜关系: continuous(同场景续接) | transition(转场/换场景)
 	Dialogue       *ShotDialogue `json:"dialogue,omitempty"` // 结构化对白，支持多行 lines
 	AssetIDs       []int   `json:"asset_ids,omitempty"`
