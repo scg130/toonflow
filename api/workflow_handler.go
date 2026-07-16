@@ -357,6 +357,23 @@ func (r *Router) pipelinesListHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, list)
 }
 
+func (r *Router) pipelineClearHandler(c *gin.Context) {
+	projectID, ok := r.requireProject(c)
+	if !ok {
+		return
+	}
+	epID := c.Param("epId")
+	if epID == "" {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "episode_id required"})
+		return
+	}
+	if err := service.ClearPipelineUIState(r.db.DB, projectID, epID); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": userMsg(c, err)})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 func (r *Router) chatListHandler(c *gin.Context) {
 	projectID, ok := r.requireProject(c)
 	if !ok {

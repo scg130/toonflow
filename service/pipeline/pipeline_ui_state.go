@@ -92,6 +92,20 @@ func FinalizePipelineUIState(db *sql.DB, projectID, episodeID, finalLine string)
 	return savePipelineUIState(db, projectID, episodeID, false, true, st.Progress, st.ProgressMsg, st.Lines)
 }
 
+// ClearPipelineUIState deletes persisted pipeline progress for one episode.
+// Refuses while a pipeline is still running for that episode.
+func ClearPipelineUIState(db *sql.DB, projectID, episodeID string) error {
+	if db == nil || projectID == "" || episodeID == "" {
+		return fmt.Errorf("project_id and episode_id required")
+	}
+	if EpisodePipelines.Get(projectID, episodeID) != nil {
+		return fmt.Errorf("流水线执行中，无法清除记录")
+	}
+	_, err := db.Exec(`DELETE FROM o_pipeline_ui_state WHERE project_id = ? AND episode_id = ?`,
+		projectID, episodeID)
+	return err
+}
+
 // RecoverStalePipelineUIStates finalizes persisted pipeline rows left unfinished after crash/restart.
 func RecoverStalePipelineUIStates(db *sql.DB) (int, error) {
 	if db == nil {

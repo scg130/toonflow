@@ -122,6 +122,7 @@ func (r *Router) Setup() *gin.Engine {
 		protected.POST("/projects/:id/chat", r.chatSendHandler)
 		protected.POST("/projects/:id/chat/action", r.chatActionHandler)
 		protected.GET("/projects/:id/pipelines", r.pipelinesListHandler)
+		protected.DELETE("/projects/:id/pipelines/:epId", r.pipelineClearHandler)
 
 		protected.GET("/projects/:id/assets", r.projectAssetsListHandler)
 		protected.POST("/projects/:id/assets/extract", r.assetsExtractHandler)

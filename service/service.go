@@ -143,13 +143,14 @@ var (
 	EpisodeStepIDs            = svcpipeline.EpisodeStepIDs
 	EpisodePipelineTimeout    = svcpipeline.EpisodePipelineTimeout
 	EpisodePipelines          = svcpipeline.EpisodePipelines
-	InitPipelineUIState       = svcpipeline.InitPipelineUIState
-	AppendPipelineUIProgress  = svcpipeline.AppendPipelineUIProgress
-	FinalizePipelineUIState   = svcpipeline.FinalizePipelineUIState
-	RecoverStalePipelineUIStates = svcpipeline.RecoverStalePipelineUIStates
-	SetPipelineUIPaused       = svcpipeline.SetPipelineUIPaused
-	ListPipelineUIStates      = svcpipeline.ListPipelineUIStates
-)
+		InitPipelineUIState       = svcpipeline.InitPipelineUIState
+		AppendPipelineUIProgress  = svcpipeline.AppendPipelineUIProgress
+		FinalizePipelineUIState   = svcpipeline.FinalizePipelineUIState
+		RecoverStalePipelineUIStates = svcpipeline.RecoverStalePipelineUIStates
+		ClearPipelineUIState      = svcpipeline.ClearPipelineUIState
+		SetPipelineUIPaused       = svcpipeline.SetPipelineUIPaused
+		ListPipelineUIStates      = svcpipeline.ListPipelineUIStates
+	)
 
 // --- core ---
 type ProgressFunc = svccore.ProgressFunc

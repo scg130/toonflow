@@ -1246,13 +1246,51 @@
   }
 
   function clearLocalChatHistory() {
-    if (!currentProject) return;
-    const epLabel = currentEpisode ? (currentEpisode.title || ('EP' + (currentEpisode.episode_num || ''))) : '当前项目';
-    if (!confirm('确定清除「' + epLabel + '」的本地聊天记录？\n（流水线进度不受影响）')) return;
+    if (!currentProject) {
+      toast('请先选择项目', 'warning');
+      return;
+    }
     const epId = currentEpisode ? currentEpisode.id : '';
+    const st = epId && pipelineByEpisode[epId];
+    if (st && isPipelineActiveRecord(st)) {
+      toast('流水线执行中，请先等待完成或结束后再清除', 'warning');
+      return;
+    }
+    const epLabel = currentEpisode ? (currentEpisode.title || ('EP' + (currentEpisode.episode_num || ''))) : '当前项目';
+    if (!confirm('确定清除「' + epLabel + '」的聊天记录与流水线进度显示？')) return;
+
     writeLocalChatMessages(epId, []);
-    loadChatMessages();
-    toast('聊天记录已清除', 'success');
+    if (epId) {
+      delete pipelineByEpisode[epId];
+    }
+    resetPipelineStatus();
+    updateChatProgress('', 0);
+    setPipelineControlsVisible(false, false);
+    syncPipelineRunButton();
+    renderChatMessagesToBox([]);
+
+    const finish = () => {
+      toast('记录已清除', 'success');
+      renderEpisodeList();
+      renderEpisodeSelect();
+    };
+
+    if (!epId) {
+      finish();
+      return;
+    }
+    apiFetch('/api/projects/' + currentProject.id + '/pipelines/' + encodeURIComponent(epId), {
+      method: 'DELETE',
+    }).then(r => {
+      if (!r.ok) {
+        return r.json().then(d => Promise.reject(new Error((d && d.error) || '清除失败')));
+      }
+      finish();
+    }).catch((err) => {
+      toast((err && err.message) ? err.message : '本地已清除，服务端进度清除失败', 'warning');
+      renderEpisodeList();
+      renderEpisodeSelect();
+    });
   }
 
   function ensurePipelineRecord(episodeId) {

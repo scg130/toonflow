@@ -2,6 +2,13 @@ package pipeline
 
 import "testing"
 
+func TestClearPipelineUIState(t *testing.T) {
+	// smoke: empty ids should error
+	if err := ClearPipelineUIState(nil, "", ""); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func TestAppendPipelineLine(t *testing.T) {
 	lines := []string{"🚀 已开始"}
 	appendPipelineLine(&lines, "正在生成分镜...")
