@@ -11,8 +11,26 @@ func TestIsContentPolicyViolation(t *testing.T) {
 	if !IsContentPolicyViolation(err) {
 		t.Fatal("expected policy violation")
 	}
+	unable := errors.New(`agnes image error 400: {"error":{"message":"Unable to generate this content. Please modify your prompt and try again."}}`)
+	if !IsContentPolicyViolation(unable) {
+		t.Fatal("expected unable-to-generate as policy")
+	}
 	if IsContentPolicyViolation(errors.New("timeout")) {
 		t.Fatal("unexpected policy violation")
+	}
+}
+
+func TestBuildSafeImagePromptFallback(t *testing.T) {
+	out := BuildSafeImagePromptFallback("石昊猛然起身，赤红双目，鲜血飞溅，blood on sword")
+	if out == "" {
+		t.Fatal("empty fallback")
+	}
+	lower := strings.ToLower(out)
+	if strings.Contains(out, "鲜血") || strings.Contains(lower, "blood on") || strings.Contains(lower, "bloody") {
+		t.Fatalf("fallback still risky: %q", out)
+	}
+	if !strings.Contains(lower, "no graphic violence") {
+		t.Fatalf("missing safety anchors: %q", out)
 	}
 }
 

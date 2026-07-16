@@ -196,16 +196,36 @@ func appendPipelineLine(lines *[]string, message string) {
 	if len(*lines) > 0 && (*lines)[len(*lines)-1] == message {
 		return
 	}
-	inProgress := strings.HasPrefix(message, "正在")
+	base := stripPipelineWaitSuffix(message)
 	lastLine := ""
 	if len(*lines) > 0 {
 		lastLine = (*lines)[len(*lines)-1]
 	}
+	lastBase := stripPipelineWaitSuffix(lastLine)
+	// Heartbeat / countdown refreshes share the same base — replace in place.
+	if base != "" && base == lastBase {
+		(*lines)[len(*lines)-1] = message
+		return
+	}
+	inProgress := strings.HasPrefix(message, "正在")
 	if inProgress && strings.HasPrefix(lastLine, "正在") {
 		(*lines)[len(*lines)-1] = message
 		return
 	}
 	*lines = append(*lines, message)
+}
+
+func stripPipelineWaitSuffix(msg string) string {
+	for _, sep := range []string{" · 已等待 ", " · 重试中", " · 重试 ", "，还剩 "} {
+		if i := strings.LastIndex(msg, sep); i >= 0 {
+			msg = strings.TrimSpace(msg[:i])
+		}
+	}
+	// "…冷却中，35 秒后开始批量生视频…" / "…冷却中，%d 秒后…"
+	if i := strings.Index(msg, "冷却中，"); i >= 0 {
+		return strings.TrimSpace(msg[:i+len("冷却中")])
+	}
+	return msg
 }
 
 func loadPipelineUIState(db *sql.DB, projectID, episodeID string) (*PipelineUIState, error) {

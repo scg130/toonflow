@@ -95,6 +95,8 @@ func TestIsRetryableError(t *testing.T) {
 		"内容审核未通过：违规",
 		"请先生成分镜",
 		"unknown step: foo",
+		`agnes image error 400: {"error":{"message":"Unable to generate this content. Please modify your prompt and try again.","type":"invalid_request_error"}}`,
+		"第 2 镜被内容安全策略拦截，请编辑分镜描述",
 	}
 	for _, m := range notRetryable {
 		if IsRetryableError(fmt.Errorf("%s", m)) {
@@ -103,5 +105,13 @@ func TestIsRetryableError(t *testing.T) {
 	}
 	if IsRetryableError(nil) {
 		t.Error("nil should not be retryable")
+	}
+}
+
+func TestUserMessage_contentPolicy(t *testing.T) {
+	raw := `agnes image error 400: {"error":{"message":"Unable to generate this content. Please modify your prompt and try again."}}`
+	got := UserMessage(fmt.Errorf("%s", raw))
+	if !strings.Contains(got, "内容安全策略") {
+		t.Fatalf("got %q", got)
 	}
 }

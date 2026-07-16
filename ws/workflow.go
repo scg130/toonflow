@@ -151,6 +151,7 @@ func (wfs *WorkflowService) runWorkflow(cm *ConnManager, userID string, req *WSR
 			}),
 		})
 	})
+	ctx = service.EnsureProgressHeartbeat(ctx)
 
 	switch action {
 	case "run_episode_pipeline":
@@ -280,6 +281,7 @@ func (wfs *WorkflowService) runEpisodePipeline(ctx context.Context, cm *ConnMana
 		})
 		wfs.broadcastEpisodePipelineStatus(cm, req, logID, "running", progress, message, snap)
 	})
+	runCtx = service.EnsureProgressHeartbeat(runCtx)
 	wfs.broadcastEpisodePipeline(cm, req, logID, "running", 2,
 		fmt.Sprintf("开始执行分集流水线（待执行 %d 步）", len(pending)))
 

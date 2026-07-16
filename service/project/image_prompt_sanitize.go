@@ -24,6 +24,7 @@ func IsContentPolicyViolation(err error) bool {
 	s := strings.ToLower(err.Error())
 	return strings.Contains(s, "content_policy_violation") ||
 		strings.Contains(s, "unable to generate this content") ||
+		strings.Contains(s, "please modify your prompt") ||
 		strings.Contains(s, "content policy")
 }
 
@@ -51,7 +52,32 @@ func SanitizeImagePromptForPolicy(prompt string, level int) string {
 	return s
 }
 
-// BuildFallbackSafeShotPrompt is deprecated; image generation uses tiered prompt sanitize retries instead.
+// BuildSafeImagePromptFallback builds a last-resort safe prompt from the original
+// (strict-sanitized) text so one-click image gen can still produce a usable frame
+// after repeated content-policy blocks.
+func BuildSafeImagePromptFallback(original string) string {
+	core := SanitizeImagePromptForPolicy(original, SanitizeLevelStrict)
+	if core == "" {
+		core = "fantasy cinematic environment, stylized characters"
+	}
+	// Cap length — long prompts still trip some providers after sanitize.
+	runes := []rune(core)
+	if len(runes) > 280 {
+		core = string(runes[:280])
+	}
+	return collapseSpaces(strings.Join([]string{
+		"3D anime cinematic still frame",
+		core,
+		"stylized dramatic pose",
+		"no graphic violence",
+		"no blood",
+		"family friendly",
+		"soft cinematic lighting",
+		"high fidelity composition",
+	}, ", "))
+}
+
+// BuildFallbackSafeShotPrompt builds a minimal safe shot prompt from scene metadata.
 func BuildFallbackSafeShotPrompt(item task.StoryboardItem, style, videoRatio string) string {
 	scene := SanitizeImagePromptForPolicy(strings.TrimSpace(item.Scene), SanitizeLevelStrict)
 	if scene == "" {
@@ -77,10 +103,21 @@ var lightPolicyReplacer = strings.NewReplacer(
 	"流血", "激烈光影",
 	"血迹", "场景氛围",
 	"血腥", "激烈",
+	"血沫", "水雾",
+	"喷血", "能量爆发",
 	"杀戮", "对决",
 	"杀死", "击败",
+	"杀害", "击败",
 	"击毙", "击倒",
 	"尸体", "倒地身影",
+	"尸骨", "残骸",
+	"碎尸", "崩碎特效",
+	"肢解", "击溃",
+	"内脏", "能量碎片",
+	"头颅", "头盔",
+	"割喉", "对峙",
+	"虐杀", "激战",
+	"虐待", "压迫",
 	"裸", "",
 	"裸体", "",
 	"色情", "",

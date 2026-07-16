@@ -50,19 +50,22 @@ func sanitizeUserError(msg string) string {
 	}
 
 	lower := strings.ToLower(msg)
-	if isTimeoutError(lower) {
-		return "AI 服务响应超时，请稍后重试"
-	}
-	if strings.Contains(msg, "401") || strings.Contains(msg, "无效的令牌") ||
-		strings.Contains(lower, "invalid api key") || strings.Contains(lower, "incorrect api key") {
-		return "API Key 无效或已过期，请在系统设置中检查供应商配置"
-	}
-	if strings.Contains(msg, "403") {
-		return "无权限访问 AI 服务，请检查供应商配置"
-	}
-	if strings.Contains(lower, "at most 3 images") || strings.Contains(msg, "最多 3 张") {
-		return "关键帧视频单次最多 3 张图，请重新生成分镜后再试"
-	}
+		if isTimeoutError(lower) {
+			return "AI 服务响应超时，请稍后重试"
+		}
+		if isContentPolicyError(lower) {
+			return "画面描述触发内容安全策略，按剧情重写合规 prompt 后仍失败，请编辑分镜描述后重试"
+		}
+		if strings.Contains(msg, "401") || strings.Contains(msg, "无效的令牌") ||
+			strings.Contains(lower, "invalid api key") || strings.Contains(lower, "incorrect api key") {
+			return "API Key 无效或已过期，请在系统设置中检查供应商配置"
+		}
+		if strings.Contains(msg, "403") {
+			return "无权限访问 AI 服务，请检查供应商配置"
+		}
+		if strings.Contains(lower, "at most 3 images") || strings.Contains(msg, "最多 3 张") {
+			return "关键帧视频单次最多 3 张图，请重新生成分镜后再试"
+		}
 	if strings.Contains(msg, "429") || strings.Contains(lower, "rate limit") || strings.Contains(lower, "rate_limit") {
 		return "AI 服务请求过于频繁，请稍后重试"
 	}
@@ -122,23 +125,33 @@ func isTimeoutError(lower string) bool {
 		strings.Contains(lower, "i/o timeout")
 }
 
-// IsRetryableError reports whether an error is transient (upstream/network blip,
-// timeout, rate limit, 5xx) and the operation is worth retrying automatically.
-// Non-transient failures (auth, content policy, bad request, "please generate X
-// first") return false so the caller aborts instead of looping.
-func IsRetryableError(err error) bool {
-	if err == nil {
-		return false
+	func isContentPolicyError(lower string) bool {
+		return strings.Contains(lower, "content_policy_violation") ||
+			strings.Contains(lower, "unable to generate this content") ||
+			strings.Contains(lower, "please modify your prompt") ||
+			strings.Contains(lower, "content policy") ||
+			strings.Contains(lower, "内容安全策略") ||
+			strings.Contains(lower, "内容审核") ||
+			strings.Contains(lower, "违规")
 	}
-	lower := strings.ToLower(err.Error())
-	// Never auto-retry auth or content-policy problems — retrying can't fix them.
-	if strings.Contains(lower, "401") || strings.Contains(lower, "403") ||
-		strings.Contains(lower, "invalid api key") || strings.Contains(lower, "incorrect api key") ||
-		strings.Contains(lower, "无效的令牌") || strings.Contains(lower, "content policy") ||
-		strings.Contains(lower, "内容审核") || strings.Contains(lower, "违规") ||
-		strings.Contains(lower, "at most 3 images") {
-		return false
-	}
+
+	// IsRetryableError reports whether an error is transient (upstream/network blip,
+	// timeout, rate limit, 5xx) and the operation is worth retrying automatically.
+	// Non-transient failures (auth, content policy, bad request, "please generate X
+	// first") return false so the caller aborts instead of looping.
+	func IsRetryableError(err error) bool {
+		if err == nil {
+			return false
+		}
+		lower := strings.ToLower(err.Error())
+		// Never auto-retry auth or content-policy problems — image layer already
+		// escalated prompt sanitize; whole-step replay cannot fix a blocked prompt.
+		if strings.Contains(lower, "401") || strings.Contains(lower, "403") ||
+			strings.Contains(lower, "invalid api key") || strings.Contains(lower, "incorrect api key") ||
+			strings.Contains(lower, "无效的令牌") || isContentPolicyError(lower) ||
+			strings.Contains(lower, "at most 3 images") {
+			return false
+		}
 	if isTimeoutError(lower) {
 		return true
 	}

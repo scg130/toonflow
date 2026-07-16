@@ -155,6 +155,8 @@ var (
 type ProgressFunc = svccore.ProgressFunc
 type PipelineStatus = svccore.PipelineStatus
 
+const DefaultProgressHeartbeat = svccore.DefaultProgressHeartbeat
+
 var (
 	WithProgress              = svccore.WithProgress
 	WithPipelineStatus        = svccore.WithPipelineStatus
@@ -166,6 +168,9 @@ var (
 	InheritPipelineContext    = svccore.InheritPipelineContext
 	ReportProgress            = svccore.ReportProgress
 	ReportStepProgress        = svccore.ReportStepProgress
+	StartProgressHeartbeat    = svccore.StartProgressHeartbeat
+	EnsureProgressHeartbeat   = svccore.EnsureProgressHeartbeat
+	WaitWithProgress          = svccore.WaitWithProgress
 	WaitIfPaused              = svccore.WaitIfPaused
 	NewPauseGate              = svccore.NewPauseGate
 	EnrichTaskMeta            = svccore.EnrichTaskMeta

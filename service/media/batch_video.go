@@ -86,11 +86,9 @@ func GenerateShotClipsSequential(ctx context.Context, db *sql.DB, v adapter.Vend
 	status := core.PipelineStatusFromContext(ctx)
 
 	logger.CtxTrace(ctx, "batch video start shots=%d pre_cooldown=%s between_shots=%s", total, preBatchVideoCooldown, betweenShotCooldown)
-	core.ReportStepProgress(ctx, 0, fmt.Sprintf("生图刚结束，等待 %d 秒后开始视频生成…", int(preBatchVideoCooldown.Seconds())))
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-time.After(preBatchVideoCooldown):
+	if err := core.WaitWithProgress(ctx, preBatchVideoCooldown, 0,
+		"生图刚结束，冷却中，%d 秒后开始批量生视频…"); err != nil {
+		return nil, err
 	}
 
 	for i, shotNum := range ordered {
@@ -98,16 +96,15 @@ func GenerateShotClipsSequential(ctx context.Context, db *sql.DB, v adapter.Vend
 			return outcome, err
 		}
 		status.SetShot(shotNum, i+1, total)
+		localPct := float32(i) / float32(total) * 100
 		if i > 0 {
 			logger.CtxTrace(ctx, "batch video cooldown %s before shot=%d", betweenShotCooldown, shotNum)
-			select {
-			case <-ctx.Done():
+			if err := core.WaitWithProgress(ctx, betweenShotCooldown, localPct,
+				fmt.Sprintf("第 %d 镜视频冷却中，还剩 %%d 秒…", shotNum)); err != nil {
 				return outcome, fmt.Errorf("任务已取消（已完成 %d/%d 镜）", len(outcome.Clips), total)
-			case <-time.After(betweenShotCooldown):
 			}
 		}
 
-		localPct := float32(i) / float32(total) * 100
 		core.ReportStepProgress(ctx, localPct,
 			fmt.Sprintf("正在生成第 %d 镜视频 (%d/%d)", shotNum, i+1, total))
 

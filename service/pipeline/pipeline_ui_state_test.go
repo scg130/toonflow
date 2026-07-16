@@ -20,4 +20,17 @@ func TestAppendPipelineLine(t *testing.T) {
 	if len(lines) != 3 {
 		t.Fatalf("expected dedupe, got %v", lines)
 	}
+	appendPipelineLine(&lines, "正在生成第 2 镜关键帧图片 (1/22)")
+	appendPipelineLine(&lines, "正在生成第 2 镜关键帧图片 (1/22) · 已等待 10 秒")
+	if len(lines) != 4 {
+		t.Fatalf("expected heartbeat replace, got %d: %v", len(lines), lines)
+	}
+	if lines[3] != "正在生成第 2 镜关键帧图片 (1/22) · 已等待 10 秒" {
+		t.Fatalf("got %q", lines[3])
+	}
+	appendPipelineLine(&lines, "生图刚结束，冷却中，40 秒后开始批量生视频…")
+	appendPipelineLine(&lines, "生图刚结束，冷却中，35 秒后开始批量生视频…")
+	if len(lines) != 5 {
+		t.Fatalf("expected cooldown replace, got %d: %v", len(lines), lines)
+	}
 }

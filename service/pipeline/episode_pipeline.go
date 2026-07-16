@@ -466,6 +466,10 @@ func runEpisodeBatchImages(ctx context.Context, deps EpisodePipelineDeps, userID
 			deps.NotifyTask(t, "批量生关键帧中")
 		}
 		err := deps.Pipeline.Execute(runCtx, t)
+		// Persist whatever keyframes succeeded even when the batch ends with errors.
+		if t.ProjectID != "" && len(t.Storyboard) > 0 {
+			_ = storyboard.SaveStoryboardItems(deps.DB, t.ProjectID, t.EpisodeID, t.Storyboard)
+		}
 		if err != nil {
 			if deps.NotifyTask != nil {
 				deps.NotifyTask(t, core.MarkTaskFailed(t, err))
@@ -474,9 +478,6 @@ func runEpisodeBatchImages(ctx context.Context, deps EpisodePipelineDeps, userID
 			t.SetState(task.StateDone, t.Title)
 			t.UpdateProgress(100)
 			deps.NotifyTask(t, "批量生图完成")
-		}
-		if err == nil && t.ProjectID != "" && len(t.Storyboard) > 0 {
-			_ = storyboard.SaveStoryboardItems(deps.DB, t.ProjectID, t.EpisodeID, t.Storyboard)
 		}
 		done <- err
 		return err
