@@ -51,6 +51,8 @@ func EnrichCameraForPrompt(camera string) string {
 }
 
 func imageRenderEnhancers() []string {
+	// Detail/clarity intensity aligned with short-drama tool settings
+	// (face/clothing/lighting high, HD restore on) — concrete tags, not empty "电影感".
 	return []string{
 		"3D anime cinematic quality",
 		"PBR materials ambient occlusion contact shadows",
@@ -58,6 +60,10 @@ func imageRenderEnhancers() []string {
 		"subsurface scattering skin translucency",
 		"metallic reflectivity specular highlights",
 		"cinematic rim light global illumination",
+		"high clarity facial detail",
+		"crisp fabric texture and hair strands",
+		"sharp edges no muddy blur",
+		"high detail restoration",
 	}
 }
 

@@ -123,15 +123,42 @@ func BuildBeatImagePrompt(item task.StoryboardItem, beat task.ShotBeat, style, v
 		parts = append(parts, style+" art style")
 		parts = append(parts, "frame-to-frame continuity, zero model mutation")
 		parts = append(parts, fmt.Sprintf("keyframe still at %.1fs", beat.Time))
-		return strings.Join(parts, ", ")
+		prompt := project.SanitizeImagePromptForPolicy(strings.Join(parts, ", "), project.SanitizeLevelLight)
+		return stabilizeLiquidImpactKeyframePrompt(prompt, beat)
 	}
 	base := project.BuildShotImagePrompt(item, style, videoRatio, assetPrompt, styleAnchor)
 	action := strings.TrimSpace(beat.Action)
 	if action == "" {
 		action = strings.TrimSpace(item.Description)
 	}
-	return fmt.Sprintf("%s, keyframe still at %.1fs: %s, exact moment frozen frame, high fidelity composition",
-		base, beat.Time, action)
+	prompt := project.SanitizeImagePromptForPolicy(
+		fmt.Sprintf("%s, keyframe still at %.1fs: %s, exact moment frozen frame, high fidelity composition",
+			base, beat.Time, action),
+		project.SanitizeLevelLight)
+	return stabilizeLiquidImpactKeyframePrompt(prompt, beat)
+}
+
+// stabilizeLiquidImpactKeyframePrompt makes an impact keyframe represent the
+// settled contact state. Asking a still model to show both a falling drop and a
+// spread puddle often creates an upright liquid sculpture that video must morph into.
+func stabilizeLiquidImpactKeyframePrompt(prompt string, beat task.ShotBeat) string {
+	blob := strings.ToLower(beat.Action + " " + beat.ImagePrompt)
+	hasLiquid := containsAnyMediaText(blob, "液体", "血珠", "水滴", "泪滴", "liquid", "drop")
+	hasImpact := containsAnyMediaText(blob, "砸落", "滴落", "接触", "晕开", "扩散", "hitting", "impact", "spreading")
+	if !hasLiquid || !hasImpact {
+		return prompt
+	}
+	return prompt + ", aftermath of a single liquid impact, thin irregular stain settled flat and absorbed into the rough surface, no suspended droplet, no upright liquid spike, no glossy cone shape"
+}
+
+func containsAnyMediaText(text string, needles ...string) bool {
+	lower := strings.ToLower(text)
+	for _, needle := range needles {
+		if strings.Contains(lower, strings.ToLower(needle)) {
+			return true
+		}
+	}
+	return false
 }
 
 // GenerateShotKeyframeImages generates one still per beat and persists URLs on the storyboard.
@@ -169,10 +196,14 @@ func GenerateShotKeyframeImages(ctx context.Context, db *sql.DB, v adapter.Vendo
 		}
 		resp, err := RequestShotImageWithRetry(ctx, v, imageModel, aspect, prompt, refURL)
 		if err != nil {
+			// Persist any beats already generated so a later keyframe failure
+			// does not discard earlier successful frames.
+			_ = storyboard.UpdateStoryboardShotKeyframes(db, projectID, episodeID, shotNumber, beats)
 			return nil, fmt.Errorf("第 %d 镜关键帧 %d: %w", shotNumber, i+1, err)
 		}
 		localPath := keyframeLocalPath(imgDir, shotNumber, i)
 		if err := saveShotImageResponse(ctx, localPath, resp); err != nil {
+			_ = storyboard.UpdateStoryboardShotKeyframes(db, projectID, episodeID, shotNumber, beats)
 			return nil, err
 		}
 		publicURL := keyframePublicURL(taskID, projectID, episodeID, shotNumber, i)

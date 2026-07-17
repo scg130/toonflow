@@ -104,7 +104,10 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 	mode := ClassifyShotVideoMode(shot)
 	width, height := videoSizeForRatio(videoRatio)
 
-	// Continuity: Seedance rule — preferred input is ACCEPTED previous clip end-frame.
+	// Continuity: Seedance rule — ONLY accepted previous-clip end-frame may replace
+	// this shot's first keyframe. Planned-keyframe fallback (prev beat still) often
+	// belongs to a different beat composition (e.g. tree-bark macro → battlefield back
+	// view) and produces uncanny morphs — keep it out of the I2V image list.
 	continuityFrame := ""
 	hasAcceptedContinuity := false
 	switch {
@@ -117,9 +120,8 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 			continuityFrame = url
 			hasAcceptedContinuity = true
 			logger.CtxTrace(ctx, "shot video accepted continuity frame shot=%d url=%s", shotNumber, continuityFrame)
-		} else if url := resolvePrevShotLastBeatOnly(db, projectID, episodeID, shotNumber); url != "" {
-			continuityFrame = url
-			logger.CtxTrace(ctx, "shot video planned keyframe continuity fallback shot=%d url=%s", shotNumber, continuityFrame)
+		} else {
+			logger.CtxTrace(ctx, "shot video skip planned-keyframe continuity fallback shot=%d (use this shot's own first keyframe)", shotNumber)
 		}
 	}
 
@@ -131,7 +133,9 @@ func GenerateShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outputD
 		return nil, fmt.Errorf("第 %d 镜尚未生成关键帧，请先锁定静帧再生成视频", shotNumber)
 	}
 	keyframeURLs = SelectKeyframesForMode(keyframeURLs, mode)
-	keyframeURLs = ApplyContinuityToKeyframes(keyframeURLs, continuityFrame, mode)
+	if hasAcceptedContinuity {
+		keyframeURLs = ApplyContinuityToKeyframes(keyframeURLs, continuityFrame, mode)
+	}
 	if len(keyframeURLs) < 2 {
 		return nil, fmt.Errorf("第 %d 镜至少需要 2 张关键帧图片（建议先生成完整 beats 静帧），请先生成关键帧", shotNumber)
 	}
@@ -338,6 +342,18 @@ func generateOneShotClip(ctx context.Context, db *sql.DB, v adapter.Vendor, outp
 		_ = os.Remove(stripped)
 	}
 
+	// Agnes may ignore request size (e.g. return 448x832). Normalize to the
+	// requested short-drama export size and apply HD-clarity restore (denoise +
+	// unsharp + mild contrast) without an extra generation call.
+	if inDim, normErr := ffmpeg.NormalizeVideoDimensions(localFile, width, height); normErr != nil {
+		logger.CtxTrace(ctx, "shot video normalize skipped shot=%d: %v", shotNumber, normErr)
+	} else if inDim.Width != width || inDim.Height != height {
+		logger.CtxTrace(ctx, "shot video normalized shot=%d from %dx%d to %dx%d",
+			shotNumber, inDim.Width, inDim.Height, width, height)
+	} else {
+		logger.CtxTrace(ctx, "shot video clarity restore applied shot=%d at %dx%d", shotNumber, width, height)
+	}
+
 	if probed, probeErr := ffmpeg.ProbeMediaDuration(localFile); probeErr == nil && probed > 0 {
 		duration = probed
 	}
@@ -437,13 +453,13 @@ func imageURLForVideo(shot *storyboard.ShotMeta) string {
 }
 
 func videoSizeForRatio(ratio string) (int, int) {
-	// Match Agnes image generation aspect ratios for better I2V consistency.
+	// Request Hongguo-style 720p vertical; provider output is normalized after download.
 	switch strings.TrimSpace(ratio) {
 	case "9:16", "720x1280", "1080x1920":
-		return 576, 1024
+		return 720, 1280
 	case "1:1":
 		return 768, 768
 	default:
-		return 1024, 576
+		return 1280, 720
 	}
 }

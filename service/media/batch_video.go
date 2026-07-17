@@ -131,8 +131,9 @@ func GenerateShotClipsSequential(ctx context.Context, db *sql.DB, v adapter.Vend
 		core.ReportStepProgress(ctx, donePct,
 			fmt.Sprintf("第 %d 镜视频完成 (%d/%d)", shotNum, i+1, total))
 
-		// Seedance continuation: next clip must start from ACCEPTED footage end-state,
-		// not the planned storyboard keyframe (model may not land on the planned pose).
+		// Seedance continuation: next clip must start from ACCEPTED footage end-state.
+		// Do NOT fall back to planned storyboard keyframes — those often mismatch the
+		// next shot's first beat (e.g. tree-bark macro vs battlefield back view).
 		continuityURL = ""
 		if i+1 < total && ShouldChainVideoContinuity(linkByShot[ordered[i+1]], sceneByShot[ordered[i+1]], sceneByShot[shotNum]) {
 			local, ok := fsutil.PublicURLToLocal(outputDir, clip.FileURL)
@@ -146,12 +147,7 @@ func GenerateShotClipsSequential(ctx context.Context, db *sql.DB, v adapter.Vend
 				}
 			}
 			if continuityURL == "" {
-				if prevShot, ldErr := storyboard.LoadShot(db, projectID, episodeID, shotNum); ldErr == nil {
-					if u := LastBeatCDNURL(prevShot); u != "" {
-						continuityURL = u
-						logger.CtxTrace(ctx, "batch video shot=%d fallback last beat keyframe for next shot", shotNum)
-					}
-				}
+				logger.CtxTrace(ctx, "batch video shot=%d no accepted continuity for next; next shot uses own keyframes", shotNum)
 			}
 		}
 	}

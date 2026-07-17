@@ -23,8 +23,8 @@ var retryBackoffSteps = []time.Duration{
 	120 * time.Second,
 }
 
-// maxImagePolicyAttempts: 1 次原 prompt + 最多 N-1 次「模型按剧情重写合规 prompt」后再试。
-const maxImagePolicyAttempts = 4
+// maxImagePolicyAttempts: 原 prompt + light + action-core + safe + ultra-minimal。
+const maxImagePolicyAttempts = 5
 
 // maxImageTransientAttempts caps timeout/5xx retries so one stuck shot cannot
 // freeze the whole one-click episode run for hours.
@@ -55,29 +55,39 @@ func RewriteImagePromptForPolicy(ctx context.Context, v adapter.Vendor, blockedP
 		round = 1
 	}
 
+	// Feed only the visual action core — full asset lore often causes the text
+	// model to refuse / return empty when asked to "comply with content policy".
+	actionCore := project.ExtractVisualActionCore(blockedPrompt)
+	if actionCore == "" {
+		actionCore = blockedPrompt
+	}
+	if len([]rune(actionCore)) > 400 {
+		actionCore = string([]rune(actionCore)[:400])
+	}
+
 	system := strings.TrimSpace(`你是短剧分镜「文生图提示词」改写专家。
-上游图片模型因内容安全策略拒绝了当前 prompt。请在保留剧情信息的前提下重写一条可过审的生图 prompt。
+上游图片模型因内容安全策略拒绝了当前 prompt。请输出一条可过审、仍贴合动作镜头的生图 prompt。
 
 硬性要求：
-1. 保留角色身份、服装造型、场景环境、镜头景别、姿势与剧情意图（谁在做什么、情绪如何）。
-2. 将血腥、裸露、残忍伤害、尸体、肢解等直白描写，改写为风格化、暗示性或特效化表达（如能量光效、激烈对峙、倒地身影、尘土飞扬），但不要改成无关空镜。
-3. 不要出现 gore / nude / naked / blood / kill / corpse / torture 等敏感英文词，以及对应中文直白词（鲜血、裸体、碎尸、内脏等）。
-4. 输出一条可直接喂给文生图 API 的 prompt（中英混合均可），不要解释、不要标题、不要 Markdown。`)
+1. 尽量保留镜头景别、角色外形、姿势动作、情绪与场景氛围；杀意、暴怒、对峙、打斗等剧情表达可以保留。
+2. 仅弱化真正极限的直白描写：鲜血喷溅、肢解碎尸、内脏、裸露色情等；改成风格化/特效化表达即可。
+3. 避免 gore / nude / blood / corpse / torture 等英文极限词及鲜血/碎尸/内脏/裸体等中文直白词。
+4. 输出一条可直接喂给文生图 API 的英文为主 prompt，不要解释、不要 Markdown。`)
 
 	reason := strings.TrimSpace(core.UserMessage(policyErr))
 	if reason == "" {
 		reason = "content policy"
 	}
-	user := fmt.Sprintf("这是第 %d 次合规改写（请比上次更克制、更风格化，但仍贴合剧情）。\n被拒原因：%s\n\n原 prompt：\n%s",
-		round, reason, blockedPrompt)
+	user := fmt.Sprintf("第 %d 次改写。被拒原因：%s\n\n镜头动作（请改写为合规生图 prompt）：\n%s",
+		round, reason, actionCore)
 
 	resp, err := v.TextRequest(ctx, adapter.DefaultTextModel, adapter.TextParams{
 		Messages: []adapter.TextMessage{
 			{Role: "system", Content: system},
 			{Role: "user", Content: user},
 		},
-		Temperature: 0.35,
-		MaxTokens:   800,
+		Temperature: 0.45,
+		MaxTokens:   400,
 	})
 	if err != nil {
 		return "", err
@@ -86,7 +96,7 @@ func RewriteImagePromptForPolicy(ctx context.Context, v adapter.Vendor, blockedP
 	if out == "" {
 		return "", fmt.Errorf("模型未返回有效合规 prompt")
 	}
-	return out, nil
+	return project.SanitizeImagePromptForPolicy(out, project.SanitizeLevelLight), nil
 }
 
 func cleanRewrittenImagePrompt(s string) string {
@@ -100,16 +110,50 @@ func cleanRewrittenImagePrompt(s string) string {
 	if i := strings.Index(s, "\n"); strings.HasPrefix(strings.ToLower(s), "prompt") && i > 0 {
 		s = strings.TrimSpace(s[i+1:])
 	}
-	// Take first non-empty paragraph — models sometimes add a short note after.
 	parts := strings.Split(s, "\n\n")
 	s = strings.TrimSpace(parts[0])
 	s = strings.Trim(s, "\"'`")
 	s = strings.TrimSpace(s)
 	runes := []rune(s)
-	if len(runes) > 600 {
-		s = string(runes[:600])
+	if len(runes) > 500 {
+		s = string(runes[:500])
 	}
 	return s
+}
+
+// nextPolicyPrompt picks the next prompt after a content-policy block.
+// Ladder is monotonic (never regresses to a riskier full asset prompt):
+//  1. model rewrite (once) or light sanitize
+//  2. action-core only (strip asset lore) + light sanitize
+//  3. safe fallback
+//  4. ultra-minimal escape hatch
+func nextPolicyPrompt(ctx context.Context, v adapter.Vendor, basePrompt, currentPrompt string, policyHits int, policyErr error) (string, string, error) {
+	switch policyHits {
+	case 1:
+		rewritten, err := RewriteImagePromptForPolicy(ctx, v, basePrompt, policyErr, 1)
+		if err == nil && strings.TrimSpace(rewritten) != "" && rewritten != currentPrompt {
+			return rewritten, "model-rewrite", nil
+		}
+		if err != nil {
+			logger.CtxTrace(ctx, "shot image prompt rewrite skipped: %v", err)
+		}
+		light := project.SanitizeImagePromptForPolicy(basePrompt, project.SanitizeLevelLight)
+		if light == "" {
+			light = project.BuildSafeImagePromptFallback(basePrompt)
+		}
+		return light, "light-sanitize", nil
+	case 2:
+		core := project.ExtractVisualActionCore(basePrompt)
+		core = project.SanitizeImagePromptForPolicy(core, project.SanitizeLevelLight)
+		if core == "" {
+			core = project.BuildSafeImagePromptFallback(basePrompt)
+		}
+		return core, "action-core", nil
+	case 3:
+		return project.BuildSafeImagePromptFallback(basePrompt), "safe-fallback", nil
+	default:
+		return project.BuildUltraMinimalSafeImagePrompt(basePrompt), "ultra-minimal", nil
+	}
 }
 
 // RetryUntilSuccess repeats fn until it returns nil or ctx is cancelled.
@@ -149,8 +193,8 @@ func RetryUntilSuccess(ctx context.Context, label string, fn func(attempt int) e
 	}
 }
 
-// RequestShotImageWithRetry calls image API; on content-policy blocks it asks the
-// text model to rewrite a story-faithful compliant prompt instead of string-scrubbing.
+// RequestShotImageWithRetry calls image API; on content-policy blocks it escalates
+// through a monotonic sanitize ladder before giving up.
 func RequestShotImageWithRetry(ctx context.Context, v adapter.Vendor, model, aspectRatio, basePrompt, refURL string) (*adapter.ImageResponse, error) {
 	if v == nil {
 		return nil, fmt.Errorf("image vendor not configured")
@@ -215,30 +259,28 @@ func RequestShotImageWithRetry(ctx context.Context, v adapter.Vendor, model, asp
 		policyHits++
 		if policyHits >= maxImagePolicyAttempts {
 			logger.CtxTrace(ctx, "shot image giving up after %d policy blocks: %v", policyHits, err)
-			return nil, fmt.Errorf("内容安全策略拦截，已按剧情重写合规 prompt %d 次仍失败: %w", maxImagePolicyAttempts-1, err)
+			return nil, fmt.Errorf("内容安全策略拦截，已按剧情重写并本地净化兜底仍失败: %w", err)
 		}
 
-		// Drop reference after the first rewrite still fails — ref image can also trip filters.
-		if policyHits >= 2 {
+		// Drop reference after first policy block — ref image can also trip filters.
+		if policyHits >= 1 {
 			useRef = ""
 		}
 
+		next, stage, stageErr := nextPolicyPrompt(ctx, v, basePrompt, prompt, policyHits, err)
+		if stageErr != nil {
+			return nil, fmt.Errorf("内容安全策略拦截后准备下一轮 prompt 失败: %w（原错误: %v）", stageErr, err)
+		}
 		if status != nil {
 			if seq, total := status.ShotProgress(); total > 0 {
 				localPct := float32(seq-1) / float32(total) * 100
 				core.ReportStepProgress(ctx, localPct, fmt.Sprintf(
-					"第 %d 镜触发内容安全策略，正在按剧情重写合规生图 prompt（第 %d/%d 次）…",
-					status.CurrentShot(), policyHits, maxImagePolicyAttempts-1))
+					"第 %d 镜触发内容安全策略，正在降级生图 prompt（%s，第 %d/%d 次）…",
+					status.CurrentShot(), stage, policyHits, maxImagePolicyAttempts-1))
 			}
 		}
-
-		rewritten, rewriteErr := RewriteImagePromptForPolicy(ctx, v, prompt, err, policyHits)
-		if rewriteErr != nil {
-			logger.CtxTrace(ctx, "shot image prompt rewrite failed, aborting: %v", rewriteErr)
-			return nil, fmt.Errorf("内容安全策略拦截后重写合规 prompt 失败: %w（原错误: %v）", rewriteErr, err)
-		}
-		logger.CtxTrace(ctx, "shot image policy rewrite round=%d len=%d", policyHits, len(rewritten))
-		prompt = rewritten
+		logger.CtxTrace(ctx, "shot image policy stage=%s round=%d len=%d", stage, policyHits, len(next))
+		prompt = next
 
 		delay := 400 * time.Millisecond
 		reportImageRetry(ctx, status, attempt+1, maxImagePolicyAttempts, delay, err)

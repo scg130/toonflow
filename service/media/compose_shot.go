@@ -191,7 +191,7 @@ func ffmpegComposeShot(videoPath, audioPath, subtitlePath, outPath string) error
 	}
 
 	args = append(args,
-		"-c:v", "libx264", "-preset", "fast", "-crf", "23",
+		"-c:v", "libx264", "-preset", "medium", "-crf", "18",
 		"-c:a", "aac",
 	)
 	if videoDur > 0 {

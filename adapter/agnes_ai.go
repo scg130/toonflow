@@ -630,7 +630,7 @@ func (v *AgnesAIVendor) VideoRequest(ctx interface{}, model string, params Video
 		NumFrames:         numFrames,
 		FrameRate:         frameRate,
 		NegativePrompt:    params.Negative,
-		NumInferenceSteps: 45,
+		NumInferenceSteps: 50,
 	}
 
 	// Prefer keyframe interpolation when >=2 valid keyframes are supplied: the model
@@ -652,7 +652,7 @@ func (v *AgnesAIVendor) VideoRequest(ctx interface{}, model string, params Video
 	if len(keyframes) >= 2 {
 		body.ExtraBody = &extraBody{Image: keyframes, Mode: mode}
 		if !strings.Contains(strings.ToLower(body.Prompt), "keyframe") {
-			body.Prompt = "竖屏短剧关键帧插值：动作清晰、情绪特写优先、强推近运镜；关键帧间平滑连贯；无声视频仅画面运动，不生成任何语音。 " + body.Prompt
+			body.Prompt = "竖屏短剧关键帧插值：高清晰度、五官边缘锐利、服饰发丝细节清楚；动作清晰、情绪特写优先、强推近运镜；关键帧间平滑连贯；无声视频仅画面运动，不生成任何语音。 " + body.Prompt
 		}
 		logger.CtxTrace(c, "agnes video api keyframes=%d", len(keyframes))
 	} else if len(params.Keyframes) > 0 {

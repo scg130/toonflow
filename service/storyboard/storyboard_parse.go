@@ -285,6 +285,44 @@ func MergeStoryboardMedia(existing, incoming []task.StoryboardItem) []task.Story
 		if len(prev.AssetIDs) > 0 && len(out[i].AssetIDs) == 0 {
 			out[i].AssetIDs = prev.AssetIDs
 		}
+		out[i].Beats = mergeBeatMedia(prev.Beats, out[i].Beats)
+		// Keep shot-level URLs aligned with first beat when beats carry media.
+		if len(out[i].Beats) > 0 {
+			if out[i].Beats[0].ImageURL != "" {
+				out[i].ImageURL = out[i].Beats[0].ImageURL
+			}
+			if out[i].Beats[0].ImageRemoteURL != "" {
+				out[i].ImageRemoteURL = out[i].Beats[0].ImageRemoteURL
+			}
+		}
+	}
+	return out
+}
+
+// mergeBeatMedia preserves previously generated image URLs onto refreshed beat text.
+func mergeBeatMedia(prev, incoming []task.ShotBeat) []task.ShotBeat {
+	if len(prev) == 0 {
+		return incoming
+	}
+	if len(incoming) == 0 {
+		return prev
+	}
+	out := make([]task.ShotBeat, len(incoming))
+	copy(out, incoming)
+	for i := range out {
+		if i >= len(prev) {
+			break
+		}
+		if out[i].ImageURL == "" && prev[i].ImageURL != "" {
+			out[i].ImageURL = prev[i].ImageURL
+		}
+		if out[i].ImageRemoteURL == "" && prev[i].ImageRemoteURL != "" {
+			out[i].ImageRemoteURL = prev[i].ImageRemoteURL
+		}
+		// Keep a known-good image_prompt only when the refresh left it empty.
+		if strings.TrimSpace(out[i].ImagePrompt) == "" && strings.TrimSpace(prev[i].ImagePrompt) != "" {
+			out[i].ImagePrompt = prev[i].ImagePrompt
+		}
 	}
 	return out
 }

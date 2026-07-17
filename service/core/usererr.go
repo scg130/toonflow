@@ -54,7 +54,7 @@ func sanitizeUserError(msg string) string {
 			return "AI 服务响应超时，请稍后重试"
 		}
 		if isContentPolicyError(lower) {
-			return "画面描述触发内容安全策略，按剧情重写合规 prompt 后仍失败，请编辑分镜描述后重试"
+			return "画面描述触发内容安全策略，自动放宽改写后仍失败，请编辑分镜描述后重试"
 		}
 		if strings.Contains(msg, "401") || strings.Contains(msg, "无效的令牌") ||
 			strings.Contains(lower, "invalid api key") || strings.Contains(lower, "incorrect api key") {

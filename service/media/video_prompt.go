@@ -26,11 +26,21 @@ func buildShotVideoPrompt(shot *storyboard.ShotMeta, artStyle, stylePrompt, styl
 
 func buildShotVideoPromptWithMode(shot *storyboard.ShotMeta, mode VideoMode, artStyle, stylePrompt, styleAnchor string, humanSubject bool) (string, string) {
 	parts := make([]string, 0, 24)
-	parts = append(parts, videoI2VLines("positive_locks", []string{
+	objectFocus := isObjectFocusedShot(shot)
+	locks := []string{
 		"image1 is first frame lock, imageN is last frame target",
 		"generate only continuous motion between locked frames",
-		"preserve subject identity, face structure, outfit, hairstyle, and scene layout",
-	})...)
+	}
+	if objectFocus {
+		locks = append(locks, "preserve object geometry, surface texture, hand anatomy, and scene layout")
+	} else {
+		locks = append(locks, "preserve subject identity, face structure, outfit, hairstyle, and scene layout")
+	}
+	if objectFocus {
+		parts = append(parts, locks...)
+	} else {
+		parts = append(parts, videoI2VLines("positive_locks", locks)...)
+	}
 
 	beats := BeatActionsForMode(shot.Beats, mode)
 	if motion := formatInterKeyframeMotion(beats, shot.Duration, mode); motion != "" {
@@ -39,21 +49,40 @@ func buildShotVideoPromptWithMode(shot *storyboard.ShotMeta, mode VideoMode, art
 		parts = append(parts, "this clip only physical action: "+m)
 	}
 
-	parts = append(parts, videoI2VLines("motion_tail", []string{
+	motionTail := []string{
 		"one physical action path, no hard cuts inside the clip",
 		"end pose must land on the last keyframe",
-	})...)
+	}
+	if objectFocus {
+		motionTail = append(motionTail, "only object, particles, liquid, and visible fingers move; no face or body performance")
+	} else {
+		motionTail = append(motionTail, "brows lids lips and jaw move; shoulders and hands shift clearly")
+	}
+	if objectFocus {
+		parts = append(parts, motionTail...)
+	} else {
+		parts = append(parts, videoI2VLines("motion_tail", motionTail)...)
+	}
+	if hasLiquidSurfaceImpact(shot.Beats) {
+		parts = append(parts, "liquid impacts once, spreads flat across the surface, then remains settled; no upright liquid spike, no re-forming droplet, no bouncing")
+	}
 
 	if ac := compressDescriptionForVideo(shot.ActionContinue); ac != "" && utf8.RuneCountInString(ac) <= 60 {
-		if !isPlaceholderContinuity(ac) {
+		if !isPlaceholderContinuity(ac) && actionContinueCompatibleWithBeats(ac, shot.Beats) {
 			parts = append(parts, "handoff from previous ending: "+ac)
 		}
 	}
 
 	lines := storyboard.DialogueLinesForTTS(shot.Dialogue)
-	parts = appendDialogueVideoInstructions(parts, lines, humanSubject)
+	if !objectFocus && !beatsAreRoarOrScream(shot.Beats) {
+		parts = appendDialogueVideoInstructions(parts, lines, humanSubject)
+	}
 
-	if cam := camera.MapCameraToVideoMotion(shot.Camera); cam != "" {
+	if objectFocus {
+		parts = append(parts, "locked macro camera with one slow controlled push toward the contact point; keep object proportions stable")
+	} else if hasLargeFramingJump(shot.Beats) {
+		parts = append(parts, "reframe between locked keyframes only — keep subject identity; do not morph through an impossible 180-degree body turn")
+	} else if cam := camera.MapCameraToVideoMotion(shot.Camera); cam != "" {
 		parts = append(parts, cam)
 	} else if humanSubject {
 		parts = append(parts, videoI2VOneLine("camera_default_human", "one slow vertical short-drama push-in on face"))
@@ -73,15 +102,33 @@ func buildShotVideoPromptWithMode(shot *storyboard.ShotMeta, mode VideoMode, art
 		parts = append(parts, "lighting continuity: "+lit)
 	}
 
-	parts = append(parts, hongguoVideoStyleTags(artStyle, stylePrompt)...)
-	parts = append(parts, videoI2VLines("clip_tail", []string{
+	styleTags := hongguoVideoStyleTags(artStyle, stylePrompt)
+	if objectFocus {
+		styleTags = filterHumanPerformanceTags(styleTags)
+		styleTags = append(styleTags, videoI2VLines("style_tags_object", []string{
+			"locked macro framing",
+			"stable object proportions",
+			"controlled particle motion",
+			"no face performance",
+		})...)
+	}
+	parts = append(parts, styleTags...)
+	clipTail := videoI2VLines("clip_tail", []string{
 		"silent video no generated speech",
 		"Chinese drama visuals only",
 		"smooth temporal interpolation",
 		"frame-to-frame continuity",
-	})...)
+	})
+	if objectFocus {
+		clipTail = filterHumanPerformanceTags(clipTail)
+	}
+	parts = append(parts, clipTail...)
 	if mode == VideoModeFrames2 {
-		parts = append(parts, videoI2VOneLine("mode_frames2", "FLF2V two-frame morph first-to-last only"))
+		if hasLargeFramingJump(shot.Beats) {
+			parts = append(parts, "FLF2V two-frame reframe first-to-last; preserve identity, no impossible body morph")
+		} else {
+			parts = append(parts, videoI2VOneLine("mode_frames2", "FLF2V two-frame morph first-to-last only"))
+		}
 	} else {
 		parts = append(parts, videoI2VOneLine("mode_multiframe", "multi-keyframe continuous action take"))
 	}
@@ -89,7 +136,7 @@ func buildShotVideoPromptWithMode(shot *storyboard.ShotMeta, mode VideoMode, art
 		parts = append(parts, videoI2VOneLine("non_human_tail", "no human character motion, object and environment only"))
 	}
 
-	negative := videoI2VCSV("negative", "static image, frozen frame, morphing, flicker, identity drift, cinematic, emotional")
+		negative := videoI2VCSV("negative", "static image, frozen frame, morphing, flicker, identity drift, blurry, low resolution, low quality, soft focus, muddy details, oversmoothed")
 	if humanSubject && hasSpeakableLines(lines) {
 		if lip := videoI2VCSV("negative_lip_sync", "closed mouth while speaking, no lip sync"); lip != "" {
 			negative += ", " + lip
@@ -128,6 +175,9 @@ func formatInterKeyframeMotion(beats []task.ShotBeat, dur float64, mode VideoMod
 		if len(nodes) == 1 {
 			return "image-to-video motion" + durHint + ": animate from locked start frame — " + nodes[0].a
 		}
+		if hasLargeFramingJump(beats) {
+			return "FLF2V reframe" + durHint + ": start[" + nodes[0].a + "] → end[" + nodes[len(nodes)-1].a + "]; keep identity; camera/framing change only, no body morph through impossible turns"
+		}
 		return "FLF2V motion" + durHint + ": start[" + nodes[0].a + "] → end[" + nodes[len(nodes)-1].a + "]; only the physical transition between these two locked frames"
 	}
 	parts := make([]string, 0, len(nodes))
@@ -139,11 +189,21 @@ func formatInterKeyframeMotion(beats []task.ShotBeat, dur float64, mode VideoMod
 
 // hongguoVideoStyleTags returns vertical short-drama look tags for I2V (not still-image render jargon).
 func hongguoVideoStyleTags(artStyle, stylePrompt string) []string {
-	tags := append([]string{}, videoI2VLines("style_tags", []string{
-		"Chinese vertical short drama style",
-		"Hongguo Douyin short-series look",
-		"9:16 vertical framing",
-	})...)
+		tags := append([]string{}, videoI2VLines("style_tags", []string{
+			"Chinese vertical short drama style",
+			"Hongguo Douyin short-series look",
+			"9:16 vertical framing",
+			"high clarity short-drama look",
+			"sharp facial micro-detail",
+			"clear fabric and hair edges",
+		})...)
+		tags = append(tags, videoI2VLines("style_tags_human", []string{
+			"tight face fill vertical frame",
+			"side rim light on cheek edge",
+			"brows lids lips move on cue",
+			"fast readable body beats",
+			"crisp eye and lip edges",
+		})...)
 	if s := strings.TrimSpace(artStyle); s != "" {
 		tags = append(tags, s+" motion style")
 	}
@@ -364,6 +424,10 @@ func isSpeakableVideoLine(text string) bool {
 
 func isPlaceholderContinuity(s string) bool {
 	s = strings.TrimSpace(s)
+	if strings.Contains(s, "开场") &&
+		(strings.Contains(s, "无前置") || strings.Contains(s, "无承接") || strings.Contains(s, "无上一镜")) {
+		return true
+	}
 	s = strings.TrimPrefix(s, "无")
 	s = strings.Trim(s, "（）() ：:")
 	s = strings.TrimSpace(s)
@@ -372,6 +436,128 @@ func isPlaceholderContinuity(s string) bool {
 		return true
 	}
 	return strings.HasPrefix(s, "开场") && utf8.RuneCountInString(s) <= 6
+}
+
+// actionContinueCompatibleWithBeats drops handoff text whose props/poses are absent
+// from this shot's beats (e.g. "抠紧树皮" while beats are back-view roar).
+func actionContinueCompatibleWithBeats(ac string, beats []task.ShotBeat) bool {
+	ac = strings.TrimSpace(ac)
+	if ac == "" {
+		return false
+	}
+	beatBlob := strings.Builder{}
+	for _, b := range beats {
+		beatBlob.WriteString(b.Action)
+		beatBlob.WriteByte(' ')
+		beatBlob.WriteString(b.ImagePrompt)
+		beatBlob.WriteByte(' ')
+	}
+	blob := beatBlob.String()
+	propHints := []string{"树皮", "树桩", "树干", "树根", "指甲抠", "抠抓", "抠紧"}
+	for _, p := range propHints {
+		if strings.Contains(ac, p) && !strings.Contains(blob, p) && !strings.Contains(blob, "树") {
+			return false
+		}
+	}
+	return true
+}
+
+// hasLargeFramingJump detects back/wide start → face close-up end (or reverse),
+// which should reframe rather than morph through an impossible turn.
+func hasLargeFramingJump(beats []task.ShotBeat) bool {
+	if len(beats) < 2 {
+		return false
+	}
+	first := strings.ToLower(beats[0].Action + " " + beats[0].ImagePrompt)
+	last := strings.ToLower(beats[len(beats)-1].Action + " " + beats[len(beats)-1].ImagePrompt)
+	startBack := containsAnyFold(first, "背", "back view", "from behind", "rear")
+	endFace := containsAnyFold(last, "面", "脸", "特写", "近景", "close-up", "close up", "face", "head")
+	startFace := containsAnyFold(first, "面", "脸", "特写", "近景", "close-up", "close up", "face", "head")
+	endBack := containsAnyFold(last, "背", "back view", "from behind", "rear")
+	return (startBack && endFace) || (startFace && endBack)
+}
+
+func beatsAreRoarOrScream(beats []task.ShotBeat) bool {
+	for _, b := range beats {
+		s := b.Action + " " + b.ImagePrompt
+		if containsAnyFold(s, "长啸", "怒吼", "呐喊", "嘶吼", "咆哮", "shouting", "roar", "scream") {
+			return true
+		}
+	}
+	return false
+}
+
+func isObjectFocusedShot(shot *storyboard.ShotMeta) bool {
+	if shot == nil {
+		return false
+	}
+	blob := strings.ToLower(strings.Join([]string{
+		shot.Description, shot.Camera, shot.Prompt,
+	}, " "))
+	for _, b := range shot.Beats {
+		blob += " " + strings.ToLower(b.Action+" "+b.ImagePrompt)
+	}
+	objectHints := []string{
+		"树桩", "树皮", "断面", "木质", "物体特写", "道具特写",
+		"stump", "bark", "wood surface", "object close-up", "macro",
+	}
+	objectScore := 0
+	for _, hint := range objectHints {
+		if strings.Contains(blob, hint) {
+			objectScore++
+		}
+	}
+	faceHints := []string{"面部", "脸部", "眼部", "嘴唇", "face close-up", "portrait"}
+	for _, hint := range faceHints {
+		if strings.Contains(blob, hint) {
+			objectScore--
+		}
+	}
+	return objectScore >= 2
+}
+
+func hasLiquidSurfaceImpact(beats []task.ShotBeat) bool {
+	for _, b := range beats {
+		s := strings.ToLower(b.Action + " " + b.ImagePrompt)
+		hasLiquid := containsAnyFold(s, "液体", "血珠", "水滴", "泪滴", "liquid", "drop")
+		hasImpact := containsAnyFold(s, "砸落", "滴落", "接触", "晕开", "扩散", "hitting", "impact", "spreading")
+		if hasLiquid && hasImpact {
+			return true
+		}
+	}
+	return false
+}
+
+func filterHumanPerformanceTags(lines []string) []string {
+	blocked := []string{
+		"face", "cheek", "brows", "lids", "lips", "jaw",
+		"body beats", "body motion", "shoulders and hands",
+	}
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		lower := strings.ToLower(line)
+		skip := false
+		for _, term := range blocked {
+			if strings.Contains(lower, term) {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+func containsAnyFold(text string, needles ...string) bool {
+	lower := strings.ToLower(text)
+	for _, n := range needles {
+		if strings.Contains(lower, strings.ToLower(n)) {
+			return true
+		}
+	}
+	return false
 }
 
 func truncateDialogueForVideoPrompt(text string, maxRunes int) string {
