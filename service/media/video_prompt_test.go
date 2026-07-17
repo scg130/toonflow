@@ -120,6 +120,57 @@ func TestBuildShotVideoPrompt_rejectsJunkDialogue(t *testing.T) {
 	}
 }
 
+func TestBuildShotVideoPrompt_skipsIncompatibleHandoffAndRoarLipSync(t *testing.T) {
+	shot := &storyboard.ShotMeta{
+		Description:    "石昊爆发怒吼",
+		Camera:         "中景 平视 手持微抖缓慢推近上半身",
+		ActionContinue: "上镜末：指甲抠紧树皮 → 本镜起始：双手维持抠抓姿态",
+		Dialogue:       &task.ShotDialogue{Lines: []task.DialogueLine{{Speaker: "石昊", Text: "柳神！"}}},
+		Beats: []task.ShotBeat{
+			{Time: 0, Action: "画面：石昊背部中景。动作：双肩猛然耸起。", ImagePrompt: "medium shot back view, shoulders shrugging"},
+			{Time: 5, Action: "画面：石昊面部近景。动作：仰面张嘴长啸。", ImagePrompt: "close-up head tilted back, mouth open wide shouting"},
+		},
+		Duration: 10,
+	}
+	pos, _ := buildShotVideoPrompt(shot, "3D动漫", "", "", true)
+	if strings.Contains(pos, "树皮") || strings.Contains(pos, "抠抓") {
+		t.Fatalf("incompatible action_continue handoff should be dropped: %q", pos)
+	}
+	if strings.Contains(pos, "张嘴说短句") || strings.Contains(pos, "柳神！") {
+		t.Fatalf("roar beat should not force lip-sync dialogue: %q", pos)
+	}
+	if !strings.Contains(pos, "reframe between locked keyframes") {
+		t.Fatalf("back→face jump should request reframe, not morph: %q", pos)
+	}
+	if strings.Contains(pos, "fast dolly push-in") {
+		t.Fatalf("aggressive push-in should be skipped on framing jump: %q", pos)
+	}
+}
+
+func TestBuildShotVideoPrompt_objectLiquidImpact(t *testing.T) {
+	shot := &storyboard.ShotMeta{
+		Description:    "焦黑树桩断面特写",
+		Camera:         "极特写 俯拍 缓慢推镜至血珠接触面",
+		ActionContinue: "开场：无前置姿态",
+		Beats: []task.ShotBeat{
+			{Time: 0, Action: "画面：焦黑树桩极特写。动作：树皮边缘缓慢剥落。"},
+			{Time: 4, Action: "画面：断面特写。动作：一滴暗红血珠砸落，液体向四周晕开。"},
+		},
+		Duration: 8,
+	}
+	pos, _ := buildShotVideoPrompt(shot, "3D动漫", "", "", true)
+	for _, bad := range []string{"eyes and mouth", "brows lids lips", "handoff from previous ending"} {
+		if strings.Contains(pos, bad) {
+			t.Fatalf("object macro prompt contains human/placeholder instruction %q: %s", bad, pos)
+		}
+	}
+	for _, want := range []string{"preserve object geometry", "spreads flat", "no upright liquid spike", "locked macro camera"} {
+		if !strings.Contains(pos, want) {
+			t.Fatalf("object macro guard %q missing: %s", want, pos)
+		}
+	}
+}
+
 func TestCompressDescriptionForVideo(t *testing.T) {
 	got := compressDescriptionForVideo("【目标】石昊发现柳神消失。【承接】开场跪地。【结果】手指僵住。")
 	if strings.Contains(got, "【") {

@@ -23,6 +23,10 @@ func ClassifyShotVideoMode(shot *storyboard.ShotMeta) VideoMode {
 	if shot == nil {
 		return VideoModeFrames2
 	}
+	// Large framing jumps (back↔face) must not use multiframe morph — force conservative frames2.
+	if hasLargeFramingJump(shot.Beats) {
+		return VideoModeFrames2
+	}
 	n := len(shot.Beats)
 	if n >= 3 {
 		return VideoModeMultiframe

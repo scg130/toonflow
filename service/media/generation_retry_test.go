@@ -80,31 +80,34 @@ func TestRequestShotImageWithRetry_rewritesViaModel(t *testing.T) {
 	}
 }
 
-type alwaysPolicyRewriteVendor struct {
+type alwaysPolicyVendor struct {
 	imageCalls int
 	textCalls  int
+	prompts    []string
 }
 
-func (v *alwaysPolicyRewriteVendor) VendorConfig() adapter.VendorConfig { return adapter.VendorConfig{} }
-func (v *alwaysPolicyRewriteVendor) Configure(string, string)           {}
-func (v *alwaysPolicyRewriteVendor) TextRequest(interface{}, string, adapter.TextParams) (*adapter.TextResponse, error) {
+func (v *alwaysPolicyVendor) VendorConfig() adapter.VendorConfig { return adapter.VendorConfig{} }
+func (v *alwaysPolicyVendor) Configure(string, string)           {}
+func (v *alwaysPolicyVendor) TextRequest(interface{}, string, adapter.TextParams) (*adapter.TextResponse, error) {
 	v.textCalls++
-	return &adapter.TextResponse{Content: "safe stylized still frame attempt"}, nil
+	return &adapter.TextResponse{Content: ""}, nil // empty rewrite → local ladder
 }
-func (v *alwaysPolicyRewriteVendor) VideoRequest(interface{}, string, adapter.VideoParams) (*adapter.VideoResponse, error) {
+func (v *alwaysPolicyVendor) VideoRequest(interface{}, string, adapter.VideoParams) (*adapter.VideoResponse, error) {
 	return nil, errors.New("unused")
 }
-func (v *alwaysPolicyRewriteVendor) TTSRequest(interface{}, string, adapter.TTSParams) (*adapter.TTSResponse, error) {
+func (v *alwaysPolicyVendor) TTSRequest(interface{}, string, adapter.TTSParams) (*adapter.TTSResponse, error) {
 	return nil, errors.New("unused")
 }
-func (v *alwaysPolicyRewriteVendor) ImageRequest(interface{}, string, adapter.ImageParams) (*adapter.ImageResponse, error) {
+func (v *alwaysPolicyVendor) ImageRequest(_ interface{}, _ string, params adapter.ImageParams) (*adapter.ImageResponse, error) {
 	v.imageCalls++
+	v.prompts = append(v.prompts, params.Prompt)
 	return nil, errors.New(`agnes image error 400: Unable to generate this content. Please modify your prompt`)
 }
 
 func TestRequestShotImageWithRetry_givesUpOnPersistentPolicy(t *testing.T) {
-	v := &alwaysPolicyRewriteVendor{}
-	_, err := RequestShotImageWithRetry(context.Background(), v, "m", "16:9", "blood gore kill", "")
+	v := &alwaysPolicyVendor{}
+	base := "close-up shouting, blood-stained robes, asset consistency: 染血杀意角色, blood on sword"
+	_, err := RequestShotImageWithRetry(context.Background(), v, "m", "16:9", base, "")
 	if err == nil {
 		t.Fatal("expected policy failure")
 	}
@@ -114,48 +117,60 @@ func TestRequestShotImageWithRetry_givesUpOnPersistentPolicy(t *testing.T) {
 	if v.imageCalls != maxImagePolicyAttempts {
 		t.Fatalf("imageCalls=%d want %d", v.imageCalls, maxImagePolicyAttempts)
 	}
-	// 3 rewrites between 4 image attempts
-	if v.textCalls != maxImagePolicyAttempts-1 {
-		t.Fatalf("textCalls=%d want %d", v.textCalls, maxImagePolicyAttempts-1)
+	last := v.prompts[len(v.prompts)-1]
+	lower := strings.ToLower(last)
+	if strings.Contains(lower, "blood") || strings.Contains(last, "染血") || strings.Contains(last, "杀意") {
+		t.Fatalf("final prompt still risky: %q", last)
+	}
+	if !strings.Contains(lower, "family friendly") {
+		t.Fatalf("expected ultra-minimal anchors, got %q", last)
 	}
 }
 
-type rewriteFailVendor struct {
+type rewriteFailThenOKVendor struct {
 	imageCalls int
 	textCalls  int
+	lastPrompt string
 }
 
-func (v *rewriteFailVendor) VendorConfig() adapter.VendorConfig { return adapter.VendorConfig{} }
-func (v *rewriteFailVendor) Configure(string, string)           {}
-func (v *rewriteFailVendor) TextRequest(interface{}, string, adapter.TextParams) (*adapter.TextResponse, error) {
+func (v *rewriteFailThenOKVendor) VendorConfig() adapter.VendorConfig { return adapter.VendorConfig{} }
+func (v *rewriteFailThenOKVendor) Configure(string, string)           {}
+func (v *rewriteFailThenOKVendor) TextRequest(interface{}, string, adapter.TextParams) (*adapter.TextResponse, error) {
 	v.textCalls++
 	return nil, errors.New("text api timeout")
 }
-func (v *rewriteFailVendor) VideoRequest(interface{}, string, adapter.VideoParams) (*adapter.VideoResponse, error) {
+func (v *rewriteFailThenOKVendor) VideoRequest(interface{}, string, adapter.VideoParams) (*adapter.VideoResponse, error) {
 	return nil, errors.New("unused")
 }
-func (v *rewriteFailVendor) TTSRequest(interface{}, string, adapter.TTSParams) (*adapter.TTSResponse, error) {
+func (v *rewriteFailThenOKVendor) TTSRequest(interface{}, string, adapter.TTSParams) (*adapter.TTSResponse, error) {
 	return nil, errors.New("unused")
 }
-func (v *rewriteFailVendor) ImageRequest(interface{}, string, adapter.ImageParams) (*adapter.ImageResponse, error) {
+func (v *rewriteFailThenOKVendor) ImageRequest(_ interface{}, _ string, params adapter.ImageParams) (*adapter.ImageResponse, error) {
 	v.imageCalls++
-	return nil, errors.New(`agnes image error 400: Unable to generate this content. Please modify your prompt`)
+	v.lastPrompt = params.Prompt
+	if v.imageCalls == 1 {
+		return nil, errors.New(`agnes image error 400: Unable to generate this content. Please modify your prompt`)
+	}
+	return &adapter.ImageResponse{DataURL: "data:image/png;base64,aaa", RemoteURL: "https://cdn.example.com/ok.png"}, nil
 }
 
-func TestRequestShotImageWithRetry_rewriteFailureAborts(t *testing.T) {
-	v := &rewriteFailVendor{}
-	_, err := RequestShotImageWithRetry(context.Background(), v, "m", "16:9", "blood gore", "")
-	if err == nil {
-		t.Fatal("expected abort on rewrite failure")
+func TestRequestShotImageWithRetry_rewriteFailureFallsBackToSanitize(t *testing.T) {
+	v := &rewriteFailThenOKVendor{}
+	resp, err := RequestShotImageWithRetry(context.Background(), v, "m", "16:9", "blood gore 鲜血 染血", "")
+	if err != nil {
+		t.Fatalf("expected sanitize fallback recovery, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "重写合规 prompt 失败") {
-		t.Fatalf("got %v", err)
-	}
-	if v.imageCalls != 1 {
-		t.Fatalf("should not keep image-retrying after rewrite fail, calls=%d", v.imageCalls)
+	if resp == nil || resp.RemoteURL == "" {
+		t.Fatal("expected image response")
 	}
 	if v.textCalls != 1 {
 		t.Fatalf("textCalls=%d", v.textCalls)
+	}
+	if v.imageCalls != 2 {
+		t.Fatalf("imageCalls=%d", v.imageCalls)
+	}
+	if strings.Contains(v.lastPrompt, "鲜血") || strings.Contains(v.lastPrompt, "染血") {
+		t.Fatalf("fallback should scrub risky words, got %q", v.lastPrompt)
 	}
 }
 

@@ -92,6 +92,19 @@ var (
 	RequestShotImageWithRetry   = svcmedia.RequestShotImageWithRetry
 	BuildBeatImagePrompt        = svcmedia.BuildBeatImagePrompt
 	SortShotNumbers             = svcmedia.SortShotNumbers
+	PreflightShotKeyframes      = svcmedia.PreflightShotKeyframes
+	PreflightShotsKeyframes     = svcmedia.PreflightShotsKeyframes
+)
+
+type (
+	KeyframeAnomaly         = svcmedia.KeyframeAnomaly
+	KeyframePreflightReport = svcmedia.KeyframePreflightReport
+)
+
+const (
+	KeyframeAnomalyBlock = svcmedia.KeyframeAnomalyBlock
+	KeyframeAnomalyWarn  = svcmedia.KeyframeAnomalyWarn
+	KeyframeAnomalyInfo  = svcmedia.KeyframeAnomalyInfo
 )
 
 // --- timeline ---

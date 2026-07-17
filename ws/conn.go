@@ -35,6 +35,8 @@ type WSRequest struct {
 	WorkflowAction string            `json:"workflow_action,omitempty"`
 	WorkflowParams map[string]string `json:"workflow_params,omitempty"`
 	ClipID         string            `json:"clip_id,omitempty"`
+	// ConfirmKeyframeAnomalies allows video generation to proceed after preflight warnings.
+	ConfirmKeyframeAnomalies bool `json:"confirm_keyframe_anomalies,omitempty"`
 }
 
 // WSResponse represents a server-to-client message.

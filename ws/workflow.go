@@ -602,6 +602,28 @@ func (wfs *WorkflowService) runShotVideos(ctx context.Context, cm *ConnManager, 
 	}
 
 	ordered := service.SortShotNumbers(shots)
+
+	// Deterministic keyframe preflight — zero extra AI cost. Blockers always stop;
+	// warnings require explicit confirm_keyframe_anomalies before consuming video quota.
+	report, err := service.PreflightShotsKeyframes(wfs.DB, wfs.OutputDir, req.ProjectID, req.EpisodeID, ordered)
+	if err != nil {
+		return workflowOutcome{}, err
+	}
+	if report != nil && report.HasBlockers() {
+		return workflowOutcome{}, fmt.Errorf("关键帧预检未通过：%s", formatKeyframeAnomalySummary(report))
+	}
+	if report != nil && report.NeedsManualConfirm() && !req.ConfirmKeyframeAnomalies {
+		return workflowOutcome{
+			reply: "⚠️ 关键帧存在质量风险，请确认后继续生成视频",
+			extra: map[string]interface{}{
+				"keyframe_preflight":        report,
+				"needs_keyframe_confirm":    true,
+				"shot_numbers":              ordered,
+				"confirm_keyframe_anomalies": false,
+			},
+		}, nil
+	}
+
 	if batch {
 		tk, err := wfs.submitSequentialShotVideoTask(ctx, cm, userID, req.ProjectID, req.EpisodeID, ordered)
 		if err != nil {
@@ -635,6 +657,27 @@ func (wfs *WorkflowService) runShotVideos(ctx context.Context, cm *ConnManager, 
 			"shot_numbers": ordered[:1],
 		},
 	}, nil
+}
+
+func formatKeyframeAnomalySummary(report *service.KeyframePreflightReport) string {
+	if report == nil || len(report.Anomalies) == 0 {
+		return "未知问题"
+	}
+	parts := make([]string, 0, 3)
+	for _, a := range report.Anomalies {
+		if a.Severity != service.KeyframeAnomalyBlock && a.Severity != "block" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("第 %d 镜：%s", a.ShotNumber, a.Message))
+		if len(parts) >= 3 {
+			break
+		}
+	}
+	if len(parts) == 0 {
+		a := report.Anomalies[0]
+		return fmt.Sprintf("第 %d 镜：%s", a.ShotNumber, a.Message)
+	}
+	return strings.Join(parts, "；")
 }
 
 func (wfs *WorkflowService) submitSequentialShotVideoTask(ctx context.Context, cm *ConnManager, userID, projectID, episodeID string, shots []int) (*task.Task, error) {

@@ -25,12 +25,22 @@
 - Chinese vertical short drama style
 - Hongguo Douyin short-series look
 - 9:16 vertical framing
-- tight face fill vertical frame
 - high contrast punchy color
+- commercial short-drama production value
+- clear readable motion
+- stable subject proportions
+
+## style_tags_human
+- tight face fill vertical frame
 - side rim light on cheek edge
 - brows lids lips move on cue
 - fast readable body beats
-- commercial short-drama production value
+
+## style_tags_object
+- locked macro framing
+- stable object proportions
+- controlled particle motion
+- no face performance
 
 ## mode_frames2
 FLF2V two-frame morph first-to-last only
@@ -59,13 +69,13 @@ first image is the accepted previous-clip ending — begin exactly from that pos
 no human character motion, object and environment only
 
 ## negative
-static image, frozen frame, slideshow, still photo, no motion, boring slow motion, soft dreamy cinematic essay, empty atmosphere shot, vague mood without action, morphing, warping, flickering, jitter, stuttering, low fps, blurry, out of focus, low quality, low resolution, distorted face, deformed body, bad anatomy, extra limbs, identity drift, face swap mid-clip, outfit change, hairstyle change, room redesign, background swap, new character appear, watermark, text overlay, logo, subtitle, random color shift, style drift, temporal discontinuity, jump cut, English speech, English dialogue, foreign language audio, voiceover, narration, spoken words, talking audio, action freeze mid-motion, discontinuous movement, overstacked VFX particles without story, generic fantasy MV montage, ignore last keyframe, drift away from keyframe poses, cinematic, epic, beautiful, dramatic, stunning, breathtaking, dynamic, atmospheric, magical, professional, masterpiece, 8K, ultra HD, high quality, trending on ArtStation
+static image, frozen frame, slideshow, still photo, no motion, boring slow motion, soft dreamy essay, empty atmosphere shot, vague mood without action, morphing, warping, flickering, jitter, stuttering, low fps, blurry, out of focus, distorted face, deformed body, bad anatomy, extra limbs, identity drift, face swap mid-clip, outfit change, hairstyle change, room redesign, background swap, new character appear, watermark, text overlay, logo, subtitle, random color shift, style drift, temporal discontinuity, jump cut, English speech, English dialogue, foreign language audio, voiceover, narration, spoken words, talking audio, action freeze mid-motion, discontinuous movement, overstacked VFX particles without story, generic fantasy MV montage, ignore last keyframe, drift away from keyframe poses, upright liquid spike, suspended droplet sculpture
 
 ## negative_lip_sync
 closed mouth while speaking, static lips during dialogue, no lip sync, mute expression while talking, wrong speaker lip movement
 
 ## anti_slop
-电影感, 氛围感, 史诗感, 戏剧性, 震撼, 唯美, 大气, 高级感, cinematic, epic, dramatic, beautiful, stunning, breathtaking, dynamic, atmospheric, magical, masterpiece
+电影感, 氛围感, 史诗感, 戏剧性, 震撼, 唯美, 大气, 高级感, epic, dramatic, beautiful, stunning, breathtaking, dynamic, atmospheric, magical, masterpiece
 
 ## literary_mood_only
 悲愤欲绝, 几近破碎, 情绪崩溃, 滔天怒火, 杀意沸腾, 心境崩塌, 威压, 神念, 气势逼人, 无风起浪, 氛围压抑, 沉重气氛

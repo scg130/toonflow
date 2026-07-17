@@ -1966,6 +1966,10 @@
       return;
     }
     if (action === 'generate_shot_video' || action === 'batch_generate_shot_videos') {
+      if (data && data.needs_keyframe_confirm) {
+        promptKeyframeAnomalyConfirm(action, data);
+        return;
+      }
       loadTasks();
       loadShotClips();
       return;
@@ -2066,6 +2070,7 @@
       shot_numbers: opts.shotNumbers || [],
       workflow_params: opts.params || {},
       clip_id: opts.clipId || '',
+      confirm_keyframe_anomalies: !!opts.confirmKeyframeAnomalies,
     });
     if (!sent) return;
     if (!opts.skipUserMessage) {
@@ -2544,6 +2549,37 @@
       { shotNumbers: [shotNumber] }
     );
     return Promise.resolve();
+  }
+
+  function formatKeyframeAnomalies(report) {
+    const list = (report && report.anomalies) || [];
+    if (!list.length) return '关键帧存在质量风险';
+    return list.slice(0, 8).map(a => {
+      const shot = a.shot_number != null ? ('第 ' + a.shot_number + ' 镜：') : '';
+      return shot + (a.message || a.code || '未知问题');
+    }).join('\n');
+  }
+
+  function promptKeyframeAnomalyConfirm(action, data) {
+    const shots = data.shot_numbers || [];
+    const detail = formatKeyframeAnomalies(data.keyframe_preflight);
+    const ok = window.confirm(
+      '关键帧预检发现风险，继续生成可能出现变形/串镜：\n\n' +
+      detail +
+      '\n\n确定继续生成视频？\n（取消可先重做关键帧）'
+    );
+    if (!ok) {
+      toast('已取消视频生成，请先检查关键帧', 'info');
+      return;
+    }
+    const label = action === 'batch_generate_shot_videos'
+      ? ('批量生成视频（' + shots.length + ' 镜，已确认风险）')
+      : ('为第 ' + (shots[0] || '') + ' 镜生成视频（已确认风险）');
+    runWorkflowViaWS(action, label, null, '生成中', {
+      shotNumbers: shots,
+      confirmKeyframeAnomalies: true,
+      skipUserMessage: false,
+    });
   }
 
   async function batchGenerateShotVideos() {
