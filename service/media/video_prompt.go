@@ -189,21 +189,21 @@ func formatInterKeyframeMotion(beats []task.ShotBeat, dur float64, mode VideoMod
 
 // hongguoVideoStyleTags returns vertical short-drama look tags for I2V (not still-image render jargon).
 func hongguoVideoStyleTags(artStyle, stylePrompt string) []string {
-		tags := append([]string{}, videoI2VLines("style_tags", []string{
-			"Chinese vertical short drama style",
-			"Hongguo Douyin short-series look",
-			"9:16 vertical framing",
-			"high clarity short-drama look",
-			"sharp facial micro-detail",
-			"clear fabric and hair edges",
-		})...)
-		tags = append(tags, videoI2VLines("style_tags_human", []string{
-			"tight face fill vertical frame",
-			"side rim light on cheek edge",
-			"brows lids lips move on cue",
-			"fast readable body beats",
-			"crisp eye and lip edges",
-		})...)
+	tags := append([]string{}, videoI2VLines("style_tags", []string{
+		"Chinese vertical short drama style",
+		"Hongguo Douyin short-series look",
+		"9:16 vertical framing",
+		"high clarity short-drama look",
+		"sharp facial micro-detail",
+		"clear fabric and hair edges",
+	})...)
+	tags = append(tags, videoI2VLines("style_tags_human", []string{
+		"tight face fill vertical frame",
+		"side rim light on cheek edge",
+		"brows lids lips move on cue",
+		"fast readable body beats",
+		"crisp eye and lip edges",
+	})...)
 	if s := strings.TrimSpace(artStyle); s != "" {
 		tags = append(tags, s+" motion style")
 	}
