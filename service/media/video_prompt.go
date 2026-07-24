@@ -110,6 +110,12 @@ func buildShotVideoPromptWithMode(shot *storyboard.ShotMeta, mode VideoMode, art
 		parts = append(parts, videoI2VOneLine("camera_default_prop", "locked or one motivated vertical short-drama camera move"))
 	}
 
+	if !objectFocus && !impactShot {
+		if micro := camera.MicroExpressionMotion(shotMicroExpressionBlob(shot)); micro != "" {
+			parts = append(parts, "micro-expression beat: "+micro)
+		}
+	}
+
 	if len(parts) < 5 {
 		if trimmed := trimImagePromptForVideo(shot.Prompt); trimmed != "" {
 			parts = append(parts, trimmed)
@@ -566,6 +572,24 @@ func isImpactActionShot(shot *storyboard.ShotMeta) bool {
 		}
 	}
 	return false
+}
+
+func shotMicroExpressionBlob(shot *storyboard.ShotMeta) string {
+	if shot == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(shot.Description)
+	b.WriteByte(' ')
+	b.WriteString(shot.Camera)
+	b.WriteByte(' ')
+	for _, beat := range shot.Beats {
+		b.WriteString(beat.Action)
+		b.WriteByte(' ')
+		b.WriteString(beat.ImagePrompt)
+		b.WriteByte(' ')
+	}
+	return b.String()
 }
 
 func hasLiquidSurfaceImpact(beats []task.ShotBeat) bool {

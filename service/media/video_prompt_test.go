@@ -255,3 +255,21 @@ func TestBuildShotVideoPrompt_emotionProgression(t *testing.T) {
 	}
 }
 
+func TestBuildShotVideoPrompt_microExpressionAndNamedCamera(t *testing.T) {
+	shot := &storyboard.ShotMeta{
+		Description: "女主近景",
+		Camera:      "慢推压迫 近景",
+		Beats: []task.ShotBeat{
+			{Time: 0, Action: "画面：女主近景。动作：瞳孔收缩，泪痕未干。"},
+		},
+		Duration: 5,
+	}
+	pos, _ := buildShotVideoPrompt(shot, "3D动漫", "", "", true)
+	if !strings.Contains(pos, "slow continuous push-in") {
+		t.Fatalf("named 慢推压迫 camera missing: %s", pos)
+	}
+	if !strings.Contains(pos, "micro-expression beat:") || !strings.Contains(pos, "pupils") {
+		t.Fatalf("micro-expression missing: %s", pos)
+	}
+}
+
