@@ -67,6 +67,17 @@ func buildShotVideoPromptWithMode(shot *storyboard.ShotMeta, mode VideoMode, art
 		parts = append(parts, "liquid impacts once, spreads flat across the surface, then remains settled; no upright liquid spike, no re-forming droplet, no bouncing")
 	}
 
+	impactShot := !objectFocus && isImpactActionShot(shot)
+	if impactShot {
+		parts = append(parts, videoI2VLines("impact_chain", []string{
+			"action chain only: wind-up → contact → hit pause → weight shift → recover or fall; never write vague hard hit alone",
+			"name the contact point on body or armor; striker stays sharp for one frame while struck side blurs briefly",
+			"struck body freezes half a beat then tilts with weight; no swinging through empty air",
+			"optional one-frame contact hitch on camera; no long shake, no slow-mo on the whole wind-up",
+			"particles sparks only after contact and only if the receiver reacts; no floating VFX without hit reaction",
+		})...)
+	}
+
 	if ac := compressDescriptionForVideo(shot.ActionContinue); ac != "" && utf8.RuneCountInString(ac) <= 60 {
 		if !isPlaceholderContinuity(ac) && actionContinueCompatibleWithBeats(ac, shot.Beats) {
 			parts = append(parts, "handoff from previous ending: "+ac)
@@ -77,9 +88,18 @@ func buildShotVideoPromptWithMode(shot *storyboard.ShotMeta, mode VideoMode, art
 	if !objectFocus && !beatsAreRoarOrScream(shot.Beats) {
 		parts = appendDialogueVideoInstructions(parts, lines, humanSubject)
 	}
+	if !objectFocus && !impactShot && mode == VideoModeFrames2 && hasSpeakableLines(lines) {
+		parts = append(parts, videoI2VLines("emotion_progression", []string{
+			"emotion progresses across the clip: micro brow/lid/jaw shift building to the end pose; no frozen face",
+			"keep eye contact and breath rhythm readable; avoid sudden expression teleport",
+		})...)
+	}
 
 	if objectFocus {
 		parts = append(parts, "locked macro camera with one slow controlled push toward the contact point; keep object proportions stable")
+	} else if impactShot {
+		parts = append(parts, videoI2VOneLine("camera_impact",
+			"locked or micro hitch on contact only; favor readable hit over floating camera orbit"))
 	} else if hasLargeFramingJump(shot.Beats) {
 		parts = append(parts, "reframe between locked keyframes only — keep subject identity; do not morph through an impossible 180-degree body turn")
 	} else if cam := camera.MapCameraToVideoMotion(shot.Camera); cam != "" {
@@ -140,6 +160,11 @@ func buildShotVideoPromptWithMode(shot *storyboard.ShotMeta, mode VideoMode, art
 	if humanSubject && hasSpeakableLines(lines) {
 		if lip := videoI2VCSV("negative_lip_sync", "closed mouth while speaking, no lip sync"); lip != "" {
 			negative += ", " + lip
+		}
+	}
+	if impactShot {
+		if ni := videoI2VCSV("negative_impact", "swinging at empty air, no contact point, sparks without hit reaction, floating sword trails without impact, no hit pause, receiver keeps walking as if untouched, endless particle spam, plastic floaty combat"); ni != "" {
+			negative += ", " + ni
 		}
 	}
 	_ = styleAnchor
@@ -514,6 +539,33 @@ func isObjectFocusedShot(shot *storyboard.ShotMeta) bool {
 		}
 	}
 	return objectScore >= 2
+}
+
+// isImpactActionShot detects fight / hit beats that need an impact-frame motion chain
+// (wind-up → contact → hit pause → weight shift) instead of empty VFX spam.
+func isImpactActionShot(shot *storyboard.ShotMeta) bool {
+	if shot == nil {
+		return false
+	}
+	blob := strings.ToLower(shot.Description + " " + shot.Camera + " " + shot.Prompt + " " + shot.ActionContinue)
+	for _, b := range shot.Beats {
+		blob += " " + strings.ToLower(b.Action+" "+b.ImagePrompt)
+	}
+	hints := videoI2VLines("impact_hints", []string{
+		"打中", "击中", "撞击", "挥刀", "挥剑", "斩", "砍", "刺", "一拳", "踢", "砸",
+		"对刀", "交锋", "对决", "打斗", "打架", "战斗", "武打", "一刀", "挥拳", "打击",
+		"strike", "slash", "punch", "kick", "clash", "impact hit",
+	})
+	for _, h := range hints {
+		h = strings.TrimSpace(strings.ToLower(h))
+		if h == "" {
+			continue
+		}
+		if strings.Contains(blob, h) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasLiquidSurfaceImpact(beats []task.ShotBeat) bool {

@@ -186,3 +186,72 @@ func TestCompressDescriptionForVideo(t *testing.T) {
 		t.Fatalf("event lost: %q", got)
 	}
 }
+
+func TestIsImpactActionShot(t *testing.T) {
+	fight := &storyboard.ShotMeta{
+		Description: "黑衣女剑客挥刀斩向白发师尊",
+		Beats: []task.ShotBeat{
+			{Time: 0, Action: "蓄力举刀"},
+			{Time: 3, Action: "刀刃击中肩甲，对方短暂停顿后失衡"},
+		},
+	}
+	if !isImpactActionShot(fight) {
+		t.Fatal("expected impact action shot")
+	}
+	talk := &storyboard.ShotMeta{
+		Description: "两人隔桌对视",
+		Dialogue:    &task.ShotDialogue{Lines: []task.DialogueLine{{Speaker: "甲", Text: "你来了"}}},
+		Beats:       []task.ShotBeat{{Time: 0, Action: "近景对视"}},
+	}
+	if isImpactActionShot(talk) {
+		t.Fatal("dialogue stare should not be impact")
+	}
+}
+
+func TestBuildShotVideoPrompt_impactChain(t *testing.T) {
+	shot := &storyboard.ShotMeta{
+		Description: "武士挥刀斩中丧尸脖颈空档",
+		Camera:      "中景",
+		Beats: []task.ShotBeat{
+			{Time: 0, Action: "画面：武士举刀蓄力。动作：刀尖对准空档。"},
+			{Time: 2, Action: "画面：刀刃击中甲胄缝隙。动作：手臂顶住，对方停顿。"},
+			{Time: 5, Action: "画面：丧尸重心侧倾坠下。"},
+		},
+		Duration: 8,
+	}
+	pos, neg := buildShotVideoPrompt(shot, "3D动漫", "", "", true)
+	for _, want := range []string{"wind-up", "contact", "hit pause", "weight shift"} {
+		if !strings.Contains(pos, want) {
+			t.Fatalf("impact chain %q missing: %s", want, pos)
+		}
+	}
+	if !strings.Contains(pos, "micro hitch on contact") && !strings.Contains(pos, "readable hit") {
+		t.Fatalf("impact camera missing: %s", pos)
+	}
+	if strings.Contains(pos, "slow vertical short-drama push-in on face") {
+		t.Fatalf("default face push-in should not override impact camera: %s", pos)
+	}
+	for _, want := range []string{"empty air", "sparks without hit reaction", "no hit pause"} {
+		if !strings.Contains(neg, want) {
+			t.Fatalf("negative_impact %q missing: %s", want, neg)
+		}
+	}
+}
+
+func TestBuildShotVideoPrompt_emotionProgression(t *testing.T) {
+	shot := &storyboard.ShotMeta{
+		Description: "女主近景开口",
+		Camera:      "近景 定镜",
+		Dialogue:    &task.ShotDialogue{Lines: []task.DialogueLine{{Speaker: "女主", Text: "你骗我"}}},
+		Beats: []task.ShotBeat{
+			{Time: 0, Action: "画面：女主近景。动作：眉心微蹙。"},
+			{Time: 4, Action: "画面：女主近景。动作：下颌咬紧。"},
+		},
+		Duration: 6,
+	}
+	pos, _ := buildShotVideoPrompt(shot, "3D动漫", "", "", true)
+	if !strings.Contains(pos, "emotion progresses") {
+		t.Fatalf("emotion progression missing: %s", pos)
+	}
+}
+

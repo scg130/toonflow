@@ -59,8 +59,11 @@ one slow vertical short-drama push-in on face
 ## camera_default_prop
 locked or one motivated vertical short-drama camera move
 
+## camera_impact
+locked or micro hitch on contact only; favor readable hit over floating camera orbit
+
 ## continuity_accepted_prefix
-first image is the accepted previous-clip ending — begin exactly from that pose and layout; preserve face identity, outfit, hairstyle, and scene layout; generate only the continuous transition toward the last keyframe
+first image is the accepted previous-clip ending — begin exactly from that pose and layout; preserve face identity, outfit, hairstyle, and scene layout; keep stance spacing props and eyelines continuous; generate only the continuous transition toward the last keyframe
 
 ## dialogue_line
 %s近景张嘴说短句，下颌开合清晰：%s
@@ -86,4 +89,24 @@ closed mouth while speaking, static lips during dialogue, no lip sync, mute expr
 悲愤欲绝, 几近破碎, 情绪崩溃, 滔天怒火, 杀意沸腾, 心境崩塌, 威压, 神念, 气势逼人, 无风起浪, 氛围压抑, 沉重气氛
 
 ## conflict_hints
-冲突, 打脸, 反转, 撕, 砸, 跪下, 冲, 打, 爆, 围攻, 对峙, 追, 杀, 怒吼, 一拳, 战斗, 打斗, 高潮, push-in, handheld, dolly zoom, slow-motion, 慢放, 手持, 急速
+冲突, 打脸, 反转, 撕, 砸, 跪下, 冲, 打, 爆, 围攻, 对峙, 追, 杀, 怒吼, 一拳, 战斗, 打斗, 高潮, 斩, 砍, 击中, 对刀, 挥拳, 踢, push-in, handheld, dolly zoom, slow-motion, 慢放, 手持, 急速
+
+## impact_hints
+打中, 击中, 撞击, 挥刀, 挥剑, 斩, 砍, 刺, 踢, 砸, 对刀, 交锋, 对决, 打斗, 打架, 战斗, 武打, 一刀, 一拳, 挥拳, 打击, strike, slash, punch, kick, clash, impact hit
+
+## impact_chain
+- action chain only: wind-up → contact → hit pause → weight shift → recover or fall; never write vague hard hit alone
+- name the contact point on body or armor; striker stays sharp for one frame while struck side blurs briefly
+- struck body freezes half a beat then tilts with weight; no swinging through empty air
+- optional one-frame contact hitch on camera; no long shake, no slow-mo on the whole wind-up
+- particles sparks only after contact and only if the receiver reacts; no floating VFX without hit reaction
+
+## emotion_progression
+- emotion progresses across the clip: micro brow/lid/jaw shift building to the end pose; no frozen face
+- keep eye contact and breath rhythm readable; avoid sudden expression teleport
+
+## spatial_continuity
+- keep character stance spacing props and eyelines consistent with the locked start frame; no teleport jump in distance
+
+## negative_impact
+swinging at empty air, no contact point, sparks without hit reaction, floating sword trails without impact, no hit pause, receiver keeps walking as if untouched, endless particle spam, long slow-motion wind-up, plastic floaty combat, teleported punches
